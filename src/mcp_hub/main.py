@@ -118,6 +118,7 @@ def main():
 
         html_content = Path(index_html).read_text(encoding="utf-8")
 
+        @app.get("/")
         @app.get("/admin/")
         @app.get("/admin")
         async def admin_index():
