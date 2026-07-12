@@ -94,6 +94,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     chromium chromium-sandbox \
     && rm -rf /var/lib/apt/lists/*
 
+# gosu for PUID/PGID privilege dropping (step-down from root at runtime)
+RUN wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/1.17/gosu-$(dpkg --print-architecture)" \
+    && chmod +x /usr/local/bin/gosu
+
 # builder から仮想環境とアプリケーションと設定ファイルをコピー
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder ${APP_HOME}/src ${APP_HOME}/src
@@ -106,7 +110,11 @@ RUN mkdir -p ${APP_HOME}/data
 RUN useradd --create-home --shell /bin/bash mcp-hub && \
     chown -R mcp-hub:mcp-hub ${APP_HOME}
 
-USER mcp-hub
+# Entrypoint handles privilege dropping (gosu) based on PUID/PGID
+# Container starts as root for usermod/groupmod, then drops to mcp-hub
+COPY docker-entrypoint.sh /usr/local/bin/
+ENTRYPOINT ["docker-entrypoint.sh"]
+
 EXPOSE 26263
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \

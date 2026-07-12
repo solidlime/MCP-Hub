@@ -6,9 +6,10 @@ services:
       - "26263:26263"
     environment:
       - MCP_HUB_DATA_DIR=/data
+      - PUID=1000
+      - PGID=1000
     volumes:
       - /volume1/docker/mcp-hub/data:/data
-    user: "0:0"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:26263/admin/api/health"]
       interval: 30s
