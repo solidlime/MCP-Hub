@@ -26,9 +26,9 @@
 src/mcp_hub/
 ├── __init__.py
 ├── main.py              # Entry point — modify: load config file, JSON logging, internal resource
-├── config.py            # NEW: Config file loader (reads hub.config.json, env expansion, tag filter)
+├── config.py            # NEW: Config file loader (reads hub.config.json, env expansion)
 ├── admin_router.py      # REST API — modify: metrics endpoint, status field
-├── proxy_manager.py     # Proxy lifecycle — modify: status tracking, tag filtering
+├── proxy_manager.py     # Proxy lifecycle — modify: status tracking, connection-time tag filtering
 ├── registry.py          # SQLite — modify: remove DEFAULT_SERVERS, seed from config instead
 ├── state.py             # Shared state — modify: metrics counters
 ├── env_expand.py        # NEW: ${VAR} / ${VAR:-default} expansion utility
@@ -121,8 +121,8 @@ git commit -m "feat: add hub.config.json as default MCP server config file"
 **What:** Module that loads and validates `hub.config.json`. Supports:
 - File loading with path resolution (`~`, relative, absolute)
 - Environment variable expansion via `env_expand.py`
-- Tag filtering
 - Falls back gracefully if no config file
+- **Note:** Tag filtering is connection-time (see Chunk 2.3), NOT at config load time.
 
 - [ ] **Step 1: Write tests first**
 
@@ -172,19 +172,30 @@ class TestLoadConfig:
         with pytest.raises(ValueError, match="Invalid config"):
             load_config(str(config_file))
 
-    def test_tag_filtering(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("MCP_HUB_TAGS", "web")
+    def test_disabled_servers_are_skipped(self, tmp_path):
+        config_file = tmp_path / "hub.config.json"
+        config_file.write_text(json.dumps({
+            "version": 1,
+            "mcpServers": {
+                "active": {"command": "echo", "args": ["hello"]},
+                "off": {"command": "echo", "args": ["nope"], "disabled": True},
+            }
+        }))
+        config = load_config(str(config_file))
+        assert "active" in config.servers
+        assert "off" not in config.servers
+
+    def test_servers_retain_tags_field(self, tmp_path):
+        """Tags are preserved in config — filtering happens at connection time."""
         config_file = tmp_path / "hub.config.json"
         config_file.write_text(json.dumps({
             "version": 1,
             "mcpServers": {
                 "fetch": {"command": "npx", "args": ["-y", "server-fetch"], "tags": ["web"]},
-                "filesystem": {"command": "npx", "args": ["-y", "server-fs"], "tags": ["local"]},
             }
         }))
         config = load_config(str(config_file))
-        assert "fetch" in config.servers
-        assert "filesystem" not in config.servers
+        assert config.servers["fetch"]["tags"] == ["web"]
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -290,19 +301,6 @@ def _parse_config(filepath: Path) -> HubConfig:
             servers[name] = expand_env_vars(cfg)
         except ValueError as e:
             logger.warning("Skipping server '%s': %s", name, e)
-
-    # Tag filtering
-    filter_tags = os.environ.get("MCP_HUB_TAGS", "").split(",")
-    filter_tags = [t.strip() for t in filter_tags if t.strip()]
-    if filter_tags:
-        filtered = {}
-        for name, cfg in servers.items():
-            server_tags = cfg.get("tags", [])
-            if any(t in server_tags for t in filter_tags):
-                filtered[name] = cfg
-            else:
-                logger.info("Skipping '%s': tags %s don't match filter %s", name, server_tags, filter_tags)
-        servers = filtered
 
     return HubConfig(
         servers=servers,
@@ -753,35 +751,166 @@ assert cards.count() < total_without_filter  # Filter reduced visible cards
 
 ---
 
-## Chunk 3: Observability (independent)
+## Chunk 3: Connection-time Tag Filtering
 
-### Task 3.1: Metrics Endpoint
+### Task 3.1: Per-connection Tag Filter on /mcp Endpoint
+
+**Files:**
+- Modify: `src/mcp_hub/proxy_manager.py` — `list_tools()` accepts optional `tags` filter
+- Modify: `src/mcp_hub/main.py` — intercept `/mcp` query params, store tags in request context
+
+**What:** Clients connect to `/mcp?tags=web,local` and only see tools from matching servers. No tags → all tools (backward compatible). All servers run continuously; filtering happens at tool listing time.
+
+**Architecture:**
+
+```
+Client A → /mcp?tags=web      → list_tools(tags=["web"])     → fetch + brave-search tools
+Client B → /mcp?tags=local,vcs → list_tools(tags=["local","vcs"]) → filesystem + git tools  
+Client C → /mcp                → list_tools()                → all 6 servers' tools
+```
+
+- [ ] **Step 1: Add tag-filtered list_tools to ProxyManager**
+
+```python
+async def list_tools(self, tags: list[str] | None = None) -> dict[str, list[dict]]:
+    """全プロキシのツール一覧を返す。tags 指定時はそのタグにマッチするサーバーのみ。"""
+    result: dict[str, list[dict]] = {}
+
+    for name, config in self._server_configs.items():
+        # Tag filter (OR logic)
+        if tags:
+            server_tags = config.get("tags", [])
+            if not any(t in server_tags for t in tags):
+                continue
+
+        try:
+            tools = await self._proxies[name].list_tools()
+            result[name] = [{"name": t.name, "description": t.description, "inputSchema": t.inputSchema} for t in tools]
+        except Exception as e:
+            logger.warning("Failed to list tools for %s: %s", name, e)
+            self._status[name] = "error"
+
+    return result
+```
+
+`_server_configs` is a new dict mapping server name → config (populated during `register`/`load_all`).
+
+- [ ] **Step 2: Store server configs in ProxyManager**
+
+Modify `register_server()` / `load_all()`:
+
+```python
+self._server_configs: dict[str, dict] = {}
+
+async def register_server(self, name: str, config: dict):
+    self._server_configs[name] = config
+    ...
+
+async def load_all(self):
+    for srv in servers:
+        self._server_configs[srv["name"]] = srv["config"]
+        ...
+```
+
+- [ ] **Step 3: Extract tags from /mcp query params**
+
+In `main.py` lifespan, add middleware or wrap the FastMCP app:
+
+```python
+from contextvars import ContextVar
+
+request_tags: ContextVar[list[str] | None] = ContextVar("request_tags", default=None)
+
+# Middleware to extract tags from query params
+@app.middleware("http")
+async def extract_tags_middleware(request: Request, call_next):
+    if request.url.path.startswith("/mcp"):
+        tags_param = request.query_params.get("tags", "")
+        if tags_param:
+            request_tags.set([t.strip() for t in tags_param.split(",") if t.strip()])
+    response = await call_next(request)
+    request_tags.set(None)
+    return response
+```
+
+- [ ] **Step 4: Wire context into ProxyManager.list_tools**
+
+In `proxy_manager.py`, read `request_tags` context var:
+
+```python
+from mcp_hub.main import request_tags
+
+async def list_tools(self, tags: list[str] | None = None) -> dict[str, list[dict]]:
+    if tags is None:
+        tags = request_tags.get(None)
+    ...
+```
+
+- [ ] **Step 5: Verify with curl**
+
+```bash
+cd /home/rausraus/code/MCP-Hub && source .venv/bin/activate && rm -f data/hub.db && MCP_HUB_PORT=26280 timeout 10 python3 -m mcp_hub.main 2>&1 &
+sleep 5
+
+# No tags → all tools
+echo "=== No filter ==="
+curl -s -X POST http://localhost:26280/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+tools=[t['name'] for t in d.get('result',{}).get('tools',[])]
+print(f'{len(tools)} tools: {tools}')
+"
+
+# With tag filter
+echo "=== tags=web ==="
+curl -s -X POST 'http://localhost:26280/mcp?tags=web' \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+tools=[t['name'] for t in d.get('result',{}).get('tools',[])]
+print(f'{len(tools)} tools: {tools}')
+"
+```
+
+Expected: `tags=web` returns fewer tools than unfiltered (only fetch + brave-search tagged servers).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/mcp_hub/proxy_manager.py src/mcp_hub/main.py
+git commit -m "feat: add per-connection tag filtering on /mcp?tags= endpoint"
+```
+
+---
+
+## Chunk 4: Observability & Internal Resource
+
+### Task 4.1: Metrics Endpoint
 
 **Files:** `admin_router.py`, `state.py`
 
 Add `GET /admin/api/metrics`: uptime, servers_registered, servers_active, total_tools, tool_calls_total, tool_call_errors.
 
-### Task 3.2: JSON Structured Logging
+### Task 4.2: JSON Structured Logging
 
 **Files:** `main.py`
 
 Support `MCP_HUB_LOG=json` for JSON-formatted log output.
 
----
-
-## Chunk 4: Internal Resource & Misc
-
-### Task 4.1: `hub://servers` Resource
+### Task 4.3: `hub://servers` Resource
 
 **Files:** `main.py`
 
-Register FastMCP resource returning JSON snapshot of connected servers.
+Register FastMCP resource returning JSON snapshot of connected servers (with tags, status, tool count).
 
-### Task 4.2: README Update
+### Task 4.4: README Update
 
 **Files:** `README.md`
 
-Document new config file, env vars (`MCP_HUB_CONFIG`, `MCP_HUB_TAGS`, `MCP_HUB_LOG`), tags, metrics, etc.
+Document: config file (`MCP_HUB_CONFIG`), connection-time tags (`/mcp?tags=`), env vars (`MCP_HUB_LOG`, `MCP_HUB_RESEED`), metrics endpoint, `hub://servers` resource.
 
 ---
 
@@ -804,14 +933,12 @@ Add `pytest` job before Docker build. Add `pytest`, `pytest-asyncio` as dev deps
 ## Execution Order
 
 ```
-Chunk 1 (Config System) → Chunk 2 (WebUI) → Chunk 3 (Observability)
+Chunk 1 (Config System) → Chunk 2 (WebUI) → Chunk 3 (Connection-time Tags)
                                                    │
-                              Chunk 5 (Tests/CI) ← Chunk 4 (Resource + Docs)
+                              Chunk 5 (Tests/CI) ← Chunk 4 (Observability)
 ```
 
-Chunk 1 is the blocking foundation. Chunks 3 and 4 are independent of each other but both follow Chunk 2 (same files touched). Chunk 5 runs after features are stable.
-
-Note: `MCP_HUB_TAGS` uses comma-separated values (OR logic). Tags containing commas are unsupported — document this constraint.
+Chunk 1 is the blocking foundation. Chunks 3 and 4 are independent of each other but both follow Chunk 1-2.
 
 ---
 
@@ -821,7 +948,7 @@ Note: `MCP_HUB_TAGS` uses comma-separated values (OR logic). Tags containing com
 |---------|-------------|---------------------|
 | Config file (hub.config.json) | ✅ (`hatago.config.json`) | ✅ |
 | Env var expansion `${VAR}` / `${VAR:-default}` | ✅ | ✅ |
-| Tag-based filtering | ✅ | ✅ |
+| Tag-based filtering | ✅ `--tags` (startup only) | ✅ `/mcp?tags=` (per-connection, MCP-Hub unique) |
 | Metrics endpoint | ✅ `/metrics` | ✅ `/admin/api/metrics` |
 | JSON logging | ✅ `HATAGO_LOG=json` | ✅ `MCP_HUB_LOG=json` |
 | Internal resource | ✅ `hatago://servers` | ✅ `hub://servers` |
