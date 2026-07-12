@@ -58,7 +58,6 @@ tests/
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/rausraus/mcp-hub/main/schemas/config.schema.json",
   "version": 1,
   "mcpServers": {
     "fetch": {
@@ -272,7 +271,7 @@ def _parse_config(filepath: Path) -> HubConfig:
     if not isinstance(version, int) or version < 1:
         raise ValueError(f"Unsupported config version: {version}")
 
-    log_level = raw.get("logLevel", raw.get("log_level", "info"))
+    log_level = raw.get("log_level", "info")
     raw_servers = raw.get("mcpServers", raw.get("servers", {}))
 
     if not isinstance(raw_servers, dict):
@@ -285,6 +284,7 @@ def _parse_config(filepath: Path) -> HubConfig:
             continue
         # Skip disabled servers
         if cfg.get("disabled"):
+            logger.info("Skipping disabled server '%s'", name)
             continue
         try:
             servers[name] = expand_env_vars(cfg)
@@ -330,12 +330,173 @@ git commit -m "feat: add hub.config.json loader with env expansion and tag filte
 - Create: `src/mcp_hub/env_expand.py`
 - Create: `tests/test_env_expand.py`
 
-Same implementation as before. Reuse from previous plan's Task 2.1.
+**What:** `${VAR}` and `${VAR:-default}` expansion utility. Claude Code / hatago compatible syntax.
 
-- [ ] **Step 1: Write tests** (see previous plan's test_env_expand.py)
-- [ ] **Step 2: Implement** (see previous plan's env_expand.py)
-- [ ] **Step 3: Verify tests pass**
-- [ ] **Step 4: Commit**
+- [ ] **Step 1: Write tests**
+
+Create `tests/__init__.py` (empty) and `tests/conftest.py`:
+
+```python
+import os
+import sys
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+
+@pytest.fixture
+def clean_env(monkeypatch):
+    for key in ("TEST_VAR", "API_KEY", "PORT", "BRAVE_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+```
+
+Create `tests/test_env_expand.py`:
+
+```python
+import os
+import pytest
+from mcp_hub.env_expand import expand_env_vars
+
+
+class TestExpandString:
+    def test_passthrough_no_placeholders(self):
+        assert expand_env_vars("hello world") == "hello world"
+
+    def test_expand_simple_var(self, monkeypatch):
+        monkeypatch.setenv("FOO", "bar")
+        assert expand_env_vars("${FOO}") == "bar"
+
+    def test_expand_var_in_string(self, monkeypatch):
+        monkeypatch.setenv("NAME", "world")
+        assert expand_env_vars("hello ${NAME}") == "hello world"
+
+    def test_missing_var_raises(self):
+        with pytest.raises(ValueError, match="NOT_EXIST"):
+            expand_env_vars("${NOT_EXIST}")
+
+    def test_var_with_default_uses_value(self, monkeypatch):
+        monkeypatch.setenv("FOO", "bar")
+        assert expand_env_vars("${FOO:-default}") == "bar"
+
+    def test_var_with_default_falls_back(self):
+        assert expand_env_vars("${NOT_EXIST:-default}") == "default"
+
+    def test_empty_default(self):
+        assert expand_env_vars("${NOT_EXIST:-}") == ""
+
+    def test_multiple_vars(self, monkeypatch):
+        monkeypatch.setenv("A", "1")
+        monkeypatch.setenv("B", "2")
+        assert expand_env_vars("${A} ${B}") == "1 2"
+
+    def test_non_string_passthrough(self):
+        assert expand_env_vars(42) == 42
+        assert expand_env_vars(None) is None
+        assert expand_env_vars(True) is True
+
+
+class TestExpandDict:
+    def test_expand_in_dict(self, monkeypatch):
+        monkeypatch.setenv("KEY", "secret")
+        config = {"url": "https://${KEY}.example.com", "port": 8080}
+        result = expand_env_vars(config)
+        assert result["url"] == "https://secret.example.com"
+        assert result["port"] == 8080
+
+    def test_expand_nested_dict(self, monkeypatch):
+        monkeypatch.setenv("TOKEN", "abc123")
+        config = {
+            "env": {"AUTH_TOKEN": "${TOKEN}", "DEBUG": "true"},
+            "headers": {"Authorization": "Bearer ${TOKEN}"}
+        }
+        result = expand_env_vars(config)
+        assert result["env"]["AUTH_TOKEN"] == "abc123"
+        assert result["headers"]["Authorization"] == "Bearer abc123"
+
+
+class TestExpandList:
+    def test_expand_in_list(self, monkeypatch):
+        monkeypatch.setenv("PKG", "server-fetch")
+        args = ["-y", "@modelcontextprotocol/${PKG}"]
+        result = expand_env_vars(args)
+        assert result[1] == "@modelcontextprotocol/server-fetch"
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+python3 -m pytest tests/test_env_expand.py -v
+```
+
+Expected: FAIL with ModuleNotFoundError.
+
+- [ ] **Step 3: Implement env_expand.py**
+
+```python
+"""
+Environment variable expansion utility.
+Supports Claude Code / hatago compatible syntax:
+  - ${VAR}          : Required variable (raises if undefined)
+  - ${VAR:-default} : Variable with default fallback
+"""
+
+import os
+import re
+from typing import Any
+
+# Matches ${VAR} or ${VAR:-default}
+_ENV_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def _expand_string(value: str) -> str:
+    """Expand a single string value."""
+
+    def _replacer(match: re.Match) -> str:
+        var_name = match.group(1)
+        default = match.group(2)
+        env_val = os.environ.get(var_name)
+        if env_val is not None:
+            return env_val
+        if default is not None:
+            return default
+        raise ValueError(
+            f"Environment variable '{var_name}' is not defined and no default provided"
+        )
+
+    return _ENV_PATTERN.sub(_replacer, value)
+
+
+def expand_env_vars(obj: Any) -> Any:
+    """Recursively expand env var placeholders in any structure.
+
+    Strings: expand ${VAR} placeholders.
+    Dicts: recursively expand values.
+    Lists: recursively expand items.
+    Other types: returned as-is.
+    """
+    if isinstance(obj, str):
+        return _expand_string(obj)
+    if isinstance(obj, dict):
+        return {k: expand_env_vars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [expand_env_vars(item) for item in obj]
+    return obj
+```
+
+- [ ] **Step 4: Run tests to verify all pass**
+
+```bash
+cd /home/rausraus/code/MCP-Hub && source .venv/bin/activate && python3 -m pytest tests/test_env_expand.py -v
+```
+
+Expected: All 13 tests PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/mcp_hub/env_expand.py tests/
+git commit -m "feat: add env var expansion utility with ${VAR} and ${VAR:-default}"
+```
 
 ### Task 1.4: Integrate Config into Registry & Main
 
@@ -366,6 +527,13 @@ class SqliteStore:
                 )
             """)
             await db.commit()
+
+        # Allow forced re-seed via env var
+        if os.environ.get("MCP_HUB_RESEED") == "1":
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("DELETE FROM servers")
+                await db.commit()
+            logger.info("MCP_HUB_RESEED=1: wiped existing servers for re-seed")
 
         existing = await self.list_servers()
         if not existing and seed_servers:
@@ -407,7 +575,25 @@ async def lifespan(app: FastAPI):
 
 The config file path can be set via `MCP_HUB_CONFIG` env var.
 
-- [ ] **Step 3: Verify with clean DB**
+**Migration note for existing users:** Upgrading from hardcoded-defaults version: existing servers in DB are preserved as-is. To force re-seed from the new config file, delete `data/hub.db` and restart. For automation, set `MCP_HUB_RESEED=1` to wipe DB on startup and re-seed from config (add this as an option in `init()` — if env var is set, skip the "existing servers" check).
+
+- [ ] **Step 3: Add MCP_HUB_RESEED support**
+
+In `init()`, before the existing-servers check:
+
+```python
+if os.environ.get("MCP_HUB_RESEED") == "1":
+    async with aiosqlite.connect(self.db_path) as db:
+        await db.execute("DELETE FROM servers")
+        await db.commit()
+    logger.info("MCP_HUB_RESEED=1: wiped existing servers")
+    # Force re-seed
+    existing = []
+else:
+    existing = await self.list_servers()
+```
+
+- [ ] **Step 4: Verify with clean DB**
 
 ```bash
 cd /home/rausraus/code/MCP-Hub && source .venv/bin/activate && rm -f data/hub.db && MCP_HUB_PORT=26277 timeout 8 python3 -m mcp_hub.main 2>&1 | grep -E "(Seeded|seeding|Skipping|Loaded)"
@@ -415,7 +601,7 @@ cd /home/rausraus/code/MCP-Hub && source .venv/bin/activate && rm -f data/hub.db
 
 Expected: Seeding from hub.config.json. New package names used.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/mcp_hub/registry.py src/mcp_hub/main.py src/mcp_hub/config.py
@@ -425,6 +611,8 @@ git commit -m "refactor: replace hardcoded DEFAULT_SERVERS with hub.config.json 
 ---
 
 ## Chunk 2: WebUI Enhancements
+
+**Known limitation (status tracking):** `ProxyManager._status` captures only mount-time outcome. If a subprocess crashes later, status remains "connected" until hub restart. This is acceptable for v1; a periodic health-check loop can be added later.
 
 ### Task 2.1: Add Server Status to API & WebUI
 
@@ -453,17 +641,115 @@ In `admin_router.py` `list_servers()`, add `"status": status_map.get(name, "unkn
 
 - [ ] **Step 3: Update WebUI JS**
 
-- Add CSS for `.status-badge-sm`
+- Add CSS for `.status-badge-sm` (green/red/yellow variants)
 - In `renderServers()`, show status badge per server card
 - In `loadServers()`, toast if any servers have error status
 
-- [ ] **Step 4: Test with Playwright**
+- [ ] **Step 4: Test with Playwright** (actual test, not placeholder)
 
 ```python
-# Verify status badges visible, error toasts appear for failed servers
+from playwright.sync_api import sync_playwright
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    page = browser.new_page()
+    page.goto("http://localhost:26277/")
+    page.wait_for_load_state("networkidle")
+    page.wait_for_timeout(2000)
+
+    # Assert status badges exist on server cards
+    badges = page.locator(".status-badge-sm")
+    assert badges.count() >= 1, "Expected at least one status badge"
+    # Each badge should contain connection status text
+    for i in range(badges.count()):
+        text = badges.nth(i).text_content()
+        assert any(status in text for status in ["接続済", "エラー", "不明"]), \
+            f"Badge {i} has unexpected text: {text}"
+
+    browser.close()
 ```
 
 - [ ] **Step 5: Commit**
+
+### Task 2.2: Add Tag Filter UI
+
+**Files:**
+- Modify: `src/mcp_hub/static/index.html` — tag filter chips + API query param
+
+**What:** Let WebUI users filter displayed servers by tags without restarting. Adds a filter bar above the server grid with clickable tag chips (OR logic, matching backend behavior).
+
+- [ ] **Step 1: Add tag filter UI HTML/CSS**
+
+Above the server grid (`#serverGrid`), add a filter bar:
+
+```html
+<div id="tagFilter" class="tag-filter">
+  <span class="tag-filter-label">フィルター:</span>
+  <div id="tagChips"></div>
+</div>
+```
+
+CSS:
+
+```css
+.tag-filter { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.tag-filter-label { font-size: 0.8rem; color: var(--text-muted); }
+.tag-chip { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; cursor: pointer; border: 1px solid var(--border); transition: all 0.2s; }
+.tag-chip.active { background: var(--accent-purple); color: white; border-color: var(--accent-purple); }
+.tag-chip:not(.active):hover { border-color: var(--accent-purple); }
+```
+
+- [ ] **Step 2: Add tag filter JavaScript logic**
+
+In `renderServers()`, extract all unique tags from loaded servers and render chips:
+
+```javascript
+function renderTagFilters() {
+    const allTags = new Set();
+    servers.forEach(s => (s.config?.tags || []).forEach(t => allTags.add(t)));
+    if (allTags.size === 0) {
+        document.getElementById('tagFilter').style.display = 'none';
+        return;
+    }
+    document.getElementById('tagFilter').style.display = 'flex';
+    const chips = document.getElementById('tagChips');
+    chips.innerHTML = '';
+    allTags.forEach(tag => {
+        const chip = document.createElement('span');
+        chip.className = 'tag-chip' + (activeTags.has(tag) ? ' active' : '');
+        chip.textContent = tag;
+        chip.onclick = () => {
+            if (activeTags.has(tag)) activeTags.delete(tag);
+            else activeTags.add(tag);
+            renderServers();
+        };
+        chips.appendChild(chip);
+    });
+}
+
+let activeTags = new Set();
+
+function getFilteredServers() {
+    if (activeTags.size === 0) return servers;
+    return servers.filter(s => 
+        (s.config?.tags || []).some(t => activeTags.has(t))
+    );
+}
+```
+
+Call `renderTagFilters()` within `renderServers()`. Filter server cards using `getFilteredServers()`.
+
+- [ ] **Step 3: Verify with Playwright**
+
+```python
+# Verify tag chips appear and filter works
+page.locator(".tag-chip").first.click()
+page.wait_for_timeout(500)
+cards = page.locator(".server-card")
+assert cards.count() < total_without_filter  # Filter reduced visible cards
+```
+
+- [ ] **Step 4: Commit**
 
 ---
 
@@ -518,12 +804,14 @@ Add `pytest` job before Docker build. Add `pytest`, `pytest-asyncio` as dev deps
 ## Execution Order
 
 ```
-Chunk 1 (Config System) ──► Chunk 2 (WebUI) ──► Chunk 3 (Observability)
-     │                                              │
-     └──► Chunk 5 (Tests/CI) ◄── Chunk 4 (Resource + Docs)
+Chunk 1 (Config System) → Chunk 2 (WebUI) → Chunk 3 (Observability)
+                                                   │
+                              Chunk 5 (Tests/CI) ← Chunk 4 (Resource + Docs)
 ```
 
-Chunk 1 is the blocking foundation. Chunks 3 and 4 are independent and can run in parallel after Chunk 1.
+Chunk 1 is the blocking foundation. Chunks 3 and 4 are independent of each other but both follow Chunk 2 (same files touched). Chunk 5 runs after features are stable.
+
+Note: `MCP_HUB_TAGS` uses comma-separated values (OR logic). Tags containing commas are unsupported — document this constraint.
 
 ---
 
