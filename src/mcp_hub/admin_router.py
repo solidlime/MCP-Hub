@@ -70,10 +70,14 @@ def _get_proxy_manager():
 
 @router.get("/health")
 async def health():
-    pm = _get_proxy_manager()
+    try:
+        pm = _get_proxy_manager()
+        servers = len(pm._proxies)
+    except RuntimeError:
+        servers = 0
     return {
         "status": "ok",
-        "servers": len(pm._proxies),
+        "servers": servers,
     }
 
 
