@@ -8,3 +8,4 @@ services:
       - MCP_HUB_DATA_DIR=/data
     volumes:
       - /volume1/docker/mcp-hub/data:/data
+    user: "0:0"

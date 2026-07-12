@@ -1946,9 +1946,12 @@
             input.focus();
 
             async function commitTag() {
-                const tag = input.value.trim();
-                if (tag) {
-                    await addTag(name, tag);
+                const raw = input.value.trim();
+                if (raw) {
+                    const tags = raw.split(/[,\s、]+/).map(t => t.trim()).filter(Boolean);
+                    for (const tag of tags) {
+                        await addTag(name, tag);
+                    }
                 } else {
                     renderServers();
                 }
@@ -2137,11 +2140,14 @@
                 editTagInput.addEventListener('keydown', (e) => {
                     if (e.key === 'Enter') {
                         e.preventDefault();
-                        const tag = editTagInput.value.trim();
-                        if (tag && !editTags.includes(tag)) {
-                            editTags.push(tag);
-                            renderEditTags();
+                        const raw = editTagInput.value.trim();
+                        const tags = raw.split(/[,\s、]+/).map(t => t.trim()).filter(Boolean);
+                        for (const tag of tags) {
+                            if (!editTags.includes(tag)) {
+                                editTags.push(tag);
+                            }
                         }
+                        renderEditTags();
                         editTagInput.value = '';
                     }
                 });
