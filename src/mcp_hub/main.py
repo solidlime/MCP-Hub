@@ -18,7 +18,6 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from contextvars import ContextVar
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
@@ -30,11 +29,9 @@ from .admin_router import router as admin_router
 from .config import load_config
 from .proxy_manager import ProxyManager
 from .registry import SqliteStore
-from .state import app_state
+from .state import app_state, request_tags
 
 logger = logging.getLogger(__name__)
-
-request_tags: ContextVar[list[str] | None] = ContextVar("request_tags", default=None)
 
 # 設定
 PORT = int(os.environ.get("MCP_HUB_PORT", "26263"))
@@ -95,6 +92,10 @@ async def lifespan(app: FastAPI):
     # FastMCP のライフスパンを手動で実行
     # (mounted ASGI サブアプリの lifespan は親から自動実行されない)
     # 内部の StreamableHTTPASGIApp を見つけて session_manager を設定する
+    # NOTE: The following uses FastMCP internal/private APIs (_mcp_server,
+    # _lifespan_manager, session_manager). These may break across FastMCP
+    # minor version updates. FastMCP is pinned to <3.5.0 in pyproject.toml.
+    # When upgrading FastMCP, verify these attributes still exist.
     from fastmcp.server.http import (
         FastMCPStreamableHTTPSessionManager,
         StreamableHTTPASGIApp,
@@ -138,15 +139,17 @@ def create_app() -> FastAPI:
     # --- tag filtering middleware (/mcp のみ) ---
     @app.middleware("http")
     async def tag_middleware(request: Request, call_next):
-        if request.url.path.startswith("/mcp"):
-            header_tags = request.headers.get("X-MCP-Hub-Tags", "")
-            query_tags = request.query_params.get("tags", "")
-            tags_raw = header_tags if header_tags else query_tags
-            if tags_raw:
-                request_tags.set([t.strip() for t in tags_raw.split(",") if t.strip()])
-        response = await call_next(request)
-        request_tags.set(None)
-        return response
+        try:
+            if request.url.path.startswith("/mcp"):
+                header_tags = request.headers.get("X-MCP-Hub-Tags", "")
+                query_tags = request.query_params.get("tags", "")
+                tags_raw = header_tags if header_tags else query_tags
+                if tags_raw:
+                    request_tags.set([t.strip() for t in tags_raw.split(",") if t.strip()])
+            response = await call_next(request)
+            return response
+        finally:
+            request_tags.set(None)
 
     return app
 
