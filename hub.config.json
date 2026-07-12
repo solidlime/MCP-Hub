@@ -17,6 +17,10 @@
     "puppeteer": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "env": {
+        "DOCKER_CONTAINER": "true",
+        "ALLOW_DANGEROUS": "true"
+      },
       "tags": ["browser"],
       "disabled": false
     },

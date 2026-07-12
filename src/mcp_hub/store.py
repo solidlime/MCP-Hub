@@ -30,6 +30,10 @@ DEFAULT_CONFIG = {
         "puppeteer": {
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+            "env": {
+                "DOCKER_CONTAINER": "true",
+                "ALLOW_DANGEROUS": "true",
+            },
             "tags": ["browser"],
         },
         "brave-search": {
