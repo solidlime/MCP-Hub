@@ -1,6 +1,6 @@
 """
 Configuration file loader for MCP Hub.
-Reads {MCP_HUB_DATA_DIR}/hub.config.json, auto-generates if missing.
+Reads {MCP_HUB_DATA_DIR}/hub.config.json.
 """
 
 import json
@@ -11,40 +11,6 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
-
-# 設定ファイルが存在しない場合に自動生成されるデフォルト構成
-# 注: @modelcontextprotocol/server-fetch と server-git は未公開のため除外
-DEFAULT_CONFIG = {
-    "version": 1,
-    "log_level": "info",
-    "mcpServers": {
-        "filesystem": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-            "tags": ["local"],
-        },
-        "sequential-thinking": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-            "tags": ["reasoning"],
-        },
-        "puppeteer": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
-            "env": {
-                "DOCKER_CONTAINER": "true",
-                "ALLOW_DANGEROUS": "true",
-            },
-            "tags": ["browser"],
-        },
-        "brave-search": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-brave-search"],
-            "env": {"BRAVE_API_KEY": "${BRAVE_API_KEY:-}"},
-            "tags": ["search", "web"],
-        },
-    },
-}
 
 
 @dataclass
@@ -68,7 +34,7 @@ def load_config(config_path: str | None = None) -> HubConfig:
     """{MCP_HUB_DATA_DIR}/hub.config.json を読み込む。
 
     ファイルが存在しない場合は空の HubConfig を返す。
-    ファイルの自動作成は store.py:JsonStore.init() が担当する。
+    ファイルの作成は store.py:JsonStore.init() が担当する。
     """
     path = _config_path(config_path)
     if not path.exists():
@@ -111,14 +77,4 @@ def _parse_config(filepath: Path) -> HubConfig:
     )
 
 
-def save_config(servers: dict[str, dict], config_path: str | None = None) -> None:
-    """現在のサーバー一覧を hub.config.json に書き戻す（hub.db と同期）。"""
-    path = _config_path(config_path)
-    data = {
-        "version": 1,
-        "log_level": "info",
-        "mcpServers": servers,
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    logger.info("Config saved to %s (%d servers)", path, len(servers))
+

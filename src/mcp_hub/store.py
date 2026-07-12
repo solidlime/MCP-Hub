@@ -8,42 +8,9 @@ import json
 import logging
 import os
 import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_CONFIG = {
-    "version": 1,
-    "log_level": "info",
-    "mcpServers": {
-        "filesystem": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-            "tags": ["local"],
-        },
-        "sequential-thinking": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-            "tags": ["reasoning"],
-        },
-        "puppeteer": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
-            "env": {
-                "DOCKER_CONTAINER": "true",
-                "ALLOW_DANGEROUS": "true",
-            },
-            "tags": ["browser"],
-        },
-        "brave-search": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-brave-search"],
-            "env": {"BRAVE_API_KEY": "${BRAVE_API_KEY:-}"},
-            "tags": ["search", "web"],
-        },
-    },
-}
 
 
 class JsonStore:
@@ -98,121 +65,79 @@ class JsonStore:
             self._data = data
 
     async def init(self, seed_servers: dict | None = None) -> None:
-        """Ensure config file exists. If missing, create from DEFAULT_CONFIG.
-        Also auto-migrate from legacy hub.db if present.
-        seed_servers is accepted but ignored — JsonStore reads from file directly.
-        """
-        migrated = False
-
-        # Step 1: Auto-migration from hub.db (BEFORE creating DEFAULT_CONFIG
-        # to avoid overwriting defaults with old data without env/fields).
-        db_path = self._path.parent / "hub.db"
-        if db_path.exists() and not self._path.exists():
-            try:
-                await self._migrate_from_db(db_path)
-                migrated = True
-            except Exception:
-                logger.warning("Failed to migrate from hub.db", exc_info=True)
-
-        # Step 2: Create default config if still missing
+        """Ensure config file exists. Copy from bundled default if missing."""
         if not self._path.exists():
-            logger.info("Config not found: %s — generating default.", self._path)
-            await self._write(DEFAULT_CONFIG)
+            bundled = self._find_bundled_default()
+            if bundled and bundled.exists():
+                logger.info("Copying default config from %s → %s", bundled, self._path)
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                self._path.write_text(bundled.read_text(encoding="utf-8"))
+            else:
+                logger.info("No default config found, creating empty")
+                await self._write({"version": 1, "log_level": "info", "mcpServers": {}})
 
         self._data = await self._read()
-
-        # Step 3: Augment migrated data with missing defaults (env, etc.)
-        if migrated:
-            augmented = False
-            defaults = DEFAULT_CONFIG["mcpServers"]
-            current = self._data.setdefault("mcpServers", {})
-            for name, default_cfg in defaults.items():
-                if name not in current:
-                    current[name] = dict(default_cfg)
-                    augmented = True
-                elif "env" in default_cfg and "env" not in current[name]:
-                    # Preserve old config but add missing env from defaults
-                    current[name]["env"] = dict(default_cfg["env"])
-                    augmented = True
-            if augmented:
-                await self._write(self._data)
 
         # MCP_HUB_RESEED support
         if os.environ.get("MCP_HUB_RESEED") == "1":
             logger.info("MCP_HUB_RESEED=1: wiping servers for re-seed")
-            self._data["mcpServers"] = (
-                dict(seed_servers) if seed_servers else DEFAULT_CONFIG["mcpServers"]
-            )
+            if seed_servers:
+                self._data["mcpServers"] = dict(seed_servers)
+            else:
+                bundled = self._find_bundled_default()
+                if bundled and bundled.exists():
+                    bundled_data = json.loads(bundled.read_text(encoding="utf-8"))
+                    self._data["mcpServers"] = bundled_data.get("mcpServers", {})
+                else:
+                    self._data["mcpServers"] = {}
             await self._write(self._data)
 
         count = len(self._data.get("mcpServers", {}))
         logger.info("JsonStore initialized: %d servers at %s", count, self._path)
 
-    async def _migrate_from_db(self, db_path: Path) -> None:
-        """Migrate existing hub.db data into hub.config.json, then rename db as backup."""
-        import aiosqlite
-
-        async with aiosqlite.connect(str(db_path)) as db:
-            db.row_factory = aiosqlite.Row
-            rows = await db.execute_fetchall(
-                "SELECT name, config_json, created_at FROM servers"
-            )
-            if not rows:
-                logger.info("hub.db is empty, skipping migration")
-                return
-
-            servers = {}
-            for row in rows:
-                cfg = json.loads(row["config_json"])
-                cfg["created_at"] = row["created_at"]
-                servers[row["name"]] = cfg
-
-            self._data.setdefault("mcpServers", {}).update(servers)
-
-        await self._write(self._data)
-        db_path.rename(db_path.with_suffix(".db.migrated"))
-        logger.info(
-            "Migrated %d servers from hub.db → hub.config.json", len(servers)
-        )
+    def _find_bundled_default(self) -> Path | None:
+        """Locate bundled hub.config.json shipped with the package."""
+        # 1. Sibling of data dir's parent — Docker: /opt/mcp-hub/data → /opt/mcp-hub/hub.config.json
+        candidate = self._path.parent.parent / "hub.config.json"
+        if candidate.exists():
+            return candidate
+        # 2. Current working directory — local dev / explicit Docker cwd
+        candidate = Path.cwd() / "hub.config.json"
+        if candidate.exists():
+            return candidate
+        return None
 
     async def list_servers(self) -> list[dict]:
-        """Return all servers in {name, config, created_at} format."""
+        """Return all servers in {name, config} format."""
         self._data = await self._read()
-        result = []
-        for name, cfg in self._data.get("mcpServers", {}).items():
-            created_at = cfg.pop("created_at", datetime.now(UTC).isoformat())
-            result.append({"name": name, "config": dict(cfg), "created_at": created_at})
-            cfg["created_at"] = created_at
-        return sorted(result, key=lambda s: s["created_at"])
+        result = [
+            {"name": name, "config": dict(cfg)}
+            for name, cfg in self._data.get("mcpServers", {}).items()
+        ]
+        return sorted(result, key=lambda s: s["name"])
 
     async def get_server(self, name: str) -> dict | None:
         self._data = await self._read()
         cfg = self._data.get("mcpServers", {}).get(name)
         if cfg is None:
             return None
-        created_at = cfg.get("created_at", datetime.now(UTC).isoformat())
-        return {"name": name, "config": dict(cfg), "created_at": created_at}
+        return {"name": name, "config": dict(cfg)}
 
-    async def _add_or_update(self, name: str, config: dict, is_new: bool = True) -> None:
+    async def _add_or_update(self, name: str, config: dict) -> None:
         """Internal: add or update a server in JSON, then atomic write."""
         self._data = await self._read()
         servers = self._data.setdefault("mcpServers", {})
-        config_to_save = dict(config)
-        if is_new:
-            config_to_save["created_at"] = datetime.now(UTC).isoformat()
-        elif name in servers and "created_at" in servers[name]:
-            config_to_save["created_at"] = servers[name]["created_at"]
-        servers[name] = config_to_save
+        servers[name] = dict(config)
         await self._write(self._data)
 
     async def add_server(self, name: str, config: dict) -> None:
-        await self._add_or_update(name, config, is_new=True)
+        await self._add_or_update(name, config)
 
     async def update_server(self, name: str, config: dict) -> bool:
         self._data = await self._read()
         if name not in self._data.get("mcpServers", {}):
             return False
-        await self._add_or_update(name, config, is_new=False)
+        await self._add_or_update(name, config)
         return True
 
     async def remove_server(self, name: str) -> bool:
