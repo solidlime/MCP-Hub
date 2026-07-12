@@ -10,8 +10,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .env_expand import expand_env_vars
-
 logger = logging.getLogger(__name__)
 
 # 設定ファイルが存在しない場合に自動生成されるデフォルト構成
@@ -100,13 +98,23 @@ def _parse_config(filepath: Path) -> HubConfig:
         if cfg.get("disabled"):
             logger.info("Skipping disabled server '%s'", name)
             continue
-        try:
-            servers[name] = expand_env_vars(cfg)
-        except ValueError as e:
-            logger.warning("Skipping server '%s': %s", name, e)
+        servers[name] = cfg  # store templates raw; expansion happens in proxy_manager._create_proxy()
 
     return HubConfig(
         servers=servers,
         version=version,
         log_level=log_level,
     )
+
+
+def save_config(servers: dict[str, dict], config_path: str | None = None) -> None:
+    """現在のサーバー一覧を hub.config.json に書き戻す（hub.db と同期）。"""
+    path = _config_path(config_path)
+    data = {
+        "version": 1,
+        "log_level": "info",
+        "mcpServers": servers,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    logger.info("Config saved to %s (%d servers)", path, len(servers))

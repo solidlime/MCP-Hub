@@ -12,7 +12,7 @@ from fastmcp.client.transports.stdio import StdioTransport
 from fastmcp.server import create_proxy
 from fastmcp.server.providers.proxy import FastMCPProxy
 
-from .registry import SqliteStore
+from .store import JsonStore
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class ProxyManager:
     メインの FastMCP インスタンスに mount/unmount する。
     """
 
-    def __init__(self, mcp: FastMCP, registry: SqliteStore):
+    def __init__(self, mcp: FastMCP, registry: "JsonStore"):
         self.mcp = mcp
         self.registry = registry
         self._proxies: dict[str, FastMCPProxy] = {}
@@ -174,7 +174,10 @@ class ProxyManager:
         return self._proxies.get(name)
 
     def _create_proxy(self, name: str, config: dict) -> FastMCPProxy:
-        """config から FastMCPProxy を生成。"""
+        """config から FastMCPProxy を生成。env変数はここで展開する。"""
+        from .env_expand import expand_env_vars
+
+        config = expand_env_vars(config)
         url = config.get("url")
         command = config.get("command")
         if url:

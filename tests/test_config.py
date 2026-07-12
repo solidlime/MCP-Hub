@@ -16,8 +16,9 @@ class TestLoadConfig:
         assert "test" in config.servers
         assert config.servers["test"]["command"] == "echo"
 
-    def test_expands_env_vars(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("MY_KEY", "secret123")
+    def test_keeps_env_vars_raw(self, tmp_path):
+        """load_config() はテンプレートを展開せず、そのまま保持する。
+        展開は proxy_manager._create_proxy() で行われる。"""
         config_file = tmp_path / "hub.config.json"
         config_file.write_text(json.dumps({
             "version": 1,
@@ -26,7 +27,7 @@ class TestLoadConfig:
             }
         }))
         config = load_config(str(config_file))
-        assert config.servers["api"]["url"] == "https://secret123.example.com"
+        assert config.servers["api"]["url"] == "https://${MY_KEY}.example.com"
 
     def test_missing_file_auto_generates(self, tmp_path):
         config_file = tmp_path / "hub.config.json"

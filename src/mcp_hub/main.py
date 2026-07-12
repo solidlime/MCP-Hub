@@ -29,7 +29,7 @@ from fastmcp import FastMCP
 from .admin_router import router as admin_router
 from .config import load_config
 from .proxy_manager import ProxyManager
-from .registry import SqliteStore
+from .store import JsonStore
 from .state import app_state, request_tags
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
     if config.log_level:
         logging.getLogger().setLevel(config.log_level.upper())
 
-    registry = SqliteStore()
+    registry = JsonStore()
     await registry.init(seed_servers=config.servers)
     logger.info("Registry initialized")
 

@@ -15,8 +15,6 @@ from .state import app_state
 
 logger = logging.getLogger(__name__)
 
-# --- エンドポイント ---
-
 
 # --- Schemas ---
 
@@ -25,20 +23,16 @@ class ServerConfig(BaseModel):
     url: str | None = None
     command: str | None = None
     args: list[str] = []
+    env: dict[str, str] = {}  # ← 追加: BRAVE_API_KEY 等
     tags: list[str] = []
     disabled: bool = False
 
     def model_dump_for_config(self) -> dict:
         """空文字・空リストを除外した config dict を返す。"""
         raw = self.model_dump(exclude_none=True)
-        if "url" in raw and not raw["url"]:
-            del raw["url"]
-        if "command" in raw and not raw["command"]:
-            del raw["command"]
-        if "args" in raw and not raw["args"]:
-            del raw["args"]
-        if "tags" in raw and not raw["tags"]:
-            del raw["tags"]
+        for key in ("url", "command", "args", "env", "tags"):
+            if key in raw and not raw[key]:
+                del raw[key]
         return raw
 
 
