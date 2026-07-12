@@ -67,20 +67,19 @@ class ProxyManager:
         await self.registry.add_server(name, config)
         self._server_configs[name] = config
 
-        if config.get("disabled"):
-            logger.info("Server %s registered as disabled", name)
-            self._status[name] = "disabled"
-            return []
+        async with self._lock:
+            if config.get("disabled"):
+                logger.info("Server %s registered as disabled", name)
+                self._status[name] = "disabled"
+                return []
 
-        # プロキシ生成
-        proxy = self._create_proxy(name, config)
-        self._proxies[name] = proxy
+            # プロキシ生成 + マウント (namespace = server_name)
+            proxy = self._create_proxy(name, config)
+            self._proxies[name] = proxy
+            self.mcp.mount(proxy, namespace=name)
+            self._status[name] = "connected"
 
-        # マウント (namespace = server_name)
-        self.mcp.mount(proxy, namespace=name)
-        self._status[name] = "connected"
-
-        # ツール一覧を取得
+        # ツール一覧を取得（lock外: ネットワークI/Oを含むため）
         try:
             tools = await proxy.list_tools()
             return [t.name for t in tools]
