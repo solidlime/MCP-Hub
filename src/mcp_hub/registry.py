@@ -18,44 +18,44 @@ DEFAULT_SERVERS = [
         "name": "fetch",
         "config": {
             "command": "npx",
-            "args": ["-y", "@anthropic/mcp-server-fetch"],
+            "args": ["-y", "@modelcontextprotocol/server-fetch"],
         },
     },
     {
         "name": "filesystem",
         "config": {
             "command": "npx",
-            "args": ["-y", "@anthropic/mcp-server-filesystem", "/opt/mcp-hub/data"],
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
         },
     },
     {
         "name": "sequential-thinking",
         "config": {
             "command": "npx",
-            "args": ["-y", "@anthropic/mcp-server-sequential-thinking"],
+            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
         },
     },
     {
         "name": "git",
         "config": {
             "command": "npx",
-            "args": ["-y", "@anthropic/mcp-server-git", "--repository", "/opt/mcp-hub/data"],
+            "args": ["-y", "@modelcontextprotocol/server-git", "--repository", "."],
         },
     },
     {
         "name": "puppeteer",
         "config": {
             "command": "npx",
-            "args": ["-y", "@anthropic/mcp-server-puppeteer"],
+            "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
         },
     },
     {
         "name": "brave-search",
         "config": {
             "command": "npx",
-            "args": ["-y", "@anthropic/mcp-server-brave-search"],
+            "args": ["-y", "@modelcontextprotocol/server-brave-search"],
             "env": {
-                "BRAVE_API_KEY": "${BRAVE_API_KEY}",
+                "BRAVE_API_KEY": "",
             },
         },
     },
