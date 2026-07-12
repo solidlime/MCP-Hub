@@ -1973,7 +1973,6 @@
             // 既存タグを除外して重複を除去
             const unique = [...new Set(newTags)].filter(t => !currentTags.includes(t));
             if (unique.length === 0) {
-                showToast(`タグはすべて登録済みです`, 'info');
                 renderServers();
                 return;
             }
