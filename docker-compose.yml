@@ -9,3 +9,9 @@ services:
     volumes:
       - /volume1/docker/mcp-hub/data:/data
     user: "0:0"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:26263/admin/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
