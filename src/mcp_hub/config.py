@@ -15,15 +15,11 @@ from .env_expand import expand_env_vars
 logger = logging.getLogger(__name__)
 
 # 設定ファイルが存在しない場合に自動生成されるデフォルト構成
+# 注: @modelcontextprotocol/server-fetch と server-git は未公開のため除外
 DEFAULT_CONFIG = {
     "version": 1,
     "log_level": "info",
     "mcpServers": {
-        "fetch": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-fetch"],
-            "tags": ["web"],
-        },
         "filesystem": {
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
@@ -33,11 +29,6 @@ DEFAULT_CONFIG = {
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
             "tags": ["reasoning"],
-        },
-        "git": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-git", "--repository", "."],
-            "tags": ["vcs"],
         },
         "puppeteer": {
             "command": "npx",

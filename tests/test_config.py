@@ -33,7 +33,7 @@ class TestLoadConfig:
         assert not config_file.exists()
         config = load_config(str(config_file))
         assert config_file.exists()
-        assert len(config.servers) == 6  # default servers
+        assert len(config.servers) == 4  # default servers (fetch/git unpublished)
 
     def test_invalid_json_raises(self, tmp_path):
         config_file = tmp_path / "bad.json"
