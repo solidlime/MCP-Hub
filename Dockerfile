@@ -94,9 +94,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     chromium chromium-sandbox \
     && rm -rf /var/lib/apt/lists/*
 
-# gosu for PUID/PGID privilege dropping (step-down from root at runtime)
+# gosu for PUID/PGID privilege dropping
 RUN wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/1.17/gosu-$(dpkg --print-architecture)" \
     && chmod +x /usr/local/bin/gosu
+
+# uv/uvx — Python MCP server runner (e.g., mcp-server-fetch)
+RUN pip install --no-cache-dir uv
 
 # builder から仮想環境とアプリケーションと設定ファイルをコピー
 COPY --from=builder /opt/venv /opt/venv
