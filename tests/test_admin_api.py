@@ -125,3 +125,54 @@ class TestConnection:
     def test_connection_nonexistent_is_404(self, client):
         r = client.get("/admin/api/servers/ghost/connection")
         assert r.status_code == 404
+
+    def test_connection_url_uses_urljoin(self, client):
+        """URL construction uses proper urljoin, not string concatenation."""
+        client.post("/admin/api/servers", json={
+            "name": "url-test", "config": {"url": "http://localhost:9999"}
+        })
+        r = client.get("/admin/api/servers/url-test/connection")
+        assert r.status_code == 200
+        url = r.json()["url"]
+        # Must end with /mcp, not double-slash
+        assert url.endswith("/mcp")
+        assert "//mcp" not in url.replace("://", "  ")
+
+
+class TestTagFilter:
+    """Verify tag filtering behavior via the admin API."""
+
+    def test_server_list_includes_tags(self, client):
+        """Server list response includes tag information."""
+        client.post("/admin/api/servers", json={
+            "name": "tagged-srv",
+            "config": {"url": "http://localhost:9999", "tags": ["web", "api"]}
+        })
+        r = client.get("/admin/api/servers")
+        servers = r.json()["servers"]
+        tagged = [s for s in servers if s["name"] == "tagged-srv"]
+        assert len(tagged) == 1
+        assert tagged[0]["config"].get("tags") == ["web", "api"]
+
+    def test_server_without_tags_shows_empty_list(self, client):
+        """Server with no tags shows empty tags list in response."""
+        client.post("/admin/api/servers", json={
+            "name": "no-tags",
+            "config": {"url": "http://localhost:9999"}
+        })
+        r = client.get("/admin/api/servers")
+        servers = r.json()["servers"]
+        srv = next(s for s in servers if s["name"] == "no-tags")
+        assert srv["config"].get("tags", None) in (None, [])
+
+    def test_connection_info_with_multiple_tags(self, client):
+        """Connection info includes all tags in URL and example header."""
+        client.post("/admin/api/servers", json={
+            "name": "multi-tag",
+            "config": {"url": "http://localhost:9999", "tags": ["web", "api", "db"]}
+        })
+        r = client.get("/admin/api/servers/multi-tag/connection")
+        data = r.json()
+        assert data["tags"] == ["web", "api", "db"]
+        assert "tags=web,api,db" in data["url"]
+        assert data["example_header"] == "X-MCP-Hub-Tags: web,api,db"

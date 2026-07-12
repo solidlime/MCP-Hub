@@ -6,6 +6,7 @@
 import logging
 import time
 from typing import Any
+from urllib.parse import urljoin
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -128,7 +129,7 @@ async def connection_info(name: str, request: Request):
         raise HTTPException(status_code=404, detail=f"Server '{name}' not found")
 
     tags = server["config"].get("tags", [])
-    base_url = f"{request.base_url}mcp".rstrip("/")
+    base_url = urljoin(str(request.base_url), "mcp")
     url = f"{base_url}?tags={','.join(tags)}" if tags else base_url
 
     return {
