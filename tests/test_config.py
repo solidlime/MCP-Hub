@@ -29,12 +29,12 @@ class TestLoadConfig:
         config = load_config(str(config_file))
         assert config.servers["api"]["url"] == "https://${MY_KEY}.example.com"
 
-    def test_missing_file_auto_generates(self, tmp_path):
+    def test_missing_file_returns_empty(self, tmp_path):
         config_file = tmp_path / "hub.config.json"
         assert not config_file.exists()
         config = load_config(str(config_file))
-        assert config_file.exists()
-        assert len(config.servers) == 4  # default servers (fetch/git unpublished)
+        assert not config_file.exists()  # file creation is store.py's job
+        assert len(config.servers) == 0  # empty HubConfig when missing
 
     def test_invalid_json_raises(self, tmp_path):
         config_file = tmp_path / "bad.json"

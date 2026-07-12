@@ -4,33 +4,55 @@
   "mcpServers": {
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-      "tags": ["local"],
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/tmp"
+      ],
+      "tags": [
+        "local"
+      ],
       "disabled": false
     },
     "sequential-thinking": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-      "tags": ["reasoning"],
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "tags": [
+        "reasoning"
+      ],
       "disabled": false
     },
     "puppeteer": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-puppeteer"
+      ],
       "env": {
         "DOCKER_CONTAINER": "true",
         "ALLOW_DANGEROUS": "true"
       },
-      "tags": ["browser"],
+      "tags": [
+        "browser"
+      ],
       "disabled": false
     },
     "brave-search": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-brave-search"
+      ],
       "env": {
         "BRAVE_API_KEY": "${BRAVE_API_KEY:-}"
       },
-      "tags": ["search", "web"],
+      "tags": [
+        "search",
+        "web"
+      ],
       "disabled": false
     }
   }

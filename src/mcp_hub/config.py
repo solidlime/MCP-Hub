@@ -31,6 +31,10 @@ DEFAULT_CONFIG = {
         "puppeteer": {
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+            "env": {
+                "DOCKER_CONTAINER": "true",
+                "ALLOW_DANGEROUS": "true",
+            },
             "tags": ["browser"],
         },
         "brave-search": {
@@ -63,13 +67,13 @@ def _config_path(explicit_path: str | None = None) -> Path:
 def load_config(config_path: str | None = None) -> HubConfig:
     """{MCP_HUB_DATA_DIR}/hub.config.json を読み込む。
 
-    存在しない場合はデフォルト構成で自動生成する。
+    ファイルが存在しない場合は空の HubConfig を返す。
+    ファイルの自動作成は store.py:JsonStore.init() が担当する。
     """
     path = _config_path(config_path)
     if not path.exists():
-        logger.info("Config not found: %s — generating default.", path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(DEFAULT_CONFIG, indent=2, ensure_ascii=False), encoding="utf-8")
+        logger.info("Config not found: %s — will be created by store.", path)
+        return HubConfig()
     logger.info("Using config: %s", path)
     return _parse_config(path)
 

@@ -102,19 +102,40 @@ class JsonStore:
         Also auto-migrate from legacy hub.db if present.
         seed_servers is accepted but ignored — JsonStore reads from file directly.
         """
+        migrated = False
+
+        # Step 1: Auto-migration from hub.db (BEFORE creating DEFAULT_CONFIG
+        # to avoid overwriting defaults with old data without env/fields).
+        db_path = self._path.parent / "hub.db"
+        if db_path.exists() and not self._path.exists():
+            try:
+                await self._migrate_from_db(db_path)
+                migrated = True
+            except Exception:
+                logger.warning("Failed to migrate from hub.db", exc_info=True)
+
+        # Step 2: Create default config if still missing
         if not self._path.exists():
             logger.info("Config not found: %s — generating default.", self._path)
             await self._write(DEFAULT_CONFIG)
 
-        # Auto-migration: hub.db → hub.config.json
-        db_path = self._path.parent / "hub.db"
-        if db_path.exists():
-            try:
-                await self._migrate_from_db(db_path)
-            except Exception:
-                logger.warning("Failed to migrate from hub.db", exc_info=True)
-
         self._data = await self._read()
+
+        # Step 3: Augment migrated data with missing defaults (env, etc.)
+        if migrated:
+            augmented = False
+            defaults = DEFAULT_CONFIG["mcpServers"]
+            current = self._data.setdefault("mcpServers", {})
+            for name, default_cfg in defaults.items():
+                if name not in current:
+                    current[name] = dict(default_cfg)
+                    augmented = True
+                elif "env" in default_cfg and "env" not in current[name]:
+                    # Preserve old config but add missing env from defaults
+                    current[name]["env"] = dict(default_cfg["env"])
+                    augmented = True
+            if augmented:
+                await self._write(self._data)
 
         # MCP_HUB_RESEED support
         if os.environ.get("MCP_HUB_RESEED") == "1":
