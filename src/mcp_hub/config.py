@@ -1,6 +1,6 @@
 """
 Configuration file loader for MCP Hub.
-Reads {MCP_HUB_DATA_DIR}/hub.config.json, applies env expansion.
+Reads {MCP_HUB_DATA_DIR}/hub.config.json, auto-generates if missing.
 """
 
 import json
@@ -13,6 +13,45 @@ from typing import Any
 from .env_expand import expand_env_vars
 
 logger = logging.getLogger(__name__)
+
+# 設定ファイルが存在しない場合に自動生成されるデフォルト構成
+DEFAULT_CONFIG = {
+    "version": 1,
+    "log_level": "info",
+    "mcpServers": {
+        "fetch": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-fetch"],
+            "tags": ["web"],
+        },
+        "filesystem": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            "tags": ["local"],
+        },
+        "sequential-thinking": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+            "tags": ["reasoning"],
+        },
+        "git": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-git", "--repository", "."],
+            "tags": ["vcs"],
+        },
+        "puppeteer": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
+            "tags": ["browser"],
+        },
+        "brave-search": {
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+            "env": {"BRAVE_API_KEY": "${BRAVE_API_KEY:-}"},
+            "tags": ["search", "web"],
+        },
+    },
+}
 
 
 @dataclass
@@ -33,11 +72,15 @@ def _config_path(explicit_path: str | None = None) -> Path:
 
 
 def load_config(config_path: str | None = None) -> HubConfig:
-    """{MCP_HUB_DATA_DIR}/hub.config.json を読み込む（未指定時は data/ 以下）。"""
+    """{MCP_HUB_DATA_DIR}/hub.config.json を読み込む。
+
+    存在しない場合はデフォルト構成で自動生成する。
+    """
     path = _config_path(config_path)
     if not path.exists():
-        logger.info("Config not found: %s — starting with empty server list.", path)
-        return HubConfig()
+        logger.info("Config not found: %s — generating default.", path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(DEFAULT_CONFIG, indent=2, ensure_ascii=False), encoding="utf-8")
     logger.info("Using config: %s", path)
     return _parse_config(path)
 

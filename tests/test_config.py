@@ -28,9 +28,12 @@ class TestLoadConfig:
         config = load_config(str(config_file))
         assert config.servers["api"]["url"] == "https://secret123.example.com"
 
-    def test_missing_file_returns_empty(self):
-        config = load_config("/nonexistent/path/config.json")
-        assert config.servers == {}
+    def test_missing_file_auto_generates(self, tmp_path):
+        config_file = tmp_path / "hub.config.json"
+        assert not config_file.exists()
+        config = load_config(str(config_file))
+        assert config_file.exists()
+        assert len(config.servers) == 6  # default servers
 
     def test_invalid_json_raises(self, tmp_path):
         config_file = tmp_path / "bad.json"
