@@ -46,8 +46,9 @@ RUN . /opt/venv/bin/activate && \
     uv pip install $(python3 -c "import tomllib; \
     print(*tomllib.load(open('pyproject.toml','rb'))['project']['dependencies'])")
 
-# アプリケーションコード
+# アプリケーションコード + 設定ファイル
 COPY src/ ${APP_HOME}/src/
+COPY hub.config.json ${APP_HOME}/hub.config.json
 
 # アプリ本体をインストール（依存は既にあるので高速）
 RUN . /opt/venv/bin/activate && uv pip install -e .
@@ -93,9 +94,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     chromium chromium-sandbox \
     && rm -rf /var/lib/apt/lists/*
 
-# builder から仮想環境とアプリケーションをコピー
+# builder から仮想環境とアプリケーションと設定ファイルをコピー
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder ${APP_HOME}/src ${APP_HOME}/src
+COPY --from=builder ${APP_HOME}/hub.config.json ${APP_HOME}/hub.config.json
 
 # データディレクトリ
 RUN mkdir -p ${APP_HOME}/data
