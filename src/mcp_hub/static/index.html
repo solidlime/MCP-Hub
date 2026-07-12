@@ -1954,6 +1954,16 @@
                     renderServers();
                 }
             }
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitTag();
+                } else if (e.key === 'Escape') {
+                    renderServers();
+                }
+            });
+            input.addEventListener('blur', commitTag);
         }
 
         async function batchAddTags(name, newTags) {
@@ -1977,17 +1987,6 @@
                 showToast(error.message, 'error');
                 renderServers();
             }
-        }
-
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    e.preventDefault();
-                    commitTag();
-                } else if (e.key === 'Escape') {
-                    renderServers();
-                }
-            });
-            input.addEventListener('blur', commitTag);
         }
 
         async function addTag(name, tag) {
