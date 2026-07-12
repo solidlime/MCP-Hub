@@ -1,0 +1,10 @@
+services:
+  mcp-hub:
+    image: ghcr.io/solidlime/mcp-hub:latest
+    restart: unless-stopped
+    ports:
+      - "26263:26263"
+    environment:
+      - MCP_HUB_DATA_DIR=/data
+    volumes:
+      - /volume1/docker/mcp-hub:/data
