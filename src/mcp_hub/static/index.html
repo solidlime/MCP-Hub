@@ -1,0 +1,1361 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Hub 管理画面</title>
+    <meta name="description" content="MCP サーバーの登録・管理・テストができる管理画面">
+    <style>
+        /* ============================================================
+           ROOT VARIABLES & THEMING (Nous Dark Theme)
+           ============================================================ */
+        :root {
+            --bg-primary: #0f0c29;
+            --bg-secondary: #1a0533;
+            --bg-tertiary: #2d1b69;
+            --glass-bg: rgba(255, 255, 255, 0.08);
+            --glass-border: rgba(255, 255, 255, 0.15);
+            --glass-hover: rgba(255, 255, 255, 0.12);
+            --text-primary: #f1f5f9;
+            --text-secondary: #cbd5e1;
+            --text-muted: #94a3b8;
+            --accent-purple: #a78bfa;
+            --accent-blue: #60a5fa;
+            --accent-green: #34d399;
+            --accent-red: #f87171;
+            --accent-yellow: #fbbf24;
+            --shadow-glow: rgba(167, 139, 250, 0.15);
+            --card-radius: 16px;
+            --header-height: 60px;
+            --glass-bg-subtle: rgba(255, 255, 255, 0.06);
+            --glass-bg-faint: rgba(255, 255, 255, 0.02);
+            --glass-bg-light: rgba(255, 255, 255, 0.04);
+            --font-sans: 'Segoe UI', 'Yu Gothic', 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', system-ui, -apple-system, sans-serif;
+            --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            --transition-fast: 150ms ease;
+            --transition-normal: 250ms ease;
+            --transition-slow: 350ms ease;
+        }
+
+        /* ============================================================
+           BASE STYLES
+           ============================================================ */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font-sans);
+            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-tertiary) 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+
+        /* ============================================================
+           FLOATING ORBS (Background decoration)
+           ============================================================ */
+        .orb {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(100px);
+            opacity: 0.12;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .orb-1 { width: 600px; height: 600px; background: #7c3aed; top: -200px; left: -100px; animation: orb-float 25s ease-in-out infinite; }
+        .orb-2 { width: 400px; height: 400px; background: #ec4899; bottom: -100px; right: -100px; animation: orb-float 30s ease-in-out infinite reverse; }
+        .orb-3 { width: 350px; height: 350px; background: #3b82f6; top: 40%; left: 60%; animation: orb-float 20s ease-in-out infinite 5s; }
+        @keyframes orb-float {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33% { transform: translate(50px, -30px) scale(1.05); }
+            66% { transform: translate(-30px, 40px) scale(0.95); }
+        }
+
+        /* ============================================================
+           GLASSMORPHISM
+           ============================================================ */
+        .glass {
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--card-radius);
+        }
+        .glass:hover {
+            background: var(--glass-hover);
+            box-shadow: 0 8px 32px var(--shadow-glow);
+        }
+
+        /* ============================================================
+           LAYOUT
+           ============================================================ */
+        .app-container {
+            position: relative;
+            z-index: 1;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+            min-height: 100vh;
+        }
+
+        /* ============================================================
+           HEADER
+           ============================================================ */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+            padding: 20px 24px;
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--card-radius);
+        }
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .header-title h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-blue) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .header-title .icon {
+            font-size: 2rem;
+        }
+        .header-actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+        .health-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        .health-status.healthy {
+            background: rgba(52, 211, 153, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(52, 211, 153, 0.3);
+        }
+        .health-status.unhealthy {
+            background: rgba(248, 113, 113, 0.15);
+            color: var(--accent-red);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+        }
+        .health-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* ============================================================
+           BUTTONS
+           ============================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            font-family: var(--font-sans);
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-blue) 100%);
+            color: white;
+        }
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(167, 139, 250, 0.4);
+        }
+        .btn-secondary {
+            background: var(--glass-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--glass-border);
+        }
+        .btn-secondary:hover:not(:disabled) {
+            background: var(--glass-hover);
+        }
+        .btn-danger {
+            background: rgba(248, 113, 113, 0.15);
+            color: var(--accent-red);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+        }
+        .btn-danger:hover:not(:disabled) {
+            background: rgba(248, 113, 113, 0.25);
+        }
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 0.75rem;
+        }
+        .btn-icon {
+            width: 36px;
+            height: 36px;
+            padding: 0;
+            border-radius: 8px;
+        }
+        .btn:focus-visible {
+            outline: 2px solid var(--accent-purple);
+            outline-offset: 2px;
+        }
+
+        /* ============================================================
+           CARDS & SERVER LIST
+           ============================================================ */
+        .servers-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+        .server-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--card-radius);
+            padding: 20px;
+            transition: all var(--transition-normal);
+        }
+        .server-card:hover {
+            background: var(--glass-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 32px var(--shadow-glow);
+        }
+        .server-card.expanded {
+            border-color: var(--accent-purple);
+        }
+        .server-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 8px;
+            transition: background var(--transition-fast);
+        }
+        .server-header:hover {
+            background: var(--glass-bg-subtle);
+        }
+        .server-header:focus-visible {
+            outline: 2px solid var(--accent-purple);
+            outline-offset: 2px;
+            background: var(--glass-bg-subtle);
+        }
+        .server-name {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .server-type {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            background: var(--glass-bg-subtle);
+            color: var(--text-muted);
+        }
+        .server-meta {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 16px;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+        .server-meta-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .server-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--glass-border);
+        }
+
+        /* ============================================================
+           TOOLS LIST (Expanded)
+           ============================================================ */
+        .tools-container {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height var(--transition-slow);
+        }
+        .server-card.expanded .tools-container {
+            max-height: 1000px;
+        }
+        .tools-list {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--glass-border);
+        }
+        .tool-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            margin-bottom: 8px;
+            background: var(--glass-bg-subtle);
+            border-radius: 8px;
+            transition: all var(--transition-fast);
+        }
+        .tool-item:hover {
+            background: var(--glass-bg-light);
+        }
+        .tool-info {
+            flex: 1;
+        }
+        .tool-name {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        .tool-description {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+        .tool-action {
+            margin-left: 12px;
+        }
+
+        /* ============================================================
+           MODAL
+           ============================================================ */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all var(--transition-normal);
+        }
+        .modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--card-radius);
+            width: 90%;
+            max-width: 500px;
+            max-height: 90vh;
+            overflow-y: auto;
+            transform: scale(0.9) translateY(20px);
+            transition: all var(--transition-normal);
+        }
+        .modal-overlay.active .modal {
+            transform: scale(1) translateY(0);
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--glass-border);
+        }
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            transition: all var(--transition-fast);
+        }
+        .modal-close:hover {
+            color: var(--text-primary);
+            background: var(--glass-bg);
+        }
+        .modal-close:focus-visible {
+            outline: 2px solid var(--accent-purple);
+            outline-offset: 2px;
+        }
+        .modal-body {
+            padding: 24px;
+        }
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            padding: 16px 24px;
+            border-top: 1px solid var(--glass-border);
+        }
+
+        /* ============================================================
+           TABS
+           ============================================================ */
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+            background: var(--glass-bg-subtle);
+            border-radius: 8px;
+            padding: 4px;
+        }
+        .tab {
+            flex: 1;
+            padding: 10px 16px;
+            border: none;
+            background: none;
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all var(--transition-fast);
+            font-family: var(--font-sans);
+        }
+        .tab:hover {
+            color: var(--text-primary);
+            background: var(--glass-bg);
+        }
+        .tab.active {
+            background: var(--glass-bg);
+            color: var(--text-primary);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+        .tab:focus-visible {
+            outline: 2px solid var(--accent-purple);
+            outline-offset: 2px;
+        }
+
+        /* ============================================================
+           FORMS
+           ============================================================ */
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+        }
+        .form-input {
+            width: 100%;
+            padding: 10px 14px;
+            background: var(--glass-bg-subtle);
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            font-family: var(--font-sans);
+            transition: all var(--transition-fast);
+        }
+        .form-input:focus {
+            outline: none;
+            border-color: var(--accent-purple);
+            box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.2);
+        }
+        .form-input::placeholder {
+            color: var(--text-muted);
+        }
+        .form-hint {
+            margin-top: 6px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+        .form-error {
+            margin-top: 6px;
+            font-size: 0.75rem;
+            color: var(--accent-red);
+        }
+
+        /* ============================================================
+           TOOL EXECUTION MODAL
+           ============================================================ */
+        .tool-modal .modal {
+            max-width: 600px;
+        }
+        .tool-args-form {
+            margin-bottom: 20px;
+        }
+        .tool-result {
+            margin-top: 20px;
+            padding: 16px;
+            background: var(--glass-bg-subtle);
+            border-radius: 8px;
+            border: 1px solid var(--glass-border);
+        }
+        .tool-result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .tool-result-title {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .tool-result-content {
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        /* ============================================================
+           TOAST NOTIFICATIONS
+           ============================================================ */
+        .toast-container {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .toast {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            transform: translateX(100%);
+            opacity: 0;
+            transition: all var(--transition-normal);
+        }
+        .toast.show {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        .toast.success {
+            border-color: var(--accent-green);
+        }
+        .toast.error {
+            border-color: var(--accent-red);
+        }
+        .toast.info {
+            border-color: var(--accent-blue);
+        }
+        .toast-icon {
+            font-size: 1.25rem;
+        }
+        .toast-message {
+            flex: 1;
+        }
+        .toast-close {
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 2px;
+        }
+
+        /* ============================================================
+           LOADING & EMPTY STATES
+           ============================================================ */
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid var(--glass-border);
+            border-top-color: var(--accent-purple);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .empty-state {
+            text-align: center;
+            padding: 48px 24px;
+            color: var(--text-muted);
+        }
+        .empty-state-icon {
+            font-size: 3rem;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+        .empty-state-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+        }
+        .empty-state-description {
+            font-size: 0.875rem;
+            max-width: 400px;
+            margin: 0 auto 24px;
+        }
+
+        /* ============================================================
+           STATUS BADGES
+           ============================================================ */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+        .status-badge.success {
+            background: rgba(52, 211, 153, 0.15);
+            color: var(--accent-green);
+        }
+        .status-badge.error {
+            background: rgba(248, 113, 113, 0.15);
+            color: var(--accent-red);
+        }
+        .status-badge.loading {
+            background: rgba(167, 139, 250, 0.15);
+            color: var(--accent-purple);
+        }
+        .status-badge.unknown {
+            background: var(--glass-bg-subtle);
+            color: var(--text-muted);
+        }
+
+        /* ============================================================
+           RESPONSIVE
+           ============================================================ */
+        @media (max-width: 768px) {
+            .app-container {
+                padding: 16px;
+            }
+            .header {
+                flex-direction: column;
+                gap: 16px;
+                text-align: center;
+            }
+            .header-actions {
+                width: 100%;
+                justify-content: center;
+            }
+            .servers-grid {
+                grid-template-columns: 1fr;
+            }
+            .server-actions {
+                flex-wrap: wrap;
+            }
+            .modal {
+                width: 95%;
+                margin: 16px;
+            }
+        }
+
+        /* ============================================================
+           ANIMATIONS
+           ============================================================ */
+        .fade-in {
+            animation: fadeIn var(--transition-normal) ease;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .slide-up {
+            animation: slideUp var(--transition-normal) ease;
+        }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ============================================================
+           CONFIRM DIALOG
+           ============================================================ */
+        .confirm-dialog .modal {
+            max-width: 400px;
+        }
+        .confirm-message {
+            margin-bottom: 20px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+        .confirm-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        /* ============================================================
+           ACCESSIBILITY
+           ============================================================ */
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Background Orbs -->
+    <div class="orb orb-1" aria-hidden="true"></div>
+    <div class="orb orb-2" aria-hidden="true"></div>
+    <div class="orb orb-3" aria-hidden="true"></div>
+
+    <!-- Main App Container -->
+    <div class="app-container" role="main">
+        <!-- Header -->
+        <header class="header" role="banner">
+            <div class="header-title">
+                <span class="icon" aria-hidden="true">🔮</span>
+                <h1>MCP Hub 管理画面</h1>
+            </div>
+            <div class="header-actions">
+                <div id="healthStatus" class="health-status unknown" role="status" aria-live="polite">
+                    <span class="health-dot" aria-hidden="true"></span>
+                    <span>確認中...</span>
+                </div>
+                <button class="btn btn-primary" onclick="openAddServerModal()" aria-label="MCP サーバーを追加">
+                    <span aria-hidden="true">＋</span>
+                    <span>サーバー追加</span>
+                </button>
+            </div>
+        </header>
+
+        <!-- Server List -->
+        <div id="serversList" class="servers-grid" role="list" aria-label="MCP サーバー一覧">
+            <!-- Dynamic content -->
+        </div>
+
+        <!-- Empty State -->
+        <div id="emptyState" class="empty-state" style="display: none;" role="status">
+            <div class="empty-state-icon" aria-hidden="true">📡</div>
+            <div class="empty-state-title">MCP サーバーが登録されていません</div>
+            <div class="empty-state-description">
+                「サーバー追加」ボタンから MCP サーバーを登録してください。<br>
+                URL またはコマンドで接続できます。
+            </div>
+            <button class="btn btn-primary" onclick="openAddServerModal()" aria-label="最初の MCP サーバーを追加">
+                最初のサーバーを追加
+            </button>
+        </div>
+    </div>
+
+    <!-- Add Server Modal -->
+    <div id="addServerModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="addServerModalTitle">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title" id="addServerModalTitle">MCP サーバー追加</h2>
+                <button class="modal-close" onclick="closeAddServerModal()" aria-label="閉じる">✕</button>
+            </div>
+            <div class="modal-body">
+                <!-- Tabs -->
+                <div class="tabs" role="tablist">
+                    <button class="tab active" data-tab="url" onclick="switchTab('url')" role="tab" aria-selected="true" aria-controls="tab-url">URL 接続</button>
+                    <button class="tab" data-tab="command" onclick="switchTab('command')" role="tab" aria-selected="false" aria-controls="tab-command">コマンド接続</button>
+                </div>
+
+                <!-- URL Tab -->
+                <div id="tab-url" class="tab-content" role="tabpanel">
+                    <div class="form-group">
+                        <label class="form-label" for="urlName">サーバー名 *</label>
+                        <input type="text" class="form-input" id="urlName" placeholder="例: my-mcp-server" required>
+                        <div class="form-hint">識別しやすい名前を付けてください</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="urlEndpoint">MCP エンドポイント URL *</label>
+                        <input type="url" class="form-input" id="urlEndpoint" placeholder="http://localhost:3000" required>
+                        <div class="form-hint">MCP サーバーのエンドポイント URL を入力してください</div>
+                    </div>
+                </div>
+
+                <!-- Command Tab -->
+                <div id="tab-command" class="tab-content" role="tabpanel" style="display: none;">
+                    <div class="form-group">
+                        <label class="form-label" for="cmdName">サーバー名 *</label>
+                        <input type="text" class="form-input" id="cmdName" placeholder="例: filesystem-server" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="cmdCommand">コマンド *</label>
+                        <input type="text" class="form-input" id="cmdCommand" placeholder="npx" required>
+                        <div class="form-hint">実行するコマンドを入力してください</div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="cmdArgs">引数</label>
+                        <input type="text" class="form-input" id="cmdArgs" placeholder="-y @modelcontextprotocol/server-filesystem">
+                        <div class="form-hint">スペース区切りで引数を入力してください</div>
+                    </div>
+                </div>
+
+                <!-- Error Display -->
+                <div id="formError" class="form-error" style="display: none;" role="alert"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeAddServerModal()">キャンセル</button>
+                <button class="btn btn-primary" id="submitBtn" onclick="submitServer()">
+                    追加
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tool Execution Modal -->
+    <div id="toolModal" class="modal-overlay tool-modal" role="dialog" aria-modal="true" aria-labelledby="toolModalTitle">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title" id="toolModalTitle">ツール実行</h2>
+                <button class="modal-close" onclick="closeToolModal()" aria-label="閉じる">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="tool-args-form">
+                    <div class="form-group">
+                        <label class="form-label" for="toolArgs">引数 (JSON)</label>
+                        <textarea class="form-input" id="toolArgs" rows="6" placeholder='{"key": "value"}'></textarea>
+                        <div class="form-hint">JSON 形式で引数を入力してください。空の場合は {} を入力してください。</div>
+                    </div>
+                </div>
+                <button class="btn btn-primary" id="executeToolBtn" onclick="executeTool()">
+                    実行
+                </button>
+                <div id="toolResult" class="tool-result" style="display: none;">
+                    <div class="tool-result-header">
+                        <span class="tool-result-title">実行結果</span>
+                        <span id="toolResultStatus" class="status-badge"></span>
+                    </div>
+                    <div id="toolResultContent" class="tool-result-content"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirm Dialog -->
+    <div id="confirmDialog" class="modal-overlay confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title" id="confirmTitle">確認</h2>
+                <button class="modal-close" onclick="closeConfirmDialog()" aria-label="閉じる">✕</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirmMessage" class="confirm-message"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeConfirmDialog()">キャンセル</button>
+                <button class="btn btn-danger" id="confirmAction">削除</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+
+    <script>
+        // ============================================================
+        // STATE MANAGEMENT
+        // ============================================================
+        let servers = [];
+        let currentTab = 'url';
+        let currentTool = null;
+        let currentServer = null;
+
+        // ============================================================
+        // API COMMUNICATION
+        // ============================================================
+        const API = {
+            async getServers() {
+                const response = await fetch('/admin/api/servers');
+                if (!response.ok) throw new Error('サーバー一覧の取得に失敗しました');
+                return response.json();
+            },
+
+            async addServer(config) {
+                const response = await fetch('/admin/api/servers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'サーバーの追加に失敗しました');
+                }
+                return response.json();
+            },
+
+            async deleteServer(name) {
+                const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}`, {
+                    method: 'DELETE'
+                });
+                if (!response.ok) throw new Error('サーバーの削除に失敗しました');
+            },
+
+            async testServer(name) {
+                const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}/test`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || '接続テストに失敗しました');
+                return data;
+            },
+
+            async callTool(serverName, toolName, args) {
+                const response = await fetch(`/admin/api/servers/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}/call`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ arguments: args })
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'ツールの実行に失敗しました');
+                }
+                return response.json();
+            },
+
+            async getHealth() {
+                const response = await fetch('/admin/api/health');
+                if (!response.ok) throw new Error('ヘルスチェックに失敗しました');
+                return response.json();
+            }
+        };
+
+        // ============================================================
+        // UI RENDERING
+        // ============================================================
+        function renderServers() {
+            const container = document.getElementById('serversList');
+            const emptyState = document.getElementById('emptyState');
+
+            if (servers.length === 0) {
+                container.innerHTML = '';
+                emptyState.style.display = 'block';
+                return;
+            }
+
+            emptyState.style.display = 'none';
+            container.innerHTML = servers.map(server => `
+                <div class="server-card fade-in" data-server="${server.name}" role="listitem">
+                    <div class="server-header" onclick="toggleServer('${server.name}')" 
+                         role="button" tabindex="0" aria-expanded="false"
+                         aria-label="サーバー ${escapeHtml(server.name)} の詳細を表示">
+                        <div>
+                            <div class="server-name">${escapeHtml(server.name)}</div>
+                            <div class="server-type">
+                                ${server.config.url ? '🌐 HTTP' : '⌨️ stdio'}
+                            </div>
+                        </div>
+                        <div class="server-meta">
+                            <div class="server-meta-item">
+                                <span aria-hidden="true">🔧</span>
+                                <span>${server.tools_count} ツール</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tools-container" role="region" aria-label="ツール一覧">
+                        <div class="tools-list">
+                            ${server.tools && server.tools.length > 0 ? server.tools.map(tool => `
+                                <div class="tool-item" role="listitem">
+                                    <div class="tool-info">
+                                        <div class="tool-name">${escapeHtml(tool.name)}</div>
+                                        <div class="tool-description">${escapeHtml(tool.description || '説明なし')}</div>
+                                    </div>
+                                    <div class="tool-action">
+                                        <button class="btn btn-sm btn-secondary" 
+                                                onclick="openToolModal('${server.name}', '${escapeHtml(tool.name)}')"
+                                                aria-label="ツール ${escapeHtml(tool.name)} を実行">
+                                            実行
+                                        </button>
+                                    </div>
+                                </div>
+                            `).join('') : '<div style="color: var(--text-muted); padding: 12px;">ツールがありません</div>'}
+                        </div>
+                    </div>
+
+                    <div class="server-actions">
+                        <button class="btn btn-sm btn-secondary" onclick="testServerConnection('${server.name}')"
+                                aria-label="サーバー ${escapeHtml(server.name)} の接続テスト">
+                            <span aria-hidden="true">🔌</span>
+                            <span>接続テスト</span>
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="confirmDeleteServer('${server.name}')"
+                                aria-label="サーバー ${escapeHtml(server.name)} を削除">
+                            <span aria-hidden="true">🗑️</span>
+                            <span>削除</span>
+                        </button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ============================================================
+        // SERVER OPERATIONS
+        // ============================================================
+        async function loadServers() {
+            try {
+                const data = await API.getServers();
+                servers = data.servers || [];
+                renderServers();
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        async function testServerConnection(name) {
+            const card = document.querySelector(`[data-server="${name}"]`);
+            const actionBtn = card.querySelector('.btn-secondary');
+
+            try {
+                actionBtn.disabled = true;
+                actionBtn.innerHTML = '<span class="loading-spinner"></span> テスト中...';
+
+                const result = await API.testServer(name);
+
+                // Update server tools
+                const serverIndex = servers.findIndex(s => s.name === name);
+                if (serverIndex !== -1) {
+                    servers[serverIndex].tools = result.tools;
+                    servers[serverIndex].tools_count = result.tools_count;
+                    renderServers();
+                }
+
+                showToast(`接続成功！ ${result.tools_count} ツールを検出しました`, 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+            } finally {
+                actionBtn.disabled = false;
+                actionBtn.innerHTML = '<span aria-hidden="true">🔌</span><span>接続テスト</span>';
+            }
+        }
+
+        function confirmDeleteServer(name) {
+            const dialog = document.getElementById('confirmDialog');
+            const message = document.getElementById('confirmMessage');
+            const confirmAction = document.getElementById('confirmAction');
+
+            message.textContent = `「${name}」を削除してもよろしいですか？この操作は取り消せません。`;
+            confirmAction.onclick = () => deleteServer(name);
+
+            dialog.classList.add('active');
+        }
+
+        async function deleteServer(name) {
+            try {
+                await API.deleteServer(name);
+                servers = servers.filter(s => s.name !== name);
+                renderServers();
+                closeConfirmDialog();
+                showToast(`「${name}」を削除しました`, 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        function toggleServer(name) {
+            const card = document.querySelector(`[data-server="${name}"]`);
+            const header = card.querySelector('.server-header');
+            const isExpanded = card.classList.toggle('expanded');
+            header.setAttribute('aria-expanded', isExpanded.toString());
+        }
+
+        // ============================================================
+        // MODAL OPERATIONS
+        // ============================================================
+        function openAddServerModal() {
+            document.getElementById('addServerModal').classList.add('active');
+            resetForm();
+        }
+
+        function closeAddServerModal() {
+            document.getElementById('addServerModal').classList.remove('active');
+            resetForm();
+        }
+
+        function resetForm() {
+            document.getElementById('urlName').value = '';
+            document.getElementById('urlEndpoint').value = '';
+            document.getElementById('cmdName').value = '';
+            document.getElementById('cmdCommand').value = '';
+            document.getElementById('cmdArgs').value = '';
+            document.getElementById('formError').style.display = 'none';
+            switchTab('url');
+        }
+
+        function switchTab(tab) {
+            currentTab = tab;
+            document.querySelectorAll('.tab').forEach(t => {
+                t.classList.remove('active');
+                t.setAttribute('aria-selected', 'false');
+            });
+            const activeTab = document.querySelector(`[data-tab="${tab}"]`);
+            activeTab.classList.add('active');
+            activeTab.setAttribute('aria-selected', 'true');
+
+            document.getElementById('tab-url').style.display = tab === 'url' ? 'block' : 'none';
+            document.getElementById('tab-command').style.display = tab === 'command' ? 'block' : 'none';
+        }
+
+        async function submitServer() {
+            const errorEl = document.getElementById('formError');
+            const submitBtn = document.getElementById('submitBtn');
+
+            let config = {};
+            let name = '';
+
+            if (currentTab === 'url') {
+                name = document.getElementById('urlName').value.trim();
+                const url = document.getElementById('urlEndpoint').value.trim();
+
+                if (!name) {
+                    errorEl.textContent = 'サーバー名を入力してください';
+                    errorEl.style.display = 'block';
+                    return;
+                }
+                if (!url) {
+                    errorEl.textContent = 'URL を入力してください';
+                    errorEl.style.display = 'block';
+                    return;
+                }
+
+                config = { name, config: { url } };
+            } else {
+                name = document.getElementById('cmdName').value.trim();
+                const command = document.getElementById('cmdCommand').value.trim();
+                const argsStr = document.getElementById('cmdArgs').value.trim();
+
+                if (!name) {
+                    errorEl.textContent = 'サーバー名を入力してください';
+                    errorEl.style.display = 'block';
+                    return;
+                }
+                if (!command) {
+                    errorEl.textContent = 'コマンドを入力してください';
+                    errorEl.style.display = 'block';
+                    return;
+                }
+
+                const args = argsStr ? argsStr.split(/\s+/) : [];
+                config = { name, config: { command, args } };
+            }
+
+            try {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<span class="loading-spinner"></span> 追加中...';
+
+                await API.addServer(config);
+                await loadServers();
+                closeAddServerModal();
+                showToast(`「${name}」を追加しました`, 'success');
+            } catch (error) {
+                errorEl.textContent = error.message;
+                errorEl.style.display = 'block';
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '追加';
+            }
+        }
+
+        // ============================================================
+        // TOOL EXECUTION
+        // ============================================================
+        function openToolModal(serverName, toolName) {
+            currentServer = serverName;
+            currentTool = toolName;
+
+            document.getElementById('toolModalTitle').textContent = `ツール実行: ${toolName}`;
+            document.getElementById('toolArgs').value = '{}';
+            document.getElementById('toolResult').style.display = 'none';
+            document.getElementById('toolModal').classList.add('active');
+        }
+
+        function closeToolModal() {
+            document.getElementById('toolModal').classList.remove('active');
+            currentServer = null;
+            currentTool = null;
+        }
+
+        async function executeTool() {
+            const argsEl = document.getElementById('toolArgs');
+            const executeBtn = document.getElementById('executeToolBtn');
+            const resultEl = document.getElementById('toolResult');
+            const resultContent = document.getElementById('toolResultContent');
+            const resultStatus = document.getElementById('toolResultStatus');
+
+            let args;
+            try {
+                args = JSON.parse(argsEl.value || '{}');
+            } catch (e) {
+                showToast('JSON の形式が正しくありません', 'error');
+                return;
+            }
+
+            try {
+                executeBtn.disabled = true;
+                executeBtn.innerHTML = '<span class="loading-spinner"></span> 実行中...';
+
+                const result = await API.callTool(currentServer, currentTool, args);
+
+                resultEl.style.display = 'block';
+                resultStatus.className = 'status-badge success';
+                resultStatus.textContent = '成功';
+                resultContent.textContent = JSON.stringify(result.result, null, 2);
+            } catch (error) {
+                resultEl.style.display = 'block';
+                resultStatus.className = 'status-badge error';
+                resultStatus.textContent = 'エラー';
+                resultContent.textContent = error.message;
+            } finally {
+                executeBtn.disabled = false;
+                executeBtn.textContent = '実行';
+            }
+        }
+
+        // ============================================================
+        // CONFIRM DIALOG
+        // ============================================================
+        function closeConfirmDialog() {
+            document.getElementById('confirmDialog').classList.remove('active');
+        }
+
+        // ============================================================
+        // HEALTH CHECK
+        // ============================================================
+        async function updateHealthStatus() {
+            const healthEl = document.getElementById('healthStatus');
+
+            try {
+                const health = await API.getHealth();
+                healthEl.className = 'health-status healthy';
+                healthEl.innerHTML = `
+                    <span class="health-dot" aria-hidden="true"></span>
+                    <span>正常 (${health.servers} サーバー)</span>
+                `;
+            } catch (error) {
+                healthEl.className = 'health-status unhealthy';
+                healthEl.innerHTML = `
+                    <span class="health-dot" aria-hidden="true"></span>
+                    <span>エラー</span>
+                `;
+            }
+        }
+
+        // ============================================================
+        // TOAST NOTIFICATIONS
+        // ============================================================
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toastContainer');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+
+            const icons = {
+                success: '✓',
+                error: '✕',
+                info: 'ℹ'
+            };
+
+            toast.innerHTML = `
+                <span class="toast-icon">${icons[type] || icons.info}</span>
+                <span class="toast-message">${escapeHtml(message)}</span>
+                <button class="toast-close" onclick="this.parentElement.remove()" aria-label="閉じる">✕</button>
+            `;
+
+            container.appendChild(toast);
+
+            // Trigger animation
+            requestAnimationFrame(() => {
+                toast.classList.add('show');
+            });
+
+            // Auto remove after 5 seconds
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 5000);
+        }
+
+        // ============================================================
+        // INITIALIZATION
+        // ============================================================
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadServers();
+            await updateHealthStatus();
+
+            // Periodic health check
+            setInterval(updateHealthStatus, 30000);
+        });
+
+        // Close modals on overlay click
+        document.querySelectorAll('.modal-overlay').forEach(overlay => {
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) {
+                    overlay.classList.remove('active');
+                }
+            });
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                document.querySelectorAll('.modal-overlay.active').forEach(modal => {
+                    modal.classList.remove('active');
+                });
+            }
+        });
+    </script>
+</body>
+</html>
