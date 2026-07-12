@@ -12,6 +12,9 @@ if TYPE_CHECKING:
 class _AppState:
     registry: SqliteStore | None = None
     proxy_manager: ProxyManager | None = None
+    start_time: float = 0.0
+    tool_calls_total: int = 0
+    tool_call_errors: int = 0
 
 
 app_state = _AppState()

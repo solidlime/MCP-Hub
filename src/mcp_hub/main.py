@@ -8,10 +8,14 @@ MCP Hub - MCPプロキシ + 管理Web UI
   MCP_HUB_PORT      : リスンポート (default: 26263)
   MCP_HUB_HOST      : バインドホスト (default: 0.0.0.0)
   MCP_HUB_DB_PATH   : DBファイルパス (default: data/hub.db)
+  MCP_HUB_CONFIG    : 設定ファイルパス (default: hub.config.json)
+  MCP_HUB_RESEED    : 1 でDBを初期化し設定ファイルから再シード
+  MCP_HUB_LOG       : "json" でJSON形式ログ出力
 """
 
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -20,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from fastmcp import FastMCP
 
 from .admin_router import router as admin_router
+from .config import load_config
 from .proxy_manager import ProxyManager
 from .registry import SqliteStore
 from .state import app_state
@@ -35,8 +40,18 @@ HOST = os.environ.get("MCP_HUB_HOST", "0.0.0.0")
 async def lifespan(app: FastAPI):
     """FastAPI のライフスパン: 起動時/終了時の処理。"""
     # --- 初期化 ---
+    app_state.start_time = time.time()
+
+    # 設定ファイルをロード
+    config = load_config()
+    logger.info("Loaded config: %d servers", len(config.servers))
+
+    # ログレベルを設定ファイルから適用
+    if config.log_level:
+        logging.getLogger().setLevel(config.log_level.upper())
+
     registry = SqliteStore()
-    await registry.init()
+    await registry.init(seed_servers=config.servers)
     logger.info("Registry initialized")
 
     mcp_server = FastMCP("MCP Hub")

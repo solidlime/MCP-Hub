@@ -12,55 +12,6 @@ import aiosqlite
 
 logger = logging.getLogger(__name__)
 
-# 初回起動時に自動登録されるデフォルト MCP サーバー
-DEFAULT_SERVERS = [
-    {
-        "name": "fetch",
-        "config": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-fetch"],
-        },
-    },
-    {
-        "name": "filesystem",
-        "config": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-        },
-    },
-    {
-        "name": "sequential-thinking",
-        "config": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-        },
-    },
-    {
-        "name": "git",
-        "config": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-git", "--repository", "."],
-        },
-    },
-    {
-        "name": "puppeteer",
-        "config": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
-        },
-    },
-    {
-        "name": "brave-search",
-        "config": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-brave-search"],
-            "env": {
-                "BRAVE_API_KEY": "",
-            },
-        },
-    },
-]
-
 
 class SqliteStore:
     """SQLite を使った MCP サーバー登録の永続化。"""
@@ -68,8 +19,8 @@ class SqliteStore:
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or os.environ.get("MCP_HUB_DB_PATH", "data/hub.db")
 
-    async def init(self) -> None:
-        """テーブル作成 + 初回起動時にデフォルトサーバーをシード。"""
+    async def init(self, seed_servers: dict[str, dict] | None = None) -> None:
+        """テーブル作成 + 初回起動時に config からシード。"""
         os.makedirs(os.path.dirname(self.db_path) or ".", exist_ok=True)
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
@@ -81,21 +32,30 @@ class SqliteStore:
             """)
             await db.commit()
 
-        # サーバーが1件もなければデフォルト一覧を登録（ユーザー環境を上書きしない）
+        # MCP_HUB_RESEED=1 で全削除して再シード（移行用）
+        if os.environ.get("MCP_HUB_RESEED") == "1":
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("DELETE FROM servers")
+                await db.commit()
+            logger.info("MCP_HUB_RESEED=1: wiped existing servers for re-seed")
+
+        # サーバーが1件もなければデフォルト一覧を登録
         existing = await self.list_servers()
-        if not existing:
-            logger.info("No servers found. Seeding %d default MCP servers...", len(DEFAULT_SERVERS))
-            for server in DEFAULT_SERVERS:
+        if not existing and seed_servers:
+            logger.info("No servers found. Seeding %d servers from config...", len(seed_servers))
+            for name, config in seed_servers.items():
                 try:
-                    await self.add_server(server["name"], server["config"])
-                    logger.info("  Seeded: %s", server["name"])
+                    await self.add_server(name, config)
+                    logger.info("  Seeded: %s", name)
                 except Exception:
-                    logger.warning("  Failed to seed %s (skipping)", server["name"], exc_info=True)
-        else:
+                    logger.warning("  Failed to seed %s (skipping)", name, exc_info=True)
+        elif existing:
             logger.info(
                 "Found %d existing server(s). Skipping seed (user data preserved).",
                 len(existing),
             )
+        elif not seed_servers:
+            logger.info("No servers in config or DB. Starting empty.")
 
     async def list_servers(self) -> list[dict]:
         """全サーバー取得。"""
