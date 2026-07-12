@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="ja" data-theme="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,93 +7,138 @@
     <meta name="description" content="MCP サーバーの登録・管理・テストができる管理画面">
     <style>
         /* ============================================================
-           ROOT VARIABLES & THEMING (Nous Dark Theme)
+           ROOT VARIABLES & THEMING (Simple + Cute)
            ============================================================ */
         :root {
-            --bg-primary: #0f0c29;
-            --bg-secondary: #1a0533;
-            --bg-tertiary: #2d1b69;
-            --glass-bg: rgba(255, 255, 255, 0.08);
-            --glass-border: rgba(255, 255, 255, 0.15);
-            --glass-hover: rgba(255, 255, 255, 0.12);
-            --text-primary: #f1f5f9;
-            --text-secondary: #cbd5e1;
-            --text-muted: #94a3b8;
-            --accent-purple: #a78bfa;
-            --accent-blue: #60a5fa;
-            --accent-green: #34d399;
-            --accent-red: #f87171;
-            --accent-yellow: #fbbf24;
-            --shadow-glow: rgba(167, 139, 250, 0.15);
-            --card-radius: 16px;
-            --header-height: 60px;
-            --glass-bg-subtle: rgba(255, 255, 255, 0.06);
-            --glass-bg-faint: rgba(255, 255, 255, 0.02);
-            --glass-bg-light: rgba(255, 255, 255, 0.04);
-            --font-sans: 'Segoe UI', 'Yu Gothic', 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', system-ui, -apple-system, sans-serif;
+            --font-sans: 'Inter', 'Noto Sans JP', 'Hiragino Kaku Gothic ProN', system-ui, -apple-system, sans-serif;
             --font-mono: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-pill: 9999px;
             --transition-fast: 150ms ease;
             --transition-normal: 250ms ease;
             --transition-slow: 350ms ease;
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.12);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.15);
+            --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Dark theme (default) */
+        [data-theme="dark"] {
+            --bg-base: #13101a;
+            --bg-surface: #1c1828;
+            --bg-elevated: #241f32;
+            --bg-hover: #2c2640;
+            --bg-input: #1f1a2d;
+            --border-default: #332d4a;
+            --border-subtle: #2a2540;
+            --text-primary: #ede9f5;
+            --text-secondary: #b5adc8;
+            --text-muted: #7e7598;
+            --text-on-accent: #fff;
+            --accent-primary: #b4a0e8;
+            --accent-primary-hover: #c8b8f0;
+            --accent-primary-bg: rgba(180, 160, 232, 0.12);
+            --accent-pink: #e8a0c0;
+            --accent-pink-bg: rgba(232, 160, 192, 0.12);
+            --accent-green: #8dd8a0;
+            --accent-green-bg: rgba(141, 216, 160, 0.12);
+            --accent-red: #e8a0a0;
+            --accent-red-bg: rgba(232, 160, 160, 0.12);
+            --accent-amber: #e8c8a0;
+            --accent-amber-bg: rgba(232, 200, 160, 0.12);
+            --accent-blue: #a0c8e8;
+            --accent-blue-bg: rgba(160, 200, 232, 0.12);
+            --tag-bg-1: rgba(180, 160, 232, 0.15);
+            --tag-text-1: #c8b8f0;
+            --tag-bg-2: rgba(232, 160, 192, 0.15);
+            --tag-text-2: #f0b8d0;
+            --tag-bg-3: rgba(141, 216, 160, 0.15);
+            --tag-text-3: #a8e8b8;
+            --tag-bg-4: rgba(232, 200, 160, 0.15);
+            --tag-text-4: #f0d8b8;
+            --tag-bg-5: rgba(160, 200, 232, 0.15);
+            --tag-text-5: #b8d8f0;
+            --scrollbar-thumb: #3a3450;
+            --toggle-off: #3a3450;
+            --toggle-on: var(--accent-green);
+            --scrim: rgba(0, 0, 0, 0.55);
+        }
+
+        /* Light theme */
+        [data-theme="light"] {
+            --bg-base: #f8f6fc;
+            --bg-surface: #ffffff;
+            --bg-elevated: #f0edf8;
+            --bg-hover: #e8e4f2;
+            --bg-input: #f4f1fa;
+            --border-default: #ddd8ec;
+            --border-subtle: #ece8f5;
+            --text-primary: #1a1525;
+            --text-secondary: #5a5270;
+            --text-muted: #8a8298;
+            --text-on-accent: #fff;
+            --accent-primary: #7c5ec8;
+            --accent-primary-hover: #6a4ab8;
+            --accent-primary-bg: rgba(124, 94, 200, 0.08);
+            --accent-pink: #c86098;
+            --accent-pink-bg: rgba(200, 96, 152, 0.08);
+            --accent-green: #3a9858;
+            --accent-green-bg: rgba(58, 152, 88, 0.08);
+            --accent-red: #c85050;
+            --accent-red-bg: rgba(200, 80, 80, 0.08);
+            --accent-amber: #b88830;
+            --accent-amber-bg: rgba(184, 136, 48, 0.08);
+            --accent-blue: #3880b8;
+            --accent-blue-bg: rgba(56, 128, 184, 0.08);
+            --tag-bg-1: rgba(124, 94, 200, 0.10);
+            --tag-text-1: #6a4ab8;
+            --tag-bg-2: rgba(200, 96, 152, 0.10);
+            --tag-text-2: #a84880;
+            --tag-bg-3: rgba(58, 152, 88, 0.10);
+            --tag-text-3: #2a8040;
+            --tag-bg-4: rgba(184, 136, 48, 0.10);
+            --tag-text-4: #906820;
+            --tag-bg-5: rgba(56, 128, 184, 0.10);
+            --tag-text-5: #286898;
+            --scrollbar-thumb: #ccc8dd;
+            --toggle-off: #ccc8dd;
+            --toggle-on: var(--accent-green);
+            --scrim: rgba(0, 0, 0, 0.35);
+            --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+            --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
         }
 
         /* ============================================================
            BASE STYLES
            ============================================================ */
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
         body {
             font-family: var(--font-sans);
-            background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-tertiary) 100%);
+            background: var(--bg-base);
             color: var(--text-primary);
             min-height: 100vh;
-            overflow-x: hidden;
             line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
-
-        /* ============================================================
-           FLOATING ORBS (Background decoration)
-           ============================================================ */
-        .orb {
-            position: fixed;
-            border-radius: 50%;
-            filter: blur(100px);
-            opacity: 0.12;
-            pointer-events: none;
-            z-index: 0;
-        }
-        .orb-1 { width: 600px; height: 600px; background: #7c3aed; top: -200px; left: -100px; animation: orb-float 25s ease-in-out infinite; }
-        .orb-2 { width: 400px; height: 400px; background: #ec4899; bottom: -100px; right: -100px; animation: orb-float 30s ease-in-out infinite reverse; }
-        .orb-3 { width: 350px; height: 350px; background: #3b82f6; top: 40%; left: 60%; animation: orb-float 20s ease-in-out infinite 5s; }
-        @keyframes orb-float {
-            0%, 100% { transform: translate(0, 0) scale(1); }
-            33% { transform: translate(50px, -30px) scale(1.05); }
-            66% { transform: translate(-30px, 40px) scale(0.95); }
-        }
-
-        /* ============================================================
-           GLASSMORPHISM
-           ============================================================ */
-        .glass {
-            background: var(--glass-bg);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border: 1px solid var(--glass-border);
-            border-radius: var(--card-radius);
-        }
-        .glass:hover {
-            background: var(--glass-hover);
-            box-shadow: 0 8px 32px var(--shadow-glow);
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb {
+            background: var(--scrollbar-thumb);
+            border-radius: 3px;
         }
 
         /* ============================================================
            LAYOUT
            ============================================================ */
         .app-container {
-            position: relative;
-            z-index: 1;
-            max-width: 1400px;
+            max-width: 1200px;
             margin: 0 auto;
-            padding: 24px;
+            padding: 24px 20px;
             min-height: 100vh;
         }
 
@@ -104,13 +149,12 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 32px;
-            padding: 20px 24px;
-            background: var(--glass-bg);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border: 1px solid var(--glass-border);
-            border-radius: var(--card-radius);
+            margin-bottom: 24px;
+            padding: 16px 24px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-sm);
         }
         .header-title {
             display: flex;
@@ -118,50 +162,184 @@
             gap: 12px;
         }
         .header-title h1 {
-            font-size: 1.75rem;
+            font-size: 1.35rem;
             font-weight: 700;
-            background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-blue) 100%);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            background-clip: text;
+            color: var(--text-primary);
+            letter-spacing: -0.02em;
         }
         .header-title .icon {
-            font-size: 2rem;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            background: var(--accent-primary-bg);
+            border-radius: var(--radius-md);
         }
         .header-actions {
             display: flex;
-            gap: 12px;
+            gap: 10px;
             align-items: center;
         }
+
+        /* Theme toggle */
+        .theme-toggle {
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all var(--transition-fast);
+            color: var(--text-secondary);
+        }
+        .theme-toggle:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+        .theme-toggle:focus-visible {
+            outline: 2px solid var(--accent-primary);
+            outline-offset: 2px;
+        }
+
+        /* Health status */
         .health-status {
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 8px 16px;
-            border-radius: 9999px;
-            font-size: 0.875rem;
+            padding: 6px 14px;
+            border-radius: var(--radius-pill);
+            font-size: 0.8rem;
             font-weight: 500;
+            transition: all var(--transition-normal);
         }
         .health-status.healthy {
-            background: rgba(52, 211, 153, 0.15);
+            background: var(--accent-green-bg);
             color: var(--accent-green);
-            border: 1px solid rgba(52, 211, 153, 0.3);
+            border: 1px solid rgba(141, 216, 160, 0.25);
         }
         .health-status.unhealthy {
-            background: rgba(248, 113, 113, 0.15);
+            background: var(--accent-red-bg);
             color: var(--accent-red);
-            border: 1px solid rgba(248, 113, 113, 0.3);
+            border: 1px solid rgba(232, 160, 160, 0.25);
+        }
+        .health-status.unknown {
+            background: var(--bg-elevated);
+            color: var(--text-muted);
+            border: 1px solid var(--border-default);
         }
         .health-dot {
-            width: 8px;
-            height: 8px;
+            width: 7px;
+            height: 7px;
             border-radius: 50%;
             background: currentColor;
             animation: pulse 2s infinite;
         }
         @keyframes pulse {
             0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Metrics bar */
+        .metrics-bar {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            padding: 10px 20px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            margin-bottom: 20px;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            box-shadow: var(--shadow-sm);
+        }
+        .metrics-bar .metric {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .metrics-bar .metric-value {
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        .metrics-bar .metric-divider {
+            width: 1px;
+            height: 16px;
+            background: var(--border-default);
+        }
+
+        /* ============================================================
+           TAG FILTER BAR
+           ============================================================ */
+        .tag-filter-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 20px;
+            padding: 12px 16px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-sm);
+        }
+        .tag-filter-bar .filter-label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-right: 4px;
+            white-space: nowrap;
+        }
+        .tag-filter-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 12px;
+            border-radius: var(--radius-pill);
+            font-size: 0.75rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: 1px solid var(--border-default);
+            background: var(--bg-elevated);
+            color: var(--text-secondary);
+            transition: all var(--transition-fast);
+            user-select: none;
+        }
+        .tag-filter-chip:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+        .tag-filter-chip.active {
+            background: var(--accent-primary-bg);
+            color: var(--accent-primary);
+            border-color: var(--accent-primary);
+        }
+        .tag-filter-chip:focus-visible {
+            outline: 2px solid var(--accent-primary);
+            outline-offset: 2px;
+        }
+        .tag-filter-clear {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: var(--radius-pill);
+            font-size: 0.7rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            transition: all var(--transition-fast);
+        }
+        .tag-filter-clear:hover {
+            color: var(--accent-red);
         }
 
         /* ============================================================
@@ -171,56 +349,62 @@
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
-            padding: 10px 20px;
+            gap: 6px;
+            padding: 8px 18px;
             border: none;
-            border-radius: 8px;
-            font-size: 0.875rem;
+            border-radius: var(--radius-md);
+            font-size: 0.85rem;
             font-weight: 600;
             cursor: pointer;
             transition: all var(--transition-fast);
             font-family: var(--font-sans);
+            white-space: nowrap;
         }
         .btn:disabled {
-            opacity: 0.5;
+            opacity: 0.45;
             cursor: not-allowed;
         }
         .btn-primary {
-            background: linear-gradient(135deg, var(--accent-purple) 0%, var(--accent-blue) 100%);
-            color: white;
+            background: var(--accent-primary);
+            color: var(--text-on-accent);
         }
         .btn-primary:hover:not(:disabled) {
+            background: var(--accent-primary-hover);
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(167, 139, 250, 0.4);
+            box-shadow: 0 4px 12px rgba(180, 160, 232, 0.3);
         }
         .btn-secondary {
-            background: var(--glass-bg);
+            background: var(--bg-elevated);
             color: var(--text-primary);
-            border: 1px solid var(--glass-border);
+            border: 1px solid var(--border-default);
         }
         .btn-secondary:hover:not(:disabled) {
-            background: var(--glass-hover);
+            background: var(--bg-hover);
         }
         .btn-danger {
-            background: rgba(248, 113, 113, 0.15);
+            background: var(--accent-red-bg);
             color: var(--accent-red);
-            border: 1px solid rgba(248, 113, 113, 0.3);
+            border: 1px solid rgba(232, 160, 160, 0.2);
         }
         .btn-danger:hover:not(:disabled) {
-            background: rgba(248, 113, 113, 0.25);
+            background: rgba(232, 160, 160, 0.2);
         }
         .btn-sm {
-            padding: 6px 12px;
+            padding: 5px 12px;
             font-size: 0.75rem;
+            border-radius: var(--radius-sm);
         }
-        .btn-icon {
-            width: 36px;
-            height: 36px;
-            padding: 0;
-            border-radius: 8px;
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-secondary);
+            padding: 5px 10px;
+        }
+        .btn-ghost:hover:not(:disabled) {
+            background: var(--bg-elevated);
+            color: var(--text-primary);
         }
         .btn:focus-visible {
-            outline: 2px solid var(--accent-purple);
+            outline: 2px solid var(--accent-primary);
             outline-offset: 2px;
         }
 
@@ -229,79 +413,325 @@
            ============================================================ */
         .servers-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+            gap: 16px;
             margin-bottom: 32px;
         }
         .server-card {
-            background: var(--glass-bg);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border: 1px solid var(--glass-border);
-            border-radius: var(--card-radius);
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
             padding: 20px;
             transition: all var(--transition-normal);
+            box-shadow: var(--shadow-sm);
+            position: relative;
         }
         .server-card:hover {
-            background: var(--glass-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 8px 32px var(--shadow-glow);
+            box-shadow: var(--shadow-md);
+            border-color: var(--accent-primary);
         }
         .server-card.expanded {
-            border-color: var(--accent-purple);
+            border-color: var(--accent-primary);
         }
+        .server-card.disabled-card {
+            opacity: 0.55;
+        }
+        .server-card.error-card {
+            border-color: rgba(232, 160, 160, 0.3);
+        }
+
+        /* Status badge on card */
+        .server-status-badge {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: var(--radius-pill);
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+        .server-status-badge .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+        .server-status-badge.connected {
+            background: var(--accent-green-bg);
+            color: var(--accent-green);
+        }
+        .server-status-badge.connected .status-dot {
+            background: var(--accent-green);
+        }
+        .server-status-badge.error {
+            background: var(--accent-red-bg);
+            color: var(--accent-red);
+        }
+        .server-status-badge.error .status-dot {
+            background: var(--accent-red);
+            animation: pulse 1.5s infinite;
+        }
+        .server-status-badge.unknown {
+            background: var(--accent-amber-bg);
+            color: var(--accent-amber);
+        }
+        .server-status-badge.unknown .status-dot {
+            background: var(--accent-amber);
+        }
+
         .server-header {
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
             cursor: pointer;
             padding: 4px;
-            border-radius: 8px;
+            border-radius: var(--radius-sm);
             transition: background var(--transition-fast);
+            padding-right: 90px; /* space for status badge */
         }
         .server-header:hover {
-            background: var(--glass-bg-subtle);
+            background: var(--bg-hover);
         }
         .server-header:focus-visible {
-            outline: 2px solid var(--accent-purple);
+            outline: 2px solid var(--accent-primary);
             outline-offset: 2px;
-            background: var(--glass-bg-subtle);
+            background: var(--bg-hover);
         }
         .server-name {
-            font-size: 1.125rem;
-            font-weight: 600;
+            font-size: 1.05rem;
+            font-weight: 700;
             color: var(--text-primary);
+            letter-spacing: -0.01em;
         }
         .server-type {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 0.75rem;
+            gap: 5px;
+            padding: 2px 8px;
+            border-radius: var(--radius-sm);
+            font-size: 0.7rem;
             font-weight: 500;
-            background: var(--glass-bg-subtle);
+            background: var(--bg-elevated);
             color: var(--text-muted);
+            margin-top: 4px;
         }
         .server-meta {
             display: flex;
-            gap: 16px;
-            margin-bottom: 16px;
-            font-size: 0.875rem;
+            gap: 14px;
+            margin-bottom: 12px;
+            font-size: 0.8rem;
             color: var(--text-secondary);
         }
         .server-meta-item {
             display: flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
         }
+        .server-meta-item .meta-icon {
+            font-size: 0.85rem;
+        }
+
+        /* Toggle switch */
+        .toggle-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        .toggle-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+        .toggle-switch {
+            position: relative;
+            width: 40px;
+            height: 22px;
+            cursor: pointer;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+            position: absolute;
+        }
+        .toggle-track {
+            position: absolute;
+            inset: 0;
+            background: var(--toggle-off);
+            border-radius: var(--radius-pill);
+            transition: background var(--transition-normal);
+        }
+        .toggle-switch input:checked + .toggle-track {
+            background: var(--toggle-on);
+        }
+        .toggle-thumb {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 18px;
+            height: 18px;
+            background: white;
+            border-radius: 50%;
+            transition: transform var(--transition-normal);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+        .toggle-switch input:checked ~ .toggle-thumb {
+            transform: translateX(18px);
+        }
+        .toggle-switch input:focus-visible + .toggle-track {
+            outline: 2px solid var(--accent-primary);
+            outline-offset: 2px;
+        }
+
+        /* Tags on card */
+        .server-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 12px;
+            align-items: center;
+        }
+        .tag-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 10px;
+            border-radius: var(--radius-pill);
+            font-size: 0.7rem;
+            font-weight: 500;
+            cursor: default;
+            transition: all var(--transition-fast);
+        }
+        .tag-chip:nth-child(5n+1) { background: var(--tag-bg-1); color: var(--tag-text-1); }
+        .tag-chip:nth-child(5n+2) { background: var(--tag-bg-2); color: var(--tag-text-2); }
+        .tag-chip:nth-child(5n+3) { background: var(--tag-bg-3); color: var(--tag-text-3); }
+        .tag-chip:nth-child(5n+4) { background: var(--tag-bg-4); color: var(--tag-text-4); }
+        .tag-chip:nth-child(5n+5) { background: var(--tag-bg-5); color: var(--tag-text-5); }
+        .tag-chip .tag-remove {
+            display: none;
+            cursor: pointer;
+            font-size: 0.65rem;
+            margin-left: 2px;
+            opacity: 0.6;
+        }
+        .tag-chip:hover .tag-remove {
+            display: inline;
+        }
+        .tag-chip:hover .tag-remove:hover {
+            opacity: 1;
+        }
+        .tag-add-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            border: 1px dashed var(--border-default);
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 0.7rem;
+            cursor: pointer;
+            transition: all var(--transition-fast);
+        }
+        .tag-add-btn:hover {
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+            background: var(--accent-primary-bg);
+        }
+        .tag-add-input {
+            width: 80px;
+            padding: 2px 8px;
+            font-size: 0.7rem;
+            border: 1px solid var(--accent-primary);
+            border-radius: var(--radius-pill);
+            background: var(--bg-input);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            outline: none;
+        }
+
         .server-actions {
             display: flex;
+            gap: 6px;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-subtle);
+            flex-wrap: wrap;
+        }
+
+        /* Connection URL section */
+        .connection-section {
+            margin-top: 12px;
+            padding: 10px 14px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-subtle);
+        }
+        .connection-section .conn-label {
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .connection-url-row {
+            display: flex;
             gap: 8px;
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 1px solid var(--glass-border);
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .connection-url-input {
+            flex: 1;
+            padding: 6px 10px;
+            font-size: 0.78rem;
+            font-family: var(--font-mono);
+            background: var(--bg-input);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            outline: none;
+            min-width: 0;
+        }
+        .connection-url-input:focus {
+            border-color: var(--accent-primary);
+        }
+        .copy-btn {
+            padding: 6px 12px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            background: var(--accent-primary-bg);
+            color: var(--accent-primary);
+            border: 1px solid transparent;
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            white-space: nowrap;
+        }
+        .copy-btn:hover {
+            background: var(--accent-primary);
+            color: var(--text-on-accent);
+        }
+        .copy-btn:focus-visible {
+            outline: 2px solid var(--accent-primary);
+            outline-offset: 2px;
+        }
+        .connection-header-code {
+            font-size: 0.72rem;
+            font-family: var(--font-mono);
+            padding: 8px 10px;
+            background: var(--bg-input);
+            border-radius: var(--radius-sm);
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            word-break: break-all;
+            line-height: 1.5;
+            border: 1px solid var(--border-subtle);
         }
 
         /* ============================================================
@@ -313,42 +743,46 @@
             transition: max-height var(--transition-slow);
         }
         .server-card.expanded .tools-container {
-            max-height: 1000px;
+            max-height: 2000px;
         }
         .tools-list {
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 1px solid var(--glass-border);
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid var(--border-subtle);
         }
         .tool-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 12px;
-            margin-bottom: 8px;
-            background: var(--glass-bg-subtle);
-            border-radius: 8px;
+            padding: 10px 12px;
+            margin-bottom: 6px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
             transition: all var(--transition-fast);
+            border: 1px solid transparent;
         }
         .tool-item:hover {
-            background: var(--glass-bg-light);
+            background: var(--bg-hover);
+            border-color: var(--border-default);
         }
-        .tool-info {
-            flex: 1;
-        }
+        .tool-info { flex: 1; min-width: 0; }
         .tool-name {
             font-weight: 600;
+            font-size: 0.85rem;
             color: var(--text-primary);
-            margin-bottom: 4px;
+            margin-bottom: 2px;
         }
         .tool-description {
-            font-size: 0.8rem;
+            font-size: 0.72rem;
             color: var(--text-muted);
             line-height: 1.4;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
         }
-        .tool-action {
-            margin-left: 12px;
-        }
+        .tool-action { margin-left: 10px; flex-shrink: 0; }
 
         /* ============================================================
            MODAL
@@ -356,9 +790,7 @@
         .modal-overlay {
             position: fixed;
             inset: 0;
-            background: rgba(0, 0, 0, 0.6);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
+            background: var(--scrim);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -366,21 +798,23 @@
             opacity: 0;
             visibility: hidden;
             transition: all var(--transition-normal);
+            padding: 16px;
         }
         .modal-overlay.active {
             opacity: 1;
             visibility: visible;
         }
         .modal {
-            background: var(--bg-secondary);
-            border: 1px solid var(--glass-border);
-            border-radius: var(--card-radius);
-            width: 90%;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            width: 100%;
             max-width: 500px;
             max-height: 90vh;
             overflow-y: auto;
-            transform: scale(0.9) translateY(20px);
+            transform: scale(0.95) translateY(12px);
             transition: all var(--transition-normal);
+            box-shadow: var(--shadow-lg);
         }
         .modal-overlay.active .modal {
             transform: scale(1) translateY(0);
@@ -389,39 +823,43 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 20px 24px;
-            border-bottom: 1px solid var(--glass-border);
+            padding: 18px 24px;
+            border-bottom: 1px solid var(--border-subtle);
         }
         .modal-title {
-            font-size: 1.25rem;
-            font-weight: 600;
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
         }
         .modal-close {
-            background: none;
-            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 30px;
+            height: 30px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-sm);
             color: var(--text-muted);
             cursor: pointer;
-            padding: 4px;
-            border-radius: 4px;
             transition: all var(--transition-fast);
+            font-size: 0.85rem;
         }
         .modal-close:hover {
             color: var(--text-primary);
-            background: var(--glass-bg);
+            background: var(--bg-hover);
         }
         .modal-close:focus-visible {
-            outline: 2px solid var(--accent-purple);
+            outline: 2px solid var(--accent-primary);
             outline-offset: 2px;
         }
-        .modal-body {
-            padding: 24px;
-        }
+        .modal-body { padding: 20px 24px; }
         .modal-footer {
             display: flex;
             justify-content: flex-end;
-            gap: 12px;
-            padding: 16px 24px;
-            border-top: 1px solid var(--glass-border);
+            gap: 10px;
+            padding: 14px 24px;
+            border-top: 1px solid var(--border-subtle);
         }
 
         /* ============================================================
@@ -429,111 +867,154 @@
            ============================================================ */
         .tabs {
             display: flex;
-            gap: 4px;
-            margin-bottom: 20px;
-            background: var(--glass-bg-subtle);
-            border-radius: 8px;
-            padding: 4px;
+            gap: 3px;
+            margin-bottom: 18px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            padding: 3px;
         }
         .tab {
             flex: 1;
-            padding: 10px 16px;
+            padding: 8px 14px;
             border: none;
             background: none;
             color: var(--text-muted);
-            font-size: 0.875rem;
+            font-size: 0.82rem;
             font-weight: 500;
             cursor: pointer;
-            border-radius: 6px;
+            border-radius: var(--radius-sm);
             transition: all var(--transition-fast);
             font-family: var(--font-sans);
         }
         .tab:hover {
             color: var(--text-primary);
-            background: var(--glass-bg);
         }
         .tab.active {
-            background: var(--glass-bg);
+            background: var(--bg-surface);
             color: var(--text-primary);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            box-shadow: var(--shadow-sm);
+            font-weight: 600;
         }
         .tab:focus-visible {
-            outline: 2px solid var(--accent-purple);
+            outline: 2px solid var(--accent-primary);
             outline-offset: 2px;
         }
 
         /* ============================================================
            FORMS
            ============================================================ */
-        .form-group {
-            margin-bottom: 20px;
-        }
+        .form-group { margin-bottom: 16px; }
         .form-label {
             display: block;
-            margin-bottom: 8px;
-            font-size: 0.875rem;
-            font-weight: 500;
+            margin-bottom: 6px;
+            font-size: 0.82rem;
+            font-weight: 600;
             color: var(--text-secondary);
         }
         .form-input {
             width: 100%;
-            padding: 10px 14px;
-            background: var(--glass-bg-subtle);
-            border: 1px solid var(--glass-border);
-            border-radius: 8px;
+            padding: 9px 14px;
+            background: var(--bg-input);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
             color: var(--text-primary);
-            font-size: 0.875rem;
+            font-size: 0.85rem;
             font-family: var(--font-sans);
             transition: all var(--transition-fast);
         }
         .form-input:focus {
             outline: none;
-            border-color: var(--accent-purple);
-            box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.2);
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px var(--accent-primary-bg);
         }
-        .form-input::placeholder {
-            color: var(--text-muted);
-        }
+        .form-input::placeholder { color: var(--text-muted); }
+        textarea.form-input { resize: vertical; min-height: 60px; }
         .form-hint {
-            margin-top: 6px;
-            font-size: 0.75rem;
+            margin-top: 4px;
+            font-size: 0.72rem;
             color: var(--text-muted);
         }
         .form-error {
-            margin-top: 6px;
-            font-size: 0.75rem;
+            margin-top: 8px;
+            font-size: 0.78rem;
             color: var(--accent-red);
+            padding: 8px 12px;
+            background: var(--accent-red-bg);
+            border-radius: var(--radius-sm);
         }
+
+        /* Edit modal tags */
+        .edit-tags-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-items: center;
+            padding: 8px;
+            background: var(--bg-input);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            min-height: 38px;
+        }
+        .edit-tags-container:focus-within {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px var(--accent-primary-bg);
+        }
+        .edit-tag-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: var(--radius-pill);
+            font-size: 0.72rem;
+            font-weight: 500;
+            background: var(--accent-primary-bg);
+            color: var(--accent-primary);
+        }
+        .edit-tag-chip .edit-tag-remove {
+            cursor: pointer;
+            font-size: 0.65rem;
+            opacity: 0.6;
+            transition: opacity var(--transition-fast);
+        }
+        .edit-tag-chip .edit-tag-remove:hover { opacity: 1; }
+        .edit-tag-input {
+            border: none;
+            background: transparent;
+            font-size: 0.78rem;
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            outline: none;
+            min-width: 60px;
+            flex: 1;
+        }
+        .edit-tag-input::placeholder { color: var(--text-muted); }
 
         /* ============================================================
            TOOL EXECUTION MODAL
            ============================================================ */
-        .tool-modal .modal {
-            max-width: 600px;
-        }
-        .tool-args-form {
-            margin-bottom: 20px;
-        }
+        .tool-modal .modal { max-width: 600px; }
+        .tool-args-form { margin-bottom: 16px; }
         .tool-result {
-            margin-top: 20px;
-            padding: 16px;
-            background: var(--glass-bg-subtle);
-            border-radius: 8px;
-            border: 1px solid var(--glass-border);
+            margin-top: 16px;
+            padding: 14px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-default);
         }
         .tool-result-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
         .tool-result-title {
             font-weight: 600;
+            font-size: 0.85rem;
             color: var(--text-primary);
         }
         .tool-result-content {
             font-family: var(--font-mono);
-            font-size: 0.8rem;
+            font-size: 0.78rem;
             color: var(--text-secondary);
             white-space: pre-wrap;
             word-break: break-all;
@@ -546,73 +1027,75 @@
            ============================================================ */
         .toast-container {
             position: fixed;
-            bottom: 24px;
-            right: 24px;
+            bottom: 20px;
+            right: 20px;
             z-index: 2000;
             display: flex;
             flex-direction: column;
             gap: 8px;
+            max-width: 380px;
         }
         .toast {
             display: flex;
-            align-items: center;
-            gap: 12px;
+            align-items: flex-start;
+            gap: 10px;
             padding: 12px 16px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--glass-border);
-            border-radius: 8px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
             color: var(--text-primary);
-            font-size: 0.875rem;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-            transform: translateX(100%);
+            font-size: 0.82rem;
+            box-shadow: var(--shadow-md);
+            transform: translateX(110%);
             opacity: 0;
             transition: all var(--transition-normal);
+            line-height: 1.4;
         }
         .toast.show {
             transform: translateX(0);
             opacity: 1;
         }
-        .toast.success {
-            border-color: var(--accent-green);
-        }
-        .toast.error {
-            border-color: var(--accent-red);
-        }
-        .toast.info {
-            border-color: var(--accent-blue);
-        }
+        .toast.success { border-left: 3px solid var(--accent-green); }
+        .toast.error { border-left: 3px solid var(--accent-red); }
+        .toast.info { border-left: 3px solid var(--accent-blue); }
         .toast-icon {
-            font-size: 1.25rem;
+            font-size: 1rem;
+            flex-shrink: 0;
+            margin-top: 1px;
         }
-        .toast-message {
-            flex: 1;
-        }
+        .toast.success .toast-icon { color: var(--accent-green); }
+        .toast.error .toast-icon { color: var(--accent-red); }
+        .toast.info .toast-icon { color: var(--accent-blue); }
+        .toast-message { flex: 1; }
         .toast-close {
             background: none;
             border: none;
             color: var(--text-muted);
             cursor: pointer;
             padding: 2px;
+            font-size: 0.8rem;
+            flex-shrink: 0;
+            opacity: 0.5;
+            transition: opacity var(--transition-fast);
         }
+        .toast-close:hover { opacity: 1; }
 
         /* ============================================================
            LOADING & EMPTY STATES
            ============================================================ */
         .loading-spinner {
             display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 2px solid var(--glass-border);
-            border-top-color: var(--accent-purple);
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--border-default);
+            border-top-color: var(--accent-primary);
             border-radius: 50%;
-            animation: spin 1s linear infinite;
+            animation: spin 0.8s linear infinite;
         }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
+        @keyframes spin { to { transform: rotate(360deg); } }
         .empty-state {
             text-align: center;
-            padding: 48px 24px;
+            padding: 56px 24px;
             color: var(--text-muted);
         }
         .empty-state-icon {
@@ -621,15 +1104,16 @@
             opacity: 0.5;
         }
         .empty-state-title {
-            font-size: 1.125rem;
-            font-weight: 600;
+            font-size: 1.05rem;
+            font-weight: 700;
             margin-bottom: 8px;
             color: var(--text-secondary);
         }
         .empty-state-description {
-            font-size: 0.875rem;
+            font-size: 0.85rem;
             max-width: 400px;
             margin: 0 auto 24px;
+            line-height: 1.6;
         }
 
         /* ============================================================
@@ -638,54 +1122,77 @@
         .status-badge {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 4px 10px;
-            border-radius: 6px;
-            font-size: 0.75rem;
-            font-weight: 500;
+            gap: 5px;
+            padding: 3px 10px;
+            border-radius: var(--radius-pill);
+            font-size: 0.72rem;
+            font-weight: 600;
         }
         .status-badge.success {
-            background: rgba(52, 211, 153, 0.15);
+            background: var(--accent-green-bg);
             color: var(--accent-green);
         }
         .status-badge.error {
-            background: rgba(248, 113, 113, 0.15);
+            background: var(--accent-red-bg);
             color: var(--accent-red);
         }
         .status-badge.loading {
-            background: rgba(167, 139, 250, 0.15);
-            color: var(--accent-purple);
+            background: var(--accent-primary-bg);
+            color: var(--accent-primary);
         }
         .status-badge.unknown {
-            background: var(--glass-bg-subtle);
+            background: var(--bg-elevated);
             color: var(--text-muted);
+        }
+
+        /* ============================================================
+           CONFIRM DIALOG
+           ============================================================ */
+        .confirm-dialog .modal { max-width: 400px; }
+        .confirm-message {
+            margin-bottom: 16px;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            font-size: 0.9rem;
+        }
+        .confirm-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
         }
 
         /* ============================================================
            RESPONSIVE
            ============================================================ */
         @media (max-width: 768px) {
-            .app-container {
-                padding: 16px;
-            }
+            .app-container { padding: 14px 12px; }
             .header {
                 flex-direction: column;
-                gap: 16px;
+                gap: 12px;
                 text-align: center;
+                padding: 14px 16px;
             }
             .header-actions {
                 width: 100%;
                 justify-content: center;
+                flex-wrap: wrap;
             }
             .servers-grid {
                 grid-template-columns: 1fr;
             }
-            .server-actions {
-                flex-wrap: wrap;
-            }
+            .server-actions { flex-wrap: wrap; }
             .modal {
-                width: 95%;
-                margin: 16px;
+                width: 100%;
+                max-width: none;
+                margin: 8px;
+                max-height: 95vh;
+            }
+            .metrics-bar {
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+            .tag-filter-bar {
+                gap: 6px;
             }
         }
 
@@ -696,32 +1203,8 @@
             animation: fadeIn var(--transition-normal) ease;
         }
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
+            from { opacity: 0; transform: translateY(8px); }
             to { opacity: 1; transform: translateY(0); }
-        }
-        .slide-up {
-            animation: slideUp var(--transition-normal) ease;
-        }
-        @keyframes slideUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* ============================================================
-           CONFIRM DIALOG
-           ============================================================ */
-        .confirm-dialog .modal {
-            max-width: 400px;
-        }
-        .confirm-message {
-            margin-bottom: 20px;
-            color: var(--text-secondary);
-            line-height: 1.6;
-        }
-        .confirm-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
         }
 
         /* ============================================================
@@ -748,30 +1231,55 @@
     </style>
 </head>
 <body>
-    <!-- Background Orbs -->
-    <div class="orb orb-1" aria-hidden="true"></div>
-    <div class="orb orb-2" aria-hidden="true"></div>
-    <div class="orb orb-3" aria-hidden="true"></div>
-
     <!-- Main App Container -->
     <div class="app-container" role="main">
         <!-- Header -->
         <header class="header" role="banner">
             <div class="header-title">
                 <span class="icon" aria-hidden="true">🔮</span>
-                <h1>MCP Hub 管理画面</h1>
+                <h1>MCP Hub</h1>
             </div>
             <div class="header-actions">
                 <div id="healthStatus" class="health-status unknown" role="status" aria-live="polite">
                     <span class="health-dot" aria-hidden="true"></span>
                     <span>確認中...</span>
                 </div>
+                <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" aria-label="テーマ切替" title="ライト/ダーク切替">
+                    🌙
+                </button>
                 <button class="btn btn-primary" onclick="openAddServerModal()" aria-label="MCP サーバーを追加">
                     <span aria-hidden="true">＋</span>
                     <span>サーバー追加</span>
                 </button>
             </div>
         </header>
+
+        <!-- Metrics Bar -->
+        <div id="metricsBar" class="metrics-bar" style="display: none;" role="status" aria-label="Hub 統計">
+            <div class="metric">
+                <span>サーバー</span>
+                <span class="metric-value" id="metricServers">0</span>
+            </div>
+            <div class="metric-divider" aria-hidden="true"></div>
+            <div class="metric">
+                <span>ツール</span>
+                <span class="metric-value" id="metricTools">0</span>
+            </div>
+            <div class="metric-divider" aria-hidden="true"></div>
+            <div class="metric">
+                <span>接続済</span>
+                <span class="metric-value" id="metricConnected">0</span>
+            </div>
+        </div>
+
+        <!-- Tag Filter Bar -->
+        <div id="tagFilterBar" class="tag-filter-bar" style="display: none;" role="toolbar" aria-label="タグフィルター">
+            <span class="filter-label">🏷️ フィルター:</span>
+            <div id="tagFilterChips"></div>
+            <button class="tag-filter-clear" id="tagFilterClear" onclick="clearTagFilter()" style="display: none;">
+                ✕ クリア
+            </button>
+        </div>
 
         <!-- Server List -->
         <div id="serversList" class="servers-grid" role="list" aria-label="MCP サーバー一覧">
@@ -850,6 +1358,59 @@
         </div>
     </div>
 
+    <!-- Edit Server Modal -->
+    <div id="editServerModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="editServerModalTitle">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title" id="editServerModalTitle">サーバー設定を編集</h2>
+                <button class="modal-close" onclick="closeEditModal()" aria-label="閉じる">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label" for="editCommand">コマンド</label>
+                    <input type="text" class="form-input" id="editCommand" placeholder="npx">
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="editArgs">引数 (1行に1つ)</label>
+                    <textarea class="form-input" id="editArgs" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
+                    <div class="form-hint">1行に1つの引数を入力してください</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="editUrl">URL</label>
+                    <input type="text" class="form-input" id="editUrl" placeholder="http://localhost:3000">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">タグ</label>
+                    <div class="edit-tags-container" id="editTagsContainer">
+                        <input type="text" class="edit-tag-input" id="editTagInput" placeholder="タグを入力して Enter">
+                    </div>
+                    <div class="form-hint">Enter で追加、✕ で削除</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">環境変数</label>
+                    <textarea class="form-input" id="editEnv" rows="3" placeholder="KEY=value&#10;ANOTHER_KEY=value2"></textarea>
+                    <div class="form-hint">1行に1つの KEY=value 形式で入力してください</div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">無効化</label>
+                    <label class="toggle-switch" style="margin-top: 4px;">
+                        <input type="checkbox" id="editDisabled">
+                        <span class="toggle-track"></span>
+                        <span class="toggle-thumb"></span>
+                    </label>
+                    <span class="toggle-label" style="margin-left: 10px;">オンにするとサーバーが無効化されます</span>
+                </div>
+                <div id="editFormError" class="form-error" style="display: none;" role="alert"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeEditModal()">キャンセル</button>
+                <button class="btn btn-primary" id="editSubmitBtn" onclick="submitEdit()">
+                    保存
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- Tool Execution Modal -->
     <div id="toolModal" class="modal-overlay tool-modal" role="dialog" aria-modal="true" aria-labelledby="toolModalTitle">
         <div class="modal">
@@ -861,7 +1422,7 @@
                 <div class="tool-args-form">
                     <div class="form-group">
                         <label class="form-label" for="toolArgs">引数 (JSON)</label>
-                        <textarea class="form-input" id="toolArgs" rows="6" placeholder='{"key": "value"}'></textarea>
+                        <textarea class="form-input" id="toolArgs" rows="5" placeholder='{"key": "value"}'></textarea>
                         <div class="form-hint">JSON 形式で引数を入力してください。空の場合は {} を入力してください。</div>
                     </div>
                 </div>
@@ -907,6 +1468,30 @@
         let currentTab = 'url';
         let currentTool = null;
         let currentServer = null;
+        let editingServer = null;
+        let editTags = [];
+        let activeTagFilters = new Set();
+
+        // ============================================================
+        // THEME
+        // ============================================================
+        function toggleTheme() {
+            const html = document.documentElement;
+            const current = html.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            document.getElementById('themeToggle').textContent = next === 'dark' ? '🌙' : '☀️';
+            localStorage.setItem('mcp-hub-theme', next);
+        }
+
+        (function initTheme() {
+            const saved = localStorage.getItem('mcp-hub-theme');
+            if (saved) {
+                document.documentElement.setAttribute('data-theme', saved);
+                const btn = document.getElementById('themeToggle');
+                if (btn) btn.textContent = saved === 'dark' ? '🌙' : '☀️';
+            }
+        })();
 
         // ============================================================
         // API COMMUNICATION
@@ -938,6 +1523,23 @@
                 if (!response.ok) throw new Error('サーバーの削除に失敗しました');
             },
 
+            async patchServer(name, config) {
+                const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                if (!response.ok) {
+                    let msg = 'サーバーの更新に失敗しました';
+                    try {
+                        const err = await response.json();
+                        msg = err.detail || msg;
+                    } catch (_) {}
+                    throw new Error(msg);
+                }
+                return response.json();
+            },
+
             async testServer(name) {
                 const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}/test`, {
                     method: 'POST'
@@ -964,8 +1566,120 @@
                 const response = await fetch('/admin/api/health');
                 if (!response.ok) throw new Error('ヘルスチェックに失敗しました');
                 return response.json();
+            },
+
+            async getMetrics() {
+                const response = await fetch('/admin/api/metrics');
+                if (!response.ok) throw new Error('メトリクスの取得に失敗しました');
+                return response.json();
+            },
+
+            async getConnection(name) {
+                const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}/connection`);
+                if (!response.ok) throw new Error('接続情報の取得に失敗しました');
+                return response.json();
             }
         };
+
+        // ============================================================
+        // UTILITY
+        // ============================================================
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function getServerTags(server) {
+            return (server.config && server.config.tags) || [];
+        }
+
+        function getServerDisabled(server) {
+            return (server.config && server.config.disabled) || false;
+        }
+
+        function getServerStatus(server) {
+            return server.status || 'unknown';
+        }
+
+        // Tag color index based on hash
+        function tagColorIndex(tag) {
+            let hash = 0;
+            for (let i = 0; i < tag.length; i++) {
+                hash = ((hash << 5) - hash) + tag.charCodeAt(i);
+                hash |= 0;
+            }
+            return (Math.abs(hash) % 5) + 1;
+        }
+
+        // ============================================================
+        // TAG FILTER LOGIC
+        // ============================================================
+        function getAllTags() {
+            const tagSet = new Set();
+            servers.forEach(s => {
+                const tags = getServerTags(s);
+                if (Array.isArray(tags)) {
+                    tags.forEach(t => { if (t) tagSet.add(String(t)); });
+                }
+            });
+            return Array.from(tagSet).sort();
+        }
+
+        function renderTagFilterBar() {
+            const bar = document.getElementById('tagFilterBar');
+            const chipsContainer = document.getElementById('tagFilterChips');
+            const clearBtn = document.getElementById('tagFilterClear');
+            const allTags = getAllTags();
+
+            if (allTags.length === 0) {
+                bar.style.display = 'none';
+                return;
+            }
+
+            bar.style.display = 'flex';
+            chipsContainer.innerHTML = allTags.map(tag => {
+                const active = activeTagFilters.has(tag) ? 'active' : '';
+                return `<button class="tag-filter-chip ${active}" onclick="toggleTagFilter('${escapeHtml(tag)}')" aria-pressed="${active ? 'true' : 'false'}">${escapeHtml(tag)}</button>`;
+            }).join('');
+
+            clearBtn.style.display = activeTagFilters.size > 0 ? 'inline-flex' : 'none';
+        }
+
+        function toggleTagFilter(tag) {
+            if (activeTagFilters.has(tag)) {
+                activeTagFilters.delete(tag);
+            } else {
+                activeTagFilters.add(tag);
+            }
+            renderTagFilterBar();
+            applyTagFilter();
+        }
+
+        function clearTagFilter() {
+            activeTagFilters.clear();
+            renderTagFilterBar();
+            applyTagFilter();
+        }
+
+        function applyTagFilter() {
+            const cards = document.querySelectorAll('.server-card');
+            cards.forEach(card => {
+                const name = card.getAttribute('data-server');
+                const server = servers.find(s => s.name === name);
+                if (!server) return;
+
+                if (activeTagFilters.size === 0) {
+                    card.style.display = '';
+                    return;
+                }
+
+                const serverTags = getServerTags(server);
+                const matches = serverTags.some(t => activeTagFilters.has(t));
+                card.style.display = matches ? '' : 'none';
+            });
+        }
 
         // ============================================================
         // UI RENDERING
@@ -977,13 +1691,30 @@
             if (servers.length === 0) {
                 container.innerHTML = '';
                 emptyState.style.display = 'block';
+                document.getElementById('tagFilterBar').style.display = 'none';
                 return;
             }
 
             emptyState.style.display = 'none';
-            container.innerHTML = servers.map(server => `
-                <div class="server-card fade-in" data-server="${server.name}" role="listitem">
-                    <div class="server-header" onclick="toggleServer('${server.name}')" 
+            container.innerHTML = servers.map(server => {
+                const status = getServerStatus(server);
+                const disabled = getServerDisabled(server);
+                const tags = getServerTags(server);
+                const statusLabel = status === 'connected' ? '接続済' : status === 'error' ? 'エラー' : '不明';
+                const cardClasses = [
+                    'server-card', 'fade-in',
+                    disabled ? 'disabled-card' : '',
+                    status === 'error' ? 'error-card' : ''
+                ].filter(Boolean).join(' ');
+
+                return `
+                <div class="${cardClasses}" data-server="${server.name}" role="listitem">
+                    <div class="server-status-badge ${status}" aria-label="ステータス: ${statusLabel}">
+                        <span class="status-dot" aria-hidden="true"></span>
+                        <span>${statusLabel}</span>
+                    </div>
+
+                    <div class="server-header" onclick="toggleServer('${server.name}')"
                          role="button" tabindex="0" aria-expanded="false"
                          aria-label="サーバー ${escapeHtml(server.name)} の詳細を表示">
                         <div>
@@ -992,11 +1723,39 @@
                                 ${server.config.url ? '🌐 HTTP' : '⌨️ stdio'}
                             </div>
                         </div>
-                        <div class="server-meta">
-                            <div class="server-meta-item">
-                                <span aria-hidden="true">🔧</span>
-                                <span>${server.tools_count} ツール</span>
-                            </div>
+                    </div>
+
+                    <div class="toggle-wrapper">
+                        <label class="toggle-switch" title="${disabled ? '有効にする' : '無効にする'}">
+                            <input type="checkbox" ${disabled ? '' : 'checked'}
+                                   onchange="toggleServerEnabled('${server.name}', this.checked)"
+                                   aria-label="サーバー ${escapeHtml(server.name)} の有効/無効切替">
+                            <span class="toggle-track"></span>
+                            <span class="toggle-thumb"></span>
+                        </label>
+                        <span class="toggle-label">${disabled ? '無効' : '有効'}</span>
+                    </div>
+
+                    ${tags.length > 0 ? `
+                    <div class="server-tags">
+                        ${tags.map(tag => `
+                            <span class="tag-chip" data-tag="${escapeHtml(tag)}">
+                                ${escapeHtml(tag)}
+                                <span class="tag-remove" onclick="removeTag('${server.name}', '${escapeHtml(tag)}')" title="タグを削除" aria-label="タグ ${escapeHtml(tag)} を削除">✕</span>
+                            </span>
+                        `).join('')}
+                        <button class="tag-add-btn" onclick="startAddTag('${server.name}', this)" aria-label="タグを追加" title="タグを追加">＋</button>
+                    </div>
+                    ` : `
+                    <div class="server-tags">
+                        <button class="tag-add-btn" onclick="startAddTag('${server.name}', this)" aria-label="タグを追加" title="タグを追加">＋</button>
+                    </div>
+                    `}
+
+                    <div class="server-meta">
+                        <div class="server-meta-item">
+                            <span class="meta-icon" aria-hidden="true">🔧</span>
+                            <span>${server.tools_count || 0} ツール</span>
                         </div>
                     </div>
 
@@ -1009,14 +1768,22 @@
                                         <div class="tool-description">${escapeHtml(tool.description || '説明なし')}</div>
                                     </div>
                                     <div class="tool-action">
-                                        <button class="btn btn-sm btn-secondary" 
+                                        <button class="btn btn-sm btn-secondary"
                                                 onclick="openToolModal('${server.name}', '${escapeHtml(tool.name)}')"
                                                 aria-label="ツール ${escapeHtml(tool.name)} を実行">
                                             実行
                                         </button>
                                     </div>
                                 </div>
-                            `).join('') : '<div style="color: var(--text-muted); padding: 12px;">ツールがありません</div>'}
+                            `).join('') : '<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem;">ツールがありません</div>'}
+                        </div>
+                        <div class="connection-section" id="conn-${server.name}" style="display: none;">
+                            <div class="conn-label">接続情報</div>
+                            <div class="connection-url-row">
+                                <input type="text" class="connection-url-input" id="conn-url-${server.name}" readonly aria-label="接続URL">
+                                <button class="copy-btn" onclick="copyConnectionUrl('${server.name}')" aria-label="接続URLをコピー">コピー</button>
+                            </div>
+                            <div id="conn-header-${server.name}" class="connection-header-code" style="display: none;"></div>
                         </div>
                     </div>
 
@@ -1024,7 +1791,17 @@
                         <button class="btn btn-sm btn-secondary" onclick="testServerConnection('${server.name}')"
                                 aria-label="サーバー ${escapeHtml(server.name)} の接続テスト">
                             <span aria-hidden="true">🔌</span>
-                            <span>接続テスト</span>
+                            <span>テスト</span>
+                        </button>
+                        <button class="btn btn-sm btn-ghost" onclick="showConnectionInfo('${server.name}')"
+                                aria-label="接続情報を表示">
+                            <span aria-hidden="true">🔗</span>
+                            <span>接続URL</span>
+                        </button>
+                        <button class="btn btn-sm btn-ghost" onclick="openEditModal('${server.name}')"
+                                aria-label="サーバー設定を編集">
+                            <span aria-hidden="true">✏️</span>
+                            <span>編集</span>
                         </button>
                         <button class="btn btn-sm btn-danger" onclick="confirmDeleteServer('${server.name}')"
                                 aria-label="サーバー ${escapeHtml(server.name)} を削除">
@@ -1033,14 +1810,26 @@
                         </button>
                     </div>
                 </div>
-            `).join('');
+                `;
+            }).join('');
+
+            renderTagFilterBar();
+            applyTagFilter();
         }
 
-        function escapeHtml(text) {
-            if (!text) return '';
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+        function updateMetrics() {
+            const connected = servers.filter(s => getServerStatus(s) === 'connected').length;
+            const totalTools = servers.reduce((sum, s) => sum + (s.tools_count || 0), 0);
+
+            const bar = document.getElementById('metricsBar');
+            if (servers.length > 0) {
+                bar.style.display = 'flex';
+                document.getElementById('metricServers').textContent = servers.length;
+                document.getElementById('metricTools').textContent = totalTools;
+                document.getElementById('metricConnected').textContent = connected;
+            } else {
+                bar.style.display = 'none';
+            }
         }
 
         // ============================================================
@@ -1051,6 +1840,13 @@
                 const data = await API.getServers();
                 servers = data.servers || [];
                 renderServers();
+                updateMetrics();
+
+                // Show warning for error servers
+                const errorCount = servers.filter(s => getServerStatus(s) === 'error').length;
+                if (errorCount > 0) {
+                    showToast(`${errorCount} 台のサーバーで接続エラーが発生しています — 設定を確認してください`, 'error');
+                }
             } catch (error) {
                 showToast(error.message, 'error');
             }
@@ -1058,15 +1854,14 @@
 
         async function testServerConnection(name) {
             const card = document.querySelector(`[data-server="${name}"]`);
-            const actionBtn = card.querySelector('.btn-secondary');
+            const btn = card.querySelector('.server-actions .btn-secondary');
 
             try {
-                actionBtn.disabled = true;
-                actionBtn.innerHTML = '<span class="loading-spinner"></span> テスト中...';
+                btn.disabled = true;
+                btn.innerHTML = '<span class="loading-spinner"></span> テスト中...';
 
                 const result = await API.testServer(name);
 
-                // Update server tools
                 const serverIndex = servers.findIndex(s => s.name === name);
                 if (serverIndex !== -1) {
                     servers[serverIndex].tools = result.tools;
@@ -1078,8 +1873,25 @@
             } catch (error) {
                 showToast(error.message, 'error');
             } finally {
-                actionBtn.disabled = false;
-                actionBtn.innerHTML = '<span aria-hidden="true">🔌</span><span>接続テスト</span>';
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<span aria-hidden="true">🔌</span><span>テスト</span>';
+                }
+            }
+        }
+
+        async function toggleServerEnabled(name, enabled) {
+            try {
+                await API.patchServer(name, { disabled: !enabled });
+                const serverIndex = servers.findIndex(s => s.name === name);
+                if (serverIndex !== -1) {
+                    servers[serverIndex].config.disabled = !enabled;
+                    renderServers();
+                }
+                showToast(`「${name}」を${enabled ? '有効' : '無効'}にしました`, 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+                renderServers(); // revert visual
             }
         }
 
@@ -1099,6 +1911,7 @@
                 await API.deleteServer(name);
                 servers = servers.filter(s => s.name !== name);
                 renderServers();
+                updateMetrics();
                 closeConfirmDialog();
                 showToast(`「${name}」を削除しました`, 'success');
             } catch (error) {
@@ -1111,6 +1924,311 @@
             const header = card.querySelector('.server-header');
             const isExpanded = card.classList.toggle('expanded');
             header.setAttribute('aria-expanded', isExpanded.toString());
+
+            // Load connection info when expanded
+            if (isExpanded) {
+                loadConnectionInfo(name);
+            }
+        }
+
+        // ============================================================
+        // TAG MANAGEMENT
+        // ============================================================
+        function startAddTag(name, btnEl) {
+            // Replace the + button with an input
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'tag-add-input';
+            input.placeholder = 'タグ名';
+            input.setAttribute('aria-label', '新しいタグ名を入力');
+
+            btnEl.replaceWith(input);
+            input.focus();
+
+            async function commitTag() {
+                const tag = input.value.trim();
+                if (tag) {
+                    await addTag(name, tag);
+                } else {
+                    renderServers();
+                }
+            }
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    commitTag();
+                } else if (e.key === 'Escape') {
+                    renderServers();
+                }
+            });
+            input.addEventListener('blur', commitTag);
+        }
+
+        async function addTag(name, tag) {
+            const server = servers.find(s => s.name === name);
+            if (!server) return;
+            const tags = getServerTags(server);
+            if (tags.includes(tag)) {
+                showToast(`タグ「${tag}」は既に存在します`, 'info');
+                renderServers();
+                return;
+            }
+            const newTags = [...tags, tag];
+            try {
+                await API.patchServer(name, { tags: newTags });
+                server.config.tags = newTags;
+                renderServers();
+                showToast(`タグ「${tag}」を追加しました`, 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+                renderServers();
+            }
+        }
+
+        async function removeTag(name, tag) {
+            if (!confirm(`タグ「${tag}」を削除しますか？`)) return;
+            const server = servers.find(s => s.name === name);
+            if (!server) return;
+            const newTags = getServerTags(server).filter(t => t !== tag);
+            try {
+                await API.patchServer(name, { tags: newTags });
+                server.config.tags = newTags;
+                renderServers();
+                showToast(`タグ「${tag}」を削除しました`, 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        // ============================================================
+        // CONNECTION INFO
+        // ============================================================
+        async function showConnectionInfo(name) {
+            const card = document.querySelector(`[data-server="${name}"]`);
+            const section = document.getElementById(`conn-${name}`);
+            if (!section) return;
+
+            // Toggle visibility
+            if (section.style.display !== 'none') {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = 'block';
+            section.innerHTML = '<div style="color: var(--text-muted); font-size: 0.75rem;">読み込み中...</div>';
+
+            try {
+                const conn = await API.getConnection(name);
+                const urlInput = document.getElementById(`conn-url-${name}`) || document.createElement('input');
+                urlInput.id = `conn-url-${name}`;
+                urlInput.value = conn.url || '';
+
+                section.innerHTML = `
+                    <div class="conn-label">接続情報</div>
+                    <div class="connection-url-row">
+                        <input type="text" class="connection-url-input" id="conn-url-${name}" readonly value="${escapeHtml(conn.url || '')}" aria-label="接続URL">
+                        <button class="copy-btn" onclick="copyConnectionUrl('${name}')" aria-label="接続URLをコピー">コピー</button>
+                    </div>
+                    ${conn.example_header ? `<div class="connection-header-code">${escapeHtml(conn.example_header)}</div>` : ''}
+                `;
+            } catch (error) {
+                section.innerHTML = `<div style="color: var(--accent-red); font-size: 0.75rem;">接続情報の取得に失敗しました</div>`;
+            }
+        }
+
+        async function loadConnectionInfo(name) {
+            // Preload connection info when card is expanded
+            const section = document.getElementById(`conn-${name}`);
+            if (!section) return;
+
+            try {
+                const conn = await API.getConnection(name);
+                if (conn.url) {
+                    section.style.display = 'block';
+                    section.innerHTML = `
+                        <div class="conn-label">接続情報</div>
+                        <div class="connection-url-row">
+                            <input type="text" class="connection-url-input" id="conn-url-${name}" readonly value="${escapeHtml(conn.url || '')}" aria-label="接続URL">
+                            <button class="copy-btn" onclick="copyConnectionUrl('${name}')" aria-label="接続URLをコピー">コピー</button>
+                        </div>
+                        ${conn.example_header ? `<div class="connection-header-code">${escapeHtml(conn.example_header)}</div>` : ''}
+                    `;
+                }
+            } catch (_) {
+                // Silently fail — user can click "接続URL" button to retry
+            }
+        }
+
+        function copyConnectionUrl(name) {
+            const input = document.getElementById(`conn-url-${name}`);
+            if (!input) return;
+            const text = input.value;
+            if (!text) return;
+
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('接続URLをコピーしました', 'success');
+            }).catch(() => {
+                // Fallback
+                input.select();
+                document.execCommand('copy');
+                showToast('接続URLをコピーしました', 'success');
+            });
+        }
+
+        // ============================================================
+        // EDIT MODAL
+        // ============================================================
+        function openEditModal(name) {
+            const server = servers.find(s => s.name === name);
+            if (!server) {
+                showToast('サーバーが見つかりません', 'error');
+                return;
+            }
+
+            editingServer = name;
+            editTags = [...getServerTags(server)];
+
+            document.getElementById('editCommand').value = server.config.command || '';
+            document.getElementById('editArgs').value = (server.config.args || []).join('\n');
+            document.getElementById('editUrl').value = server.config.url || '';
+            document.getElementById('editDisabled').checked = getServerDisabled(server);
+            document.getElementById('editFormError').style.display = 'none';
+
+            // Parse env
+            const env = server.config.env || {};
+            document.getElementById('editEnv').value = Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n');
+
+            renderEditTags();
+            document.getElementById('editServerModal').classList.add('active');
+        }
+
+        function closeEditModal() {
+            document.getElementById('editServerModal').classList.remove('active');
+            editingServer = null;
+            editTags = [];
+        }
+
+        function renderEditTags() {
+            const container = document.getElementById('editTagsContainer');
+            const input = document.getElementById('editTagInput');
+
+            // Remove existing chips
+            container.querySelectorAll('.edit-tag-chip').forEach(el => el.remove());
+
+            // Add chips before the input
+            editTags.forEach(tag => {
+                const chip = document.createElement('span');
+                chip.className = 'edit-tag-chip';
+                chip.innerHTML = `${escapeHtml(tag)} <span class="edit-tag-remove" onclick="removeEditTag('${escapeHtml(tag)}')" aria-label="タグ ${escapeHtml(tag)} を削除">✕</span>`;
+                container.insertBefore(chip, input);
+            });
+        }
+
+        function removeEditTag(tag) {
+            editTags = editTags.filter(t => t !== tag);
+            renderEditTags();
+        }
+
+        // Edit tag input handler
+        document.addEventListener('DOMContentLoaded', () => {
+            const editTagInput = document.getElementById('editTagInput');
+            if (editTagInput) {
+                editTagInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        const tag = editTagInput.value.trim();
+                        if (tag && !editTags.includes(tag)) {
+                            editTags.push(tag);
+                            renderEditTags();
+                        }
+                        editTagInput.value = '';
+                    }
+                });
+            }
+        });
+
+        async function submitEdit() {
+            if (!editingServer) return;
+
+            const submitBtn = document.getElementById('editSubmitBtn');
+            const errorEl = document.getElementById('editFormError');
+            errorEl.style.display = 'none';
+
+            const command = document.getElementById('editCommand').value.trim();
+            const argsStr = document.getElementById('editArgs').value.trim();
+            const url = document.getElementById('editUrl').value.trim();
+            const disabled = document.getElementById('editDisabled').checked;
+            const envStr = document.getElementById('editEnv').value.trim();
+
+            // Build patch payload with only changed fields
+            const payload = {};
+            const server = servers.find(s => s.name === editingServer);
+            if (!server) return;
+
+            if (command !== (server.config.command || '')) {
+                payload.command = command || undefined;
+            }
+
+            const newArgs = argsStr ? argsStr.split('\n').map(s => s.trim()).filter(Boolean) : [];
+            const oldArgs = server.config.args || [];
+            if (JSON.stringify(newArgs) !== JSON.stringify(oldArgs)) {
+                payload.args = newArgs;
+            }
+
+            if (url !== (server.config.url || '')) {
+                payload.url = url || undefined;
+            }
+
+            if (disabled !== getServerDisabled(server)) {
+                payload.disabled = disabled;
+            }
+
+            // Parse env
+            const newEnv = {};
+            if (envStr) {
+                envStr.split('\n').forEach(line => {
+                    const idx = line.indexOf('=');
+                    if (idx > 0) {
+                        newEnv[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+                    }
+                });
+            }
+            const oldEnv = server.config.env || {};
+            if (JSON.stringify(newEnv) !== JSON.stringify(oldEnv)) {
+                payload.env = newEnv;
+            }
+
+            // Tags
+            const oldTags = getServerTags(server);
+            if (JSON.stringify(editTags) !== JSON.stringify(oldTags)) {
+                payload.tags = editTags;
+            }
+
+            if (Object.keys(payload).length === 0) {
+                showToast('変更がありません', 'info');
+                closeEditModal();
+                return;
+            }
+
+            try {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<span class="loading-spinner"></span> 保存中...';
+
+                await API.patchServer(editingServer, payload);
+
+                // Update local state
+                Object.assign(server.config, payload);
+                renderServers();
+                closeEditModal();
+                showToast(`「${editingServer}」の設定を更新しました`, 'success');
+            } catch (error) {
+                errorEl.textContent = error.message;
+                errorEl.style.display = 'block';
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = '保存';
+            }
         }
 
         // ============================================================
@@ -1294,6 +2412,19 @@
             }
         }
 
+        // Periodic refresh: reload servers to update status, then refresh metrics
+        async function periodicRefresh() {
+            try {
+                const data = await API.getServers();
+                servers = data.servers || [];
+                renderServers();
+                updateMetrics();
+                await updateHealthStatus();
+            } catch (_) {
+                // Silently ignore during periodic refresh
+            }
+        }
+
         // ============================================================
         // TOAST NOTIFICATIONS
         // ============================================================
@@ -1316,12 +2447,10 @@
 
             container.appendChild(toast);
 
-            // Trigger animation
             requestAnimationFrame(() => {
                 toast.classList.add('show');
             });
 
-            // Auto remove after 5 seconds
             setTimeout(() => {
                 toast.classList.remove('show');
                 setTimeout(() => toast.remove(), 300);
@@ -1335,8 +2464,8 @@
             await loadServers();
             await updateHealthStatus();
 
-            // Periodic health check
-            setInterval(updateHealthStatus, 30000);
+            // Periodic refresh: reload servers + health every 30s
+            setInterval(periodicRefresh, 30000);
         });
 
         // Close modals on overlay click
