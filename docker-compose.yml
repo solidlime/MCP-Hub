@@ -7,4 +7,4 @@ services:
     environment:
       - MCP_HUB_DATA_DIR=/data
     volumes:
-      - /volume1/docker/mcp-hub:/data
+      - /volume1/docker/mcp-hub/data:/data
