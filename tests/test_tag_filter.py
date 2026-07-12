@@ -8,9 +8,7 @@ from mcp_hub.main import create_app, request_tags
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setenv("MCP_HUB_DB_PATH", db_path)
-    monkeypatch.setenv("MCP_HUB_CONFIG", "/nonexistent/config.json")
+    monkeypatch.setenv("MCP_HUB_DATA_DIR", str(tmp_path))
     app = create_app()
     with TestClient(app) as c:
         yield c

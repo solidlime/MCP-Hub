@@ -1,6 +1,6 @@
 """
 Configuration file loader for MCP Hub.
-Reads hub.config.json, applies env expansion.
+Reads {MCP_HUB_DATA_DIR}/hub.config.json, applies env expansion.
 """
 
 import json
@@ -14,11 +14,6 @@ from .env_expand import expand_env_vars
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CONFIG_PATHS = [
-    "hub.config.json",
-    "~/.config/mcp-hub/config.json",
-]
-
 
 @dataclass
 class HubConfig:
@@ -27,35 +22,24 @@ class HubConfig:
     log_level: str = "info"
 
 
-def _resolve_path(path: str) -> Path:
-    """Resolve ~ and relative paths."""
-    return Path(path).expanduser().resolve()
+def _data_dir() -> str:
+    return os.environ.get("MCP_HUB_DATA_DIR", "data")
+
+
+def _config_path(explicit_path: str | None = None) -> Path:
+    if explicit_path:
+        return Path(explicit_path).expanduser().resolve()
+    return (Path(_data_dir()) / "hub.config.json").expanduser().resolve()
 
 
 def load_config(config_path: str | None = None) -> HubConfig:
-    """Load and parse hub.config.json.
-
-    Priority:
-    1. Explicit config_path argument
-    2. MCP_HUB_CONFIG env var
-    3. Default paths (hub.config.json, ~/.config/mcp-hub/config.json)
-    """
-    path = config_path or os.environ.get("MCP_HUB_CONFIG")
-    if path:
-        resolved = _resolve_path(path)
-        if not resolved.exists():
-            logger.warning("Config file not found: %s", resolved)
-            return HubConfig()
-        return _parse_config(resolved)
-
-    for default_path in DEFAULT_CONFIG_PATHS:
-        resolved = _resolve_path(default_path)
-        if resolved.exists():
-            logger.info("Using config: %s", resolved)
-            return _parse_config(resolved)
-
-    logger.info("No config file found. Starting with empty server list.")
-    return HubConfig()
+    """{MCP_HUB_DATA_DIR}/hub.config.json を読み込む（未指定時は data/ 以下）。"""
+    path = _config_path(config_path)
+    if not path.exists():
+        logger.info("Config not found: %s — starting with empty server list.", path)
+        return HubConfig()
+    logger.info("Using config: %s", path)
+    return _parse_config(path)
 
 
 def _parse_config(filepath: Path) -> HubConfig:

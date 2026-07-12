@@ -17,7 +17,9 @@ class SqliteStore:
     """SQLite を使った MCP サーバー登録の永続化。"""
 
     def __init__(self, db_path: str | None = None):
-        self.db_path = db_path or os.environ.get("MCP_HUB_DB_PATH", "data/hub.db")
+        self.db_path = db_path or os.path.join(
+            os.environ.get("MCP_HUB_DATA_DIR", "data"), "hub.db"
+        )
 
     async def init(self, seed_servers: dict[str, dict] | None = None) -> None:
         """テーブル作成 + 初回起動時に config からシード。"""

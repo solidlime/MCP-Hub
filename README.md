@@ -33,18 +33,17 @@ python -m mcp_hub.main
 }
 ```
 
-設定ファイルのパスは `MCP_HUB_CONFIG` 環境変数で指定可能（デフォルト: `hub.config.json`）。
-`MCP_HUB_RESEED=1` で起動時にDBを初期化し、設定ファイルから再シードする。
+設定ファイル + DB は `MCP_HUB_DATA_DIR` で指定したディレクトリ（デフォルト: `data`）に保存される。
+`MCP_HUB_RESEED=1` で起動時にDBをクリアし、設定ファイルから再シードする。
 
 環境変数:
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
 | `MCP_HUB_PORT` | `26263` | リスンポート |
 | `MCP_HUB_HOST` | `0.0.0.0` | バインドホスト |
-| `MCP_HUB_DB_PATH` | `data/hub.db` | SQLite DBパス |
-| `MCP_HUB_CONFIG` | `hub.config.json` | 設定ファイルパス |
+| `MCP_HUB_DATA_DIR` | `data` | 設定 + DB の保存ディレクトリ |
 | `MCP_HUB_LOG` | `text` | `json` でJSON構造化ログ |
-| `MCP_HUB_RESEED` | — | `1` でDB初期化+再シード |
+| `MCP_HUB_RESEED` | — | `1` でDBクリア+設定から再シード |
 
 ## タグフィルタリング
 

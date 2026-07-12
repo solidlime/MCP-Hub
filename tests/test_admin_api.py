@@ -9,10 +9,8 @@ from mcp_hub.main import create_app
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    """Create a test app with temp DB and no config seeding."""
-    db_path = str(tmp_path / "test.db")
-    monkeypatch.setenv("MCP_HUB_DB_PATH", db_path)
-    monkeypatch.setenv("MCP_HUB_CONFIG", "/nonexistent/config.json")
+    """Create a test app with temp data dir and no config seeding."""
+    monkeypatch.setenv("MCP_HUB_DATA_DIR", str(tmp_path))
     app = create_app()
     with TestClient(app) as c:
         yield c

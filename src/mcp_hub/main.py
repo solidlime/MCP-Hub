@@ -7,9 +7,10 @@ MCP Hub - MCPプロキシ + 管理Web UI
 環境変数:
   MCP_HUB_PORT      : リスンポート (default: 26263)
   MCP_HUB_HOST      : バインドホスト (default: 0.0.0.0)
-  MCP_HUB_DB_PATH   : DBファイルパス (default: data/hub.db)
-  MCP_HUB_CONFIG    : 設定ファイルパス (default: hub.config.json)
-  MCP_HUB_RESEED    : 1 でDBを初期化し設定ファイルから再シード
+  MCP_HUB_DATA_DIR  : データディレクトリ (default: data)
+                      設定ファイル → {dir}/hub.config.json
+                      DB           → {dir}/hub.db
+  MCP_HUB_RESEED    : 1 でDBをクリアして設定ファイルから再シード
   MCP_HUB_LOG       : "json" でJSON形式ログ出力
 """
 
