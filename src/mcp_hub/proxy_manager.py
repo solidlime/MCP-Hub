@@ -184,7 +184,8 @@ class ProxyManager:
             proxy = create_proxy(url, name=name)
         elif command:
             args = config.get("args", [])
-            transport = StdioTransport(command=command, args=args)
+            env = config.get("env")
+            transport = StdioTransport(command=command, args=args, env=env)
             proxy = create_proxy(transport, name=name)
         else:
             raise ValueError(f"Invalid config for {name}: need 'url' or 'command'")

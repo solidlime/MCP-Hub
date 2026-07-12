@@ -1948,14 +1948,36 @@
             async function commitTag() {
                 const raw = input.value.trim();
                 if (raw) {
-                    const tags = raw.split(/[,\s、]+/).map(t => t.trim()).filter(Boolean);
-                    for (const tag of tags) {
-                        await addTag(name, tag);
-                    }
+                    const newTags = raw.split(/[,\s、]+/).map(t => t.trim()).filter(Boolean);
+                    await batchAddTags(name, newTags);
                 } else {
                     renderServers();
                 }
             }
+        }
+
+        async function batchAddTags(name, newTags) {
+            const server = servers.find(s => s.name === name);
+            if (!server) return;
+            const currentTags = getServerTags(server);
+            // 既存タグを除外して重複を除去
+            const unique = [...new Set(newTags)].filter(t => !currentTags.includes(t));
+            if (unique.length === 0) {
+                showToast(`タグはすべて登録済みです`, 'info');
+                renderServers();
+                return;
+            }
+            const merged = [...currentTags, ...unique];
+            try {
+                await API.patchServer(name, { tags: merged });
+                server.config.tags = merged;
+                renderServers();
+                showToast(`タグ ${unique.map(t => `「${t}」`).join(', ')} を追加しました`, 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+                renderServers();
+            }
+        }
 
             input.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
