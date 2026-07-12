@@ -13,5 +13,12 @@ dependencies = [
 requires = ["setuptools>=75.0"]
 build-backend = "setuptools.build_meta"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+]
+
 [tool.setuptools.packages.find]
 where = ["src"]

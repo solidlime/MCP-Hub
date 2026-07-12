@@ -131,6 +131,23 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    # 管理 API ルーターをマウント
+    app.include_router(admin_router)
+
+    # --- tag filtering middleware (/mcp のみ) ---
+    @app.middleware("http")
+    async def tag_middleware(request: Request, call_next):
+        if request.url.path.startswith("/mcp"):
+            header_tags = request.headers.get("X-MCP-Hub-Tags", "")
+            query_tags = request.query_params.get("tags", "")
+            tags_raw = header_tags if header_tags else query_tags
+            if tags_raw:
+                request_tags.set([t.strip() for t in tags_raw.split(",") if t.strip()])
+        response = await call_next(request)
+        request_tags.set(None)
+        return response
+
     return app
 
 
@@ -163,22 +180,6 @@ def main():
         )
 
     app = create_app()
-
-    # 管理 API ルーターをマウント
-    app.include_router(admin_router)
-
-    # --- tag filtering middleware (/mcp のみ) ---
-    @app.middleware("http")
-    async def tag_middleware(request: Request, call_next):
-        if request.url.path.startswith("/mcp"):
-            header_tags = request.headers.get("X-MCP-Hub-Tags", "")
-            query_tags = request.query_params.get("tags", "")
-            tags_raw = header_tags if header_tags else query_tags
-            if tags_raw:
-                request_tags.set([t.strip() for t in tags_raw.split(",") if t.strip()])
-        response = await call_next(request)
-        request_tags.set(None)
-        return response
 
     # 管理 UI (index.html)
     static_dir = os.path.join(os.path.dirname(__file__), "static")
