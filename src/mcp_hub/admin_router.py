@@ -4,14 +4,17 @@
 """
 
 import logging
+import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .state import app_state
 
 logger = logging.getLogger(__name__)
+
+# --- エンドポイント ---
 
 
 # --- Schemas ---
@@ -73,6 +76,25 @@ async def health():
     }
 
 
+@router.get("/metrics")
+async def metrics():
+    pm = _get_proxy_manager()
+    registry = _get_registry()
+    servers = await registry.list_servers()
+
+    uptime = time.time() - app_state.start_time
+    total_tools = sum(len(tools) for tools in (await pm.list_tools()).values())
+
+    return {
+        "uptime_seconds": round(uptime, 1),
+        "servers_registered": len(servers),
+        "servers_active": len(pm._proxies),
+        "total_tools": total_tools,
+        "tool_calls_total": app_state.tool_calls_total,
+        "tool_call_errors": app_state.tool_call_errors,
+    }
+
+
 @router.get("/servers")
 async def list_servers():
     registry = _get_registry()
@@ -96,6 +118,24 @@ async def list_servers():
         }
         result.append(info)
     return {"servers": result}
+
+
+@router.get("/servers/{name}/connection")
+async def connection_info(name: str, request: Request):
+    registry = _get_registry()
+    server = await registry.get_server(name)
+    if server is None:
+        raise HTTPException(status_code=404, detail=f"Server '{name}' not found")
+
+    tags = server["config"].get("tags", [])
+    base_url = f"{request.base_url}mcp".rstrip("/")
+    url = f"{base_url}?tags={','.join(tags)}" if tags else base_url
+
+    return {
+        "url": url,
+        "tags": tags,
+        "example_header": f"X-MCP-Hub-Tags: {','.join(tags)}" if tags else None,
+    }
 
 
 @router.post("/servers", status_code=201)

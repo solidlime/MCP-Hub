@@ -13,11 +13,13 @@ MCP Hub - MCPプロキシ + 管理Web UI
   MCP_HUB_LOG       : "json" でJSON形式ログ出力
 """
 
+import json
 import logging
 import os
 import time
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -68,6 +70,23 @@ async def lifespan(app: FastAPI):
     await proxy_manager.load_all()
     logger.info("Loaded %d proxy servers", len(proxy_manager._proxies))
 
+    # 内部リソース: hub://servers — 接続サーバーのJSONスナップショット
+    @mcp_server.resource("hub://servers")
+    def get_hub_servers() -> str:
+        """Return JSON snapshot of connected servers."""
+        servers_info = []
+        for name, config in proxy_manager._server_configs.items():
+            servers_info.append(
+                {
+                    "name": name,
+                    "disabled": config.get("disabled", False),
+                    "tags": config.get("tags", []),
+                    "status": proxy_manager._status.get(name, "unknown"),
+                    "tool_count": len(proxy_manager._proxies.get(name, [])),
+                }
+            )
+        return json.dumps(servers_info, indent=2, ensure_ascii=False)
+
     # FastMCP の HTTP ASGI アプリを生成してマウント
     # path="/" は mount 先が /mcp なので sub-app のルートで受けるため
     mcp_http = mcp_server.http_app(transport="streamable-http", path="/")
@@ -115,12 +134,33 @@ def create_app() -> FastAPI:
     return app
 
 
+class JsonFormatter(logging.Formatter):
+    """JSON 構造化ログフォーマッター。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return json.dumps(
+            {
+                "timestamp": datetime.now(UTC).isoformat(),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            },
+            ensure_ascii=False,
+        )
+
+
 def main():
     """エントリーポイント。"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    log_format = os.environ.get("MCP_HUB_LOG", "text")
+    if log_format == "json":
+        handler = logging.StreamHandler()
+        handler.setFormatter(JsonFormatter())
+        logging.basicConfig(level=logging.INFO, handlers=[handler])
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
 
     app = create_app()
 

@@ -16,12 +16,51 @@ pip install mcp-hub
 python -m mcp_hub.main
 ```
 
+## 設定
+
+`hub.config.json` にサーバー設定を記述する。
+
+```json
+{
+  "servers": [
+    {
+      "name": "fetch",
+      "url": "http://localhost:8080/mcp",
+      "tags": ["web", "fetch"]
+    }
+  ],
+  "log_level": "INFO"
+}
+```
+
+設定ファイルのパスは `MCP_HUB_CONFIG` 環境変数で指定可能（デフォルト: `hub.config.json`）。
+`MCP_HUB_RESEED=1` で起動時にDBを初期化し、設定ファイルから再シードする。
+
 環境変数:
 | 変数 | デフォルト | 説明 |
 |------|-----------|------|
 | `MCP_HUB_PORT` | `26263` | リスンポート |
 | `MCP_HUB_HOST` | `0.0.0.0` | バインドホスト |
 | `MCP_HUB_DB_PATH` | `data/hub.db` | SQLite DBパス |
+| `MCP_HUB_CONFIG` | `hub.config.json` | 設定ファイルパス |
+| `MCP_HUB_LOG` | `text` | `json` でJSON構造化ログ |
+| `MCP_HUB_RESEED` | — | `1` でDB初期化+再シード |
+
+## タグフィルタリング
+
+MCPエンドポイントはクエリパラメータまたはHTTPヘッダーでタグフィルタリングに対応している。
+
+**クエリパラメータ:**
+```
+/mcp?tags=web,local
+```
+
+**HTTPヘッダー:**
+```
+X-MCP-Hub-Tags: web,local
+```
+
+指定されたタグを持つサーバーのツールのみが透過的に公開される。タグ未指定の場合は全サーバーのツールが利用可能。管理UIの接続情報パネルからコピーして使用できる。|
 
 ## Docker
 
@@ -36,3 +75,35 @@ docker run -p 26263:26263 mcp-hub
 - `/admin/` — 管理UI
 - `/admin/api/health` — ヘルスチェック
 - `/admin/api/servers` — サーバー一覧・管理API
+- `/admin/api/servers/{name}/connection` — サーバー接続情報
+- `/admin/api/metrics` — Hubメトリクス
+
+## Metrics
+
+`GET /admin/api/metrics` でHubの運用メトリクスを取得できる。
+
+```json
+{
+  "uptime_seconds": 3600.0,
+  "servers_registered": 5,
+  "servers_active": 3,
+  "total_tools": 42,
+  "tool_calls_total": 128,
+  "tool_call_errors": 2
+}
+```
+
+## 内部リソース
+
+FastMCPのResource機構で `hub://servers` が利用可能。接続サーバーのJSONスナップショットを返す。
+
+```json
+// MCPクライアントからのアクセス例
+{
+  "name": "fetch",
+  "disabled": false,
+  "tags": ["web"],
+  "status": "connected",
+  "tool_count": 5
+}
+```
