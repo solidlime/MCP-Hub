@@ -17,8 +17,9 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastmcp import FastMCP
@@ -30,6 +31,8 @@ from .registry import SqliteStore
 from .state import app_state
 
 logger = logging.getLogger(__name__)
+
+request_tags: ContextVar[list[str] | None] = ContextVar("request_tags", default=None)
 
 # 設定
 PORT = int(os.environ.get("MCP_HUB_PORT", "26263"))
@@ -123,6 +126,19 @@ def main():
 
     # 管理 API ルーターをマウント
     app.include_router(admin_router)
+
+    # --- tag filtering middleware (/mcp のみ) ---
+    @app.middleware("http")
+    async def tag_middleware(request: Request, call_next):
+        if request.url.path.startswith("/mcp"):
+            header_tags = request.headers.get("X-MCP-Hub-Tags", "")
+            query_tags = request.query_params.get("tags", "")
+            tags_raw = header_tags if header_tags else query_tags
+            if tags_raw:
+                request_tags.set([t.strip() for t in tags_raw.split(",") if t.strip()])
+        response = await call_next(request)
+        request_tags.set(None)
+        return response
 
     # 管理 UI (index.html)
     static_dir = os.path.join(os.path.dirname(__file__), "static")

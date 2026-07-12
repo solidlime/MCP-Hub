@@ -131,24 +131,30 @@ class ProxyManager:
         """全サーバーのステータス一覧。"""
         return dict(self._status)
 
-    async def list_tools(self, name: str | None = None) -> dict[str, list[dict]]:
-        """全サーバー or 特定サーバーのツール一覧。"""
-        result: dict[str, list[dict]] = {}
+    async def list_tools(self, tags: list[str] | None = None) -> dict[str, list[dict]]:
+        """全サーバーのツール一覧。オプションの tags フィルター。"""
+        from .main import request_tags  # late import to avoid circular dep
 
-        if name:
-            proxy = self._proxies.get(name)
-            if not proxy:
-                return {}
-            tools = await proxy.list_tools()
-            result[name] = [{"name": t.name, "description": t.description or ""} for t in tools]
-        else:
-            for srv_name, proxy in self._proxies.items():
-                try:
-                    tools = await proxy.list_tools()
-                    result[srv_name] = [{"name": t.name, "description": t.description or ""} for t in tools]
-                except Exception:
-                    logger.warning("Failed to list tools for %s", srv_name)
-                    result[srv_name] = []
+        if tags is None:
+            tags = request_tags.get(None)
+
+        logger.debug("list_tools called with tags=%s", tags)
+
+        result: dict[str, list[dict]] = {}
+        for srv_name, proxy in self._proxies.items():
+            # Tag filter (OR logic)
+            if tags:
+                config = self._server_configs.get(srv_name, {})
+                server_tags = config.get("tags", [])
+                if not any(t in server_tags for t in tags):
+                    continue
+
+            try:
+                tools = await proxy.list_tools()
+                result[srv_name] = [{"name": t.name, "description": t.description or ""} for t in tools]
+            except Exception:
+                logger.warning("Failed to list tools for %s", srv_name)
+                result[srv_name] = []
 
         return result
 
