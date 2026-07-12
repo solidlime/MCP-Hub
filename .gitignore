@@ -9,6 +9,9 @@ dist/
 .vscode/
 .idea/
 
+# Runtime data
+data/
+
 # OS
 .DS_Store
 Thumbs.db
