@@ -3,6 +3,7 @@ FastMCP の create_proxy + mount を管理。
 動的なサーバー追加/削除に対応。
 """
 
+import asyncio
 import logging
 from typing import Any
 
@@ -29,6 +30,7 @@ class ProxyManager:
         self._proxies: dict[str, FastMCPProxy] = {}
         self._server_configs: dict[str, dict] = {}
         self._status: dict[str, str] = {}
+        self._lock = asyncio.Lock()
 
     async def load_all(self) -> None:
         """DB から全サーバーを読み込んでマウント。"""
@@ -98,34 +100,36 @@ class ProxyManager:
         self._status.pop(name, None)
 
         # 再マウント: providers から全 proxy を除去して再追加
-        self._rebuild_mounts()
+        async with self._lock:
+            await self._rebuild_mounts()
 
         return True
 
     async def refresh_server(self, name: str, config: dict) -> None:
         """プロキシの再生成 + 設定更新。disable 時はアンマウントのみ。"""
-        self._server_configs[name] = config
-        self._status[name] = "disabled" if config.get("disabled") else "connected"
+        async with self._lock:
+            self._server_configs[name] = config
+            self._status[name] = "disabled" if config.get("disabled") else "connected"
 
-        # 古い proxy をアンマウント
-        old_proxy = self._proxies.pop(name, None)
-        if old_proxy:
-            self._rebuild_mounts()
+            # 古い proxy をアンマウント
+            old_proxy = self._proxies.pop(name, None)
+            if old_proxy:
+                await self._rebuild_mounts()
 
-        # disabled なら再生成しない
-        if config.get("disabled"):
-            logger.info("Server %s is disabled, not mounting", name)
-            return
+            # disabled なら再生成しない
+            if config.get("disabled"):
+                logger.info("Server %s is disabled, not mounting", name)
+                return
 
-        try:
-            proxy = self._create_proxy(name, config)
-            self._proxies[name] = proxy
-            self.mcp.mount(proxy, namespace=name)
-            self._status[name] = "connected"
-            logger.info("Refreshed server %s", name)
-        except Exception:
-            logger.exception("Failed to refresh server %s", name)
-            self._status[name] = "error"
+            try:
+                proxy = self._create_proxy(name, config)
+                self._proxies[name] = proxy
+                self.mcp.mount(proxy, namespace=name)
+                self._status[name] = "connected"
+                logger.info("Refreshed server %s", name)
+            except Exception:
+                logger.exception("Failed to refresh server %s", name)
+                self._status[name] = "error"
 
     def get_all_status(self) -> dict[str, str]:
         """全サーバーのステータス一覧。"""
@@ -133,7 +137,7 @@ class ProxyManager:
 
     async def list_tools(self, tags: list[str] | None = None) -> dict[str, list[dict]]:
         """全サーバーのツール一覧。オプションの tags フィルター。"""
-        from .main import request_tags  # late import to avoid circular dep
+        from .state import request_tags  # no circular dep needed; state is shared
 
         if tags is None:
             tags = request_tags.get(None)
@@ -184,9 +188,14 @@ class ProxyManager:
             raise ValueError(f"Invalid config for {name}: need 'url' or 'command'")
         return proxy
 
-    def _rebuild_mounts(self) -> None:
-        """全プロキシを再マウント（追加/削除後の整合性確保）。"""
-        # local_provider のみ残す
+    async def _rebuild_mounts(self) -> None:
+        """全プロキシを再マウント（追加/削除後の整合性確保）。
+        
+        NOTE: Callers must hold self._lock when calling this method.
+        """
+        # NOTE: self.mcp.providers and self.mcp.local_provider are FastMCP
+        # internal/private APIs. These may break across FastMCP minor
+        # version updates. FastMCP is pinned to <3.5.0 in pyproject.toml.
         self.mcp.providers = [self.mcp.local_provider]
 
         # 全 proxy を再マウント
