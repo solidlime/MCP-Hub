@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .proxy_manager import ProxyManager
     from .registry import SqliteStore
+
+request_tags: ContextVar[list[str] | None] = ContextVar("request_tags", default=None)
 
 
 class _AppState:
