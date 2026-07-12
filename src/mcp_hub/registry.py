@@ -80,6 +80,16 @@ class SqliteStore:
             )
             await db.commit()
 
+    async def update_server(self, name: str, config: dict) -> bool:
+        """サーバー設定更新（created_at は維持）。"""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "UPDATE servers SET config_json = ? WHERE name = ?",
+                (json.dumps(config), name),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
     async def remove_server(self, name: str) -> bool:
         """削除。存在すれば True。"""
         async with aiosqlite.connect(self.db_path) as db:

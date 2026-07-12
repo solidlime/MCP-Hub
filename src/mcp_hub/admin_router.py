@@ -21,6 +21,8 @@ class ServerConfig(BaseModel):
     url: str | None = None
     command: str | None = None
     args: list[str] = []
+    tags: list[str] = []
+    disabled: bool = False
 
     def model_dump_for_config(self) -> dict:
         """空文字・空リストを除外した config dict を返す。"""
@@ -31,6 +33,8 @@ class ServerConfig(BaseModel):
             del raw["command"]
         if "args" in raw and not raw["args"]:
             del raw["args"]
+        if "tags" in raw and not raw["tags"]:
+            del raw["tags"]
         return raw
 
 
@@ -76,13 +80,17 @@ async def list_servers():
 
     servers = await registry.list_servers()
     tools_map = await pm.list_tools()
+    status_map = pm.get_all_status()
 
     result = []
     for srv in servers:
         name = srv["name"]
+        config = srv["config"]
         info = {
             "name": name,
-            "config": srv["config"],
+            "config": config,
+            "disabled": config.get("disabled", False),
+            "status": status_map.get(name, "unknown"),
             "tools_count": len(tools_map.get(name, [])),
             "tools": tools_map.get(name, []),
         }
@@ -127,6 +135,30 @@ async def register_server(body: RegisterRequest):
     }
 
 
+@router.patch("/servers/{name}")
+async def patch_server(name: str, body: ServerConfig):
+    """サーバー設定の部分更新（PATCH）。exclude_unset で送信フィールドのみ適用。"""
+    registry = _get_registry()
+    pm = _get_proxy_manager()
+
+    existing = await registry.get_server(name)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    # 部分更新: 送信されたフィールドのみ既存 config にマージ
+    updates = body.model_dump(exclude_unset=True)
+    merged_config = existing["config"] | updates
+
+    # 恒久化
+    await registry.update_server(name, merged_config)
+    await pm.refresh_server(name, merged_config)
+
+    return {
+        "name": name,
+        "config": merged_config,
+    }
+
+
 @router.delete("/servers/{name}", status_code=204)
 async def remove_server(name: str):
     pm = _get_proxy_manager()
@@ -161,11 +193,14 @@ async def test_server(name: str):
 @router.post("/servers/{name}/tools/{tool_name}/call")
 async def call_tool(name: str, tool_name: str, body: CallToolRequest):
     pm = _get_proxy_manager()
+    app_state.tool_calls_total += 1
     try:
         result = await pm.call_tool(name, tool_name, body.arguments)
         return {"result": result}
     except ValueError as e:
+        app_state.tool_call_errors += 1
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
+        app_state.tool_call_errors += 1
         logger.exception("Tool call failed %s/%s", name, tool_name)
         raise HTTPException(status_code=500, detail=str(e)) from e

@@ -27,6 +27,8 @@ class ProxyManager:
         self.mcp = mcp
         self.registry = registry
         self._proxies: dict[str, FastMCPProxy] = {}
+        self._server_configs: dict[str, dict] = {}
+        self._status: dict[str, str] = {}
 
     async def load_all(self) -> None:
         """DB から全サーバーを読み込んでマウント。"""
@@ -38,13 +40,20 @@ class ProxyManager:
         for srv in servers:
             name = srv["name"]
             config = srv["config"]
+            self._server_configs[name] = config
+            if config.get("disabled"):
+                logger.info("Skipping disabled server %s", name)
+                self._status[name] = "disabled"
+                continue
             try:
                 proxy = self._create_proxy(name, config)
                 self._proxies[name] = proxy
                 self.mcp.mount(proxy, namespace=name)
+                self._status[name] = "connected"
                 logger.info("Loaded server %s", name)
             except Exception:
                 logger.exception("Failed to load server %s", name)
+                self._status[name] = "error"
 
     async def register_server(self, name: str, config: dict) -> list[str]:
         """サーバー登録 + DB保存 + マウント。
@@ -54,6 +63,12 @@ class ProxyManager:
         """
         # DB 保存
         await self.registry.add_server(name, config)
+        self._server_configs[name] = config
+
+        if config.get("disabled"):
+            logger.info("Server %s registered as disabled", name)
+            self._status[name] = "disabled"
+            return []
 
         # プロキシ生成
         proxy = self._create_proxy(name, config)
@@ -61,6 +76,7 @@ class ProxyManager:
 
         # マウント (namespace = server_name)
         self.mcp.mount(proxy, namespace=name)
+        self._status[name] = "connected"
 
         # ツール一覧を取得
         try:
@@ -68,6 +84,7 @@ class ProxyManager:
             return [t.name for t in tools]
         except Exception:
             logger.warning("Could not list tools for %s (server may not be reachable)", name)
+            self._status[name] = "error"
             return []
 
     async def unregister_server(self, name: str) -> bool:
@@ -77,11 +94,42 @@ class ProxyManager:
             return False
 
         self._proxies.pop(name, None)
+        self._server_configs.pop(name, None)
+        self._status.pop(name, None)
 
         # 再マウント: providers から全 proxy を除去して再追加
         self._rebuild_mounts()
 
         return True
+
+    async def refresh_server(self, name: str, config: dict) -> None:
+        """プロキシの再生成 + 設定更新。disable 時はアンマウントのみ。"""
+        self._server_configs[name] = config
+        self._status[name] = "disabled" if config.get("disabled") else "connected"
+
+        # 古い proxy をアンマウント
+        old_proxy = self._proxies.pop(name, None)
+        if old_proxy:
+            self._rebuild_mounts()
+
+        # disabled なら再生成しない
+        if config.get("disabled"):
+            logger.info("Server %s is disabled, not mounting", name)
+            return
+
+        try:
+            proxy = self._create_proxy(name, config)
+            self._proxies[name] = proxy
+            self.mcp.mount(proxy, namespace=name)
+            self._status[name] = "connected"
+            logger.info("Refreshed server %s", name)
+        except Exception:
+            logger.exception("Failed to refresh server %s", name)
+            self._status[name] = "error"
+
+    def get_all_status(self) -> dict[str, str]:
+        """全サーバーのステータス一覧。"""
+        return dict(self._status)
 
     async def list_tools(self, name: str | None = None) -> dict[str, list[dict]]:
         """全サーバー or 特定サーバーのツール一覧。"""
