@@ -39,6 +39,28 @@ PORT = int(os.environ.get("MCP_HUB_PORT", "26263"))
 HOST = os.environ.get("MCP_HUB_HOST", "0.0.0.0")
 
 
+def create_mcp_dispatcher(normal_app, meta_app):
+    """ASGI dispatcher: /mcp リクエストごとに meta_mode 設定を読み、適切なアプリに転送。"""
+    from .state import app_state
+
+    async def _get_meta_mode():
+        try:
+            data = await app_state.registry._read()
+            return data.get("meta_mode", False)
+        except Exception:
+            return False
+
+    async def dispatcher(scope, receive, send):
+        if scope["type"] != "http":
+            await normal_app(scope, receive, send)
+            return
+        meta_mode = await _get_meta_mode()
+        target = meta_app if meta_mode else normal_app
+        await target(scope, receive, send)
+
+    return dispatcher
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI のライフスパン: 起動時/終了時の処理。"""
@@ -85,10 +107,9 @@ async def lifespan(app: FastAPI):
             )
         return json.dumps(servers_info, indent=2, ensure_ascii=False)
 
-    # FastMCP の HTTP ASGI アプリを生成してマウント
+    # FastMCP の HTTP ASGI アプリを生成
     # path="/" は mount 先が /mcp なので sub-app のルートで受けるため
     mcp_http = mcp_server.http_app(transport="streamable-http", path="/")
-    app.mount("/mcp", mcp_http)
 
     # FastMCP のライフスパンを手動で実行
     # (mounted ASGI サブアプリの lifespan は親から自動実行されない)
@@ -116,12 +137,11 @@ async def lifespan(app: FastAPI):
     )
     inner_app.session_manager = sm
 
-    # === /mcp-meta endpoint (Progressive Discovery) ===
+    # === meta app (Progressive Discovery, used when meta_mode=True) ===
     from .meta_provider import create_meta_app
 
     meta_mcp = create_meta_app(proxy_manager)
     meta_http = meta_mcp.http_app(transport="streamable-http", path="/")
-    app.mount("/mcp-meta", meta_http)
 
     meta_inner_app: StreamableHTTPASGIApp | None = None
     for route in meta_http.routes:
@@ -142,6 +162,9 @@ async def lifespan(app: FastAPI):
 
     # Wire rebuild_index to proxy changes
     proxy_manager.on_change(meta_mcp.rebuild_index)
+
+    # /mcp に動的ディスパッチャをマウント（meta_mode 設定で正常/メタモードを切替）
+    app.mount("/mcp", create_mcp_dispatcher(mcp_http, meta_http))
 
     # Python 3.12+ parenthesized context managers
     async with (
