@@ -701,26 +701,7 @@
         .connection-url-input:focus {
             border-color: var(--accent-primary);
         }
-        .copy-btn {
-            padding: 6px 12px;
-            font-size: 0.72rem;
-            font-weight: 600;
-            background: var(--accent-primary-bg);
-            color: var(--accent-primary);
-            border: 1px solid transparent;
-            border-radius: var(--radius-sm);
-            cursor: pointer;
-            transition: all var(--transition-fast);
-            white-space: nowrap;
-        }
-        .copy-btn:hover {
-            background: var(--accent-primary);
-            color: var(--text-on-accent);
-        }
-        .copy-btn:focus-visible {
-            outline: 2px solid var(--accent-primary);
-            outline-offset: 2px;
-        }
+
         .connection-header-code {
             font-size: 0.72rem;
             font-family: var(--font-mono);
@@ -1300,65 +1281,7 @@
         </div>
     </div>
 
-    <!-- Add Server Modal -->
-    <div id="addServerModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="addServerModalTitle">
-        <div class="modal">
-            <div class="modal-header">
-                <h2 class="modal-title" id="addServerModalTitle">MCP サーバー追加</h2>
-                <button class="modal-close" onclick="closeAddServerModal()" aria-label="閉じる">✕</button>
-            </div>
-            <div class="modal-body">
-                <!-- Tabs -->
-                <div class="tabs" role="tablist">
-                    <button class="tab active" data-tab="url" onclick="switchTab('url')" role="tab" aria-selected="true" aria-controls="tab-url">URL 接続</button>
-                    <button class="tab" data-tab="command" onclick="switchTab('command')" role="tab" aria-selected="false" aria-controls="tab-command">コマンド接続</button>
-                </div>
-
-                <!-- URL Tab -->
-                <div id="tab-url" class="tab-content" role="tabpanel">
-                    <div class="form-group">
-                        <label class="form-label" for="urlName">サーバー名 *</label>
-                        <input type="text" class="form-input" id="urlName" placeholder="例: my-mcp-server" required>
-                        <div class="form-hint">識別しやすい名前を付けてください</div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="urlEndpoint">MCP エンドポイント URL *</label>
-                        <input type="url" class="form-input" id="urlEndpoint" placeholder="http://localhost:3000" required>
-                        <div class="form-hint">MCP サーバーのエンドポイント URL を入力してください</div>
-                    </div>
-                </div>
-
-                <!-- Command Tab -->
-                <div id="tab-command" class="tab-content" role="tabpanel" style="display: none;">
-                    <div class="form-group">
-                        <label class="form-label" for="cmdName">サーバー名 *</label>
-                        <input type="text" class="form-input" id="cmdName" placeholder="例: filesystem-server" required>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="cmdCommand">コマンド *</label>
-                        <input type="text" class="form-input" id="cmdCommand" placeholder="npx" required>
-                        <div class="form-hint">実行するコマンドを入力してください</div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="cmdArgs">引数</label>
-                        <input type="text" class="form-input" id="cmdArgs" placeholder="-y @modelcontextprotocol/server-filesystem">
-                        <div class="form-hint">スペース区切りで引数を入力してください</div>
-                    </div>
-                </div>
-
-                <!-- Error Display -->
-                <div id="formError" class="form-error" style="display: none;" role="alert"></div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-secondary" onclick="closeAddServerModal()">キャンセル</button>
-                <button class="btn btn-primary" id="submitBtn" onclick="submitServer()">
-                    追加
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Edit Server Modal -->
+    <!-- Server Settings Modal (Add/Edit共用) -->
     <div id="editServerModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="editServerModalTitle">
         <div class="modal">
             <div class="modal-header">
@@ -1366,6 +1289,12 @@
                 <button class="modal-close" onclick="closeEditModal()" aria-label="閉じる">✕</button>
             </div>
             <div class="modal-body">
+                <!-- サーバー名 (追加モード時のみ表示) -->
+                <div class="form-group" id="editNameGroup" style="display: none;">
+                    <label class="form-label" for="editName">サーバー名 *</label>
+                    <input type="text" class="form-input" id="editName" placeholder="例: my-mcp-server">
+                    <div class="form-hint">識別しやすい名前を付けてください</div>
+                </div>
                 <div class="form-group">
                     <label class="form-label" for="editCommand">コマンド</label>
                     <input type="text" class="form-input" id="editCommand" placeholder="npx">
@@ -1391,7 +1320,7 @@
                     <textarea class="form-input" id="editEnv" rows="3" placeholder="KEY=value&#10;ANOTHER_KEY=value2"></textarea>
                     <div class="form-hint">1行に1つの KEY=value 形式で入力してください</div>
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="editDisabledGroup">
                     <label class="form-label">無効化</label>
                     <label class="toggle-switch" style="margin-top: 4px;">
                         <input type="checkbox" id="editDisabled">
@@ -1781,7 +1710,6 @@
                             <div class="conn-label">接続情報</div>
                             <div class="connection-url-row">
                                 <input type="text" class="connection-url-input" id="conn-url-${server.name}" readonly aria-label="接続URL">
-                                <button class="copy-btn" onclick="copyConnectionUrl('${server.name}')" aria-label="接続URLをコピー">コピー</button>
                             </div>
                             <div id="conn-header-${server.name}" class="connection-header-code" style="display: none;"></div>
                         </div>
@@ -2051,7 +1979,6 @@
                     <div class="conn-label">接続情報</div>
                     <div class="connection-url-row">
                         <input type="text" class="connection-url-input" id="conn-url-${name}" readonly value="${escapeHtml(conn.url || '')}" aria-label="接続URL">
-                        <button class="copy-btn" onclick="copyConnectionUrl('${name}')" aria-label="接続URLをコピー">コピー</button>
                     </div>
                     ${conn.example_header ? `<div class="connection-header-code">${escapeHtml(conn.example_header)}</div>` : ''}
                 `;
@@ -2073,7 +2000,6 @@
                         <div class="conn-label">接続情報</div>
                         <div class="connection-url-row">
                             <input type="text" class="connection-url-input" id="conn-url-${name}" readonly value="${escapeHtml(conn.url || '')}" aria-label="接続URL">
-                            <button class="copy-btn" onclick="copyConnectionUrl('${name}')" aria-label="接続URLをコピー">コピー</button>
                         </div>
                         ${conn.example_header ? `<div class="connection-header-code">${escapeHtml(conn.example_header)}</div>` : ''}
                     `;
@@ -2083,44 +2009,54 @@
             }
         }
 
-        function copyConnectionUrl(name) {
-            const input = document.getElementById(`conn-url-${name}`);
-            if (!input) return;
-            const text = input.value;
-            if (!text) return;
-
-            navigator.clipboard.writeText(text).then(() => {
-                showToast('接続URLをコピーしました', 'success');
-            }).catch(() => {
-                // Fallback
-                input.select();
-                document.execCommand('copy');
-                showToast('接続URLをコピーしました', 'success');
-            });
-        }
-
         // ============================================================
-        // EDIT MODAL
+        // EDIT MODAL (Add/Edit共用)
         // ============================================================
         function openEditModal(name) {
-            const server = servers.find(s => s.name === name);
-            if (!server) {
-                showToast('サーバーが見つかりません', 'error');
-                return;
+            const isAddMode = !name;
+            const nameGroup = document.getElementById('editNameGroup');
+            const disabledGroup = document.getElementById('editDisabledGroup');
+            const titleEl = document.getElementById('editServerModalTitle');
+            const submitBtn = document.getElementById('editSubmitBtn');
+
+            // モードに応じた表示切り替え
+            nameGroup.style.display = isAddMode ? 'block' : 'none';
+            disabledGroup.style.display = isAddMode ? 'none' : 'block';
+            titleEl.textContent = isAddMode ? 'MCP サーバーを追加' : 'サーバー設定を編集';
+            submitBtn.textContent = isAddMode ? '追加' : '保存';
+
+            if (isAddMode) {
+                // 追加モード: フォームをリセット
+                editingServer = null;
+                editTags = [];
+                document.getElementById('editName').value = '';
+                document.getElementById('editCommand').value = '';
+                document.getElementById('editArgs').value = '';
+                document.getElementById('editUrl').value = '';
+                document.getElementById('editEnv').value = '';
+                document.getElementById('editDisabled').checked = false;
+                document.getElementById('editFormError').style.display = 'none';
+            } else {
+                // 編集モード: 既存データを設定
+                const server = servers.find(s => s.name === name);
+                if (!server) {
+                    showToast('サーバーが見つかりません', 'error');
+                    return;
+                }
+
+                editingServer = name;
+                editTags = [...getServerTags(server)];
+
+                document.getElementById('editCommand').value = server.config.command || '';
+                document.getElementById('editArgs').value = (server.config.args || []).join('\n');
+                document.getElementById('editUrl').value = server.config.url || '';
+                document.getElementById('editDisabled').checked = getServerDisabled(server);
+                document.getElementById('editFormError').style.display = 'none';
+
+                // Parse env
+                const env = server.config.env || {};
+                document.getElementById('editEnv').value = Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n');
             }
-
-            editingServer = name;
-            editTags = [...getServerTags(server)];
-
-            document.getElementById('editCommand').value = server.config.command || '';
-            document.getElementById('editArgs').value = (server.config.args || []).join('\n');
-            document.getElementById('editUrl').value = server.config.url || '';
-            document.getElementById('editDisabled').checked = getServerDisabled(server);
-            document.getElementById('editFormError').style.display = 'none';
-
-            // Parse env
-            const env = server.config.env || {};
-            document.getElementById('editEnv').value = Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n');
 
             renderEditTags();
             document.getElementById('editServerModal').classList.add('active');
@@ -2175,8 +2111,6 @@
         });
 
         async function submitEdit() {
-            if (!editingServer) return;
-
             const submitBtn = document.getElementById('editSubmitBtn');
             const errorEl = document.getElementById('editFormError');
             errorEl.style.display = 'none';
@@ -2186,29 +2120,6 @@
             const url = document.getElementById('editUrl').value.trim();
             const disabled = document.getElementById('editDisabled').checked;
             const envStr = document.getElementById('editEnv').value.trim();
-
-            // Build patch payload with only changed fields
-            const payload = {};
-            const server = servers.find(s => s.name === editingServer);
-            if (!server) return;
-
-            if (command !== (server.config.command || '')) {
-                payload.command = command || undefined;
-            }
-
-            const newArgs = argsStr ? argsStr.split('\n').map(s => s.trim()).filter(Boolean) : [];
-            const oldArgs = server.config.args || [];
-            if (JSON.stringify(newArgs) !== JSON.stringify(oldArgs)) {
-                payload.args = newArgs;
-            }
-
-            if (url !== (server.config.url || '')) {
-                payload.url = url || undefined;
-            }
-
-            if (disabled !== getServerDisabled(server)) {
-                payload.disabled = disabled;
-            }
 
             // Parse env
             const newEnv = {};
@@ -2220,40 +2131,115 @@
                     }
                 });
             }
-            const oldEnv = server.config.env || {};
-            if (JSON.stringify(newEnv) !== JSON.stringify(oldEnv)) {
-                payload.env = newEnv;
-            }
 
-            // Tags
-            const oldTags = getServerTags(server);
-            if (JSON.stringify(editTags) !== JSON.stringify(oldTags)) {
-                payload.tags = editTags;
-            }
+            const newArgs = argsStr ? argsStr.split('\n').map(s => s.trim()).filter(Boolean) : [];
 
-            if (Object.keys(payload).length === 0) {
-                showToast('変更がありません', 'info');
-                closeEditModal();
-                return;
-            }
+            if (editingServer) {
+                // 編集モード
+                const server = servers.find(s => s.name === editingServer);
+                if (!server) return;
 
-            try {
-                submitBtn.disabled = true;
-                submitBtn.innerHTML = '<span class="loading-spinner"></span> 保存中...';
+                // Build patch payload with only changed fields
+                const payload = {};
 
-                await API.patchServer(editingServer, payload);
+                if (command !== (server.config.command || '')) {
+                    payload.command = command || undefined;
+                }
 
-                // Update local state
-                Object.assign(server.config, payload);
-                renderServers();
-                closeEditModal();
-                showToast(`「${editingServer}」の設定を更新しました`, 'success');
-            } catch (error) {
-                errorEl.textContent = error.message;
-                errorEl.style.display = 'block';
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = '保存';
+                const oldArgs = server.config.args || [];
+                if (JSON.stringify(newArgs) !== JSON.stringify(oldArgs)) {
+                    payload.args = newArgs;
+                }
+
+                if (url !== (server.config.url || '')) {
+                    payload.url = url || undefined;
+                }
+
+                if (disabled !== getServerDisabled(server)) {
+                    payload.disabled = disabled;
+                }
+
+                const oldEnv = server.config.env || {};
+                if (JSON.stringify(newEnv) !== JSON.stringify(oldEnv)) {
+                    payload.env = newEnv;
+                }
+
+                // Tags
+                const oldTags = getServerTags(server);
+                if (JSON.stringify(editTags) !== JSON.stringify(oldTags)) {
+                    payload.tags = editTags;
+                }
+
+                if (Object.keys(payload).length === 0) {
+                    showToast('変更がありません', 'info');
+                    closeEditModal();
+                    return;
+                }
+
+                try {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<span class="loading-spinner"></span> 保存中...';
+
+                    await API.patchServer(editingServer, payload);
+
+                    // Update local state
+                    Object.assign(server.config, payload);
+                    renderServers();
+                    closeEditModal();
+                    showToast(`「${editingServer}」の設定を更新しました`, 'success');
+                } catch (error) {
+                    errorEl.textContent = error.message;
+                    errorEl.style.display = 'block';
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = '保存';
+                }
+            } else {
+                // 追加モード
+                const name = document.getElementById('editName').value.trim();
+
+                if (!name) {
+                    errorEl.textContent = 'サーバー名を入力してください';
+                    errorEl.style.display = 'block';
+                    return;
+                }
+
+                if (!command && !url) {
+                    errorEl.textContent = 'コマンドまたはURLのいずれかを入力してください';
+                    errorEl.style.display = 'block';
+                    return;
+                }
+
+                const config = {};
+                if (url) {
+                    config.url = url;
+                }
+                if (command) {
+                    config.command = command;
+                    config.args = newArgs;
+                }
+                if (Object.keys(newEnv).length > 0) {
+                    config.env = newEnv;
+                }
+                if (editTags.length > 0) {
+                    config.tags = editTags;
+                }
+
+                try {
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<span class="loading-spinner"></span> 追加中...';
+
+                    await API.addServer({ name, config });
+                    await loadServers();
+                    closeEditModal();
+                    showToast(`「${name}」を追加しました`, 'success');
+                } catch (error) {
+                    errorEl.textContent = error.message;
+                    errorEl.style.display = 'block';
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = '追加';
+                }
             }
         }
 
@@ -2261,97 +2247,7 @@
         // MODAL OPERATIONS
         // ============================================================
         function openAddServerModal() {
-            document.getElementById('addServerModal').classList.add('active');
-            resetForm();
-        }
-
-        function closeAddServerModal() {
-            document.getElementById('addServerModal').classList.remove('active');
-            resetForm();
-        }
-
-        function resetForm() {
-            document.getElementById('urlName').value = '';
-            document.getElementById('urlEndpoint').value = '';
-            document.getElementById('cmdName').value = '';
-            document.getElementById('cmdCommand').value = '';
-            document.getElementById('cmdArgs').value = '';
-            document.getElementById('formError').style.display = 'none';
-            switchTab('url');
-        }
-
-        function switchTab(tab) {
-            currentTab = tab;
-            document.querySelectorAll('.tab').forEach(t => {
-                t.classList.remove('active');
-                t.setAttribute('aria-selected', 'false');
-            });
-            const activeTab = document.querySelector(`[data-tab="${tab}"]`);
-            activeTab.classList.add('active');
-            activeTab.setAttribute('aria-selected', 'true');
-
-            document.getElementById('tab-url').style.display = tab === 'url' ? 'block' : 'none';
-            document.getElementById('tab-command').style.display = tab === 'command' ? 'block' : 'none';
-        }
-
-        async function submitServer() {
-            const errorEl = document.getElementById('formError');
-            const submitBtn = document.getElementById('submitBtn');
-
-            let config = {};
-            let name = '';
-
-            if (currentTab === 'url') {
-                name = document.getElementById('urlName').value.trim();
-                const url = document.getElementById('urlEndpoint').value.trim();
-
-                if (!name) {
-                    errorEl.textContent = 'サーバー名を入力してください';
-                    errorEl.style.display = 'block';
-                    return;
-                }
-                if (!url) {
-                    errorEl.textContent = 'URL を入力してください';
-                    errorEl.style.display = 'block';
-                    return;
-                }
-
-                config = { name, config: { url } };
-            } else {
-                name = document.getElementById('cmdName').value.trim();
-                const command = document.getElementById('cmdCommand').value.trim();
-                const argsStr = document.getElementById('cmdArgs').value.trim();
-
-                if (!name) {
-                    errorEl.textContent = 'サーバー名を入力してください';
-                    errorEl.style.display = 'block';
-                    return;
-                }
-                if (!command) {
-                    errorEl.textContent = 'コマンドを入力してください';
-                    errorEl.style.display = 'block';
-                    return;
-                }
-
-                const args = argsStr ? argsStr.split(/\s+/) : [];
-                config = { name, config: { command, args } };
-            }
-
-            try {
-                submitBtn.disabled = true;
-                submitBtn.innerHTML = '<span class="loading-spinner"></span> 追加中...';
-
-                await API.addServer(config);
-                await loadServers();
-                closeAddServerModal();
-                showToast(`「${name}」を追加しました`, 'success');
-            } catch (error) {
-                errorEl.textContent = error.message;
-                errorEl.style.display = 'block';
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = '追加';
-            }
+            openEditModal(null); // 追加モードで統一モーダルを開く
         }
 
         // ============================================================
