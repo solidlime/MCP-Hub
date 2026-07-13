@@ -6,6 +6,7 @@ FastMCP の create_proxy + mount を管理。
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 from typing import Any
 
 from fastmcp import FastMCP
@@ -36,6 +37,7 @@ class ProxyManager:
         self._status: dict[str, str] = {}
         self._lock = asyncio.Lock()
         self._health_task: asyncio.Task | None = None
+        self._on_change_callbacks: list[Callable] = []
 
     @staticmethod
     def _retry_env() -> tuple[int, float]:
@@ -123,12 +125,16 @@ class ProxyManager:
         # list_tools outside lock (fast network call)
         try:
             tools = await proxy.list_tools()
-            return [t.name for t in tools]
+            result = [t.name for t in tools]
         except Exception:
             logger.warning("Could not list tools for %s", name)
             async with self._lock:
                 self._status[name] = "error"
-            return []
+            result = []
+
+        for cb in self._on_change_callbacks:
+            await cb()
+        return result
 
     async def unregister_server(self, name: str) -> bool:
         """サーバー削除 + アンマウント。"""
@@ -144,6 +150,8 @@ class ProxyManager:
         async with self._lock:
             await self._rebuild_mounts()
 
+        for cb in self._on_change_callbacks:
+            await cb()
         return True
 
     async def refresh_server(self, name: str, config: dict) -> None:
@@ -160,6 +168,8 @@ class ProxyManager:
             # disabled なら再生成しない
             if config.get("disabled"):
                 logger.info("Server %s is disabled, not mounting", name)
+                for cb in self._on_change_callbacks:
+                    await cb()
                 return
 
             try:
@@ -171,6 +181,9 @@ class ProxyManager:
             except Exception:
                 logger.exception("Failed to refresh server %s", name)
                 self._status[name] = "error"
+
+        for cb in self._on_change_callbacks:
+            await cb()
 
     def get_all_status(self) -> dict[str, str]:
         """全サーバーのステータス一覧。"""
@@ -210,6 +223,10 @@ class ProxyManager:
             raise ValueError(f"Server {server_name!r} not found")
         result = await proxy.call_tool(tool_name, arguments)
         return result
+
+    def on_change(self, callback: Callable) -> None:
+        """Register a callback invoked after server add/remove/refresh."""
+        self._on_change_callbacks.append(callback)
 
     def get_proxy(self, name: str) -> FastMCPProxy | None:
         """プロキシインスタンスを取得。"""

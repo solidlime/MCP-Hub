@@ -68,9 +68,6 @@ async def lifespan(app: FastAPI):
     await proxy_manager.load_all()
     logger.info("Loaded %d proxy servers", len(proxy_manager._proxies))
 
-    # Start health monitor AFTER all servers loaded
-    proxy_manager.start_health_monitor()
-
     # 内部リソース: hub://servers — 接続サーバーのJSONスナップショット
     @mcp_server.resource("hub://servers")
     def get_hub_servers() -> str:
@@ -119,7 +116,41 @@ async def lifespan(app: FastAPI):
     )
     inner_app.session_manager = sm
 
-    async with mcp_server._lifespan_manager(), sm.run():
+    # === /mcp-meta endpoint (Progressive Discovery) ===
+    from .meta_provider import create_meta_app
+
+    meta_mcp = create_meta_app(proxy_manager)
+    meta_http = meta_mcp.http_app(transport="streamable-http", path="/")
+    app.mount("/mcp-meta", meta_http)
+
+    meta_inner_app: StreamableHTTPASGIApp | None = None
+    for route in meta_http.routes:
+        if isinstance(getattr(route, "endpoint", None), StreamableHTTPASGIApp):
+            meta_inner_app = route.endpoint
+            break
+
+    if meta_inner_app is None:
+        raise RuntimeError("Could not find StreamableHTTPASGIApp in meta routes")
+
+    meta_sm = FastMCPStreamableHTTPSessionManager(
+        app=meta_mcp._mcp_server,
+    )
+    meta_inner_app.session_manager = meta_sm
+
+    # Rebuild index after initial load
+    await meta_mcp.rebuild_index()
+
+    # Wire rebuild_index to proxy changes
+    proxy_manager.on_change(meta_mcp.rebuild_index)
+
+    # Python 3.12+ parenthesized context managers
+    async with (
+        mcp_server._lifespan_manager(),
+        sm.run(),
+        meta_mcp._lifespan_manager(),
+        meta_sm.run(),
+    ):
+        proxy_manager.start_health_monitor()
         logger.info("MCP Hub started on %s:%s", HOST, PORT)
         yield
 
