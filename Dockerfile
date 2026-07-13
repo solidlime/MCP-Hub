@@ -106,8 +106,8 @@ COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder ${APP_HOME}/src ${APP_HOME}/src
 COPY --from=builder ${APP_HOME}/hub.config.json ${APP_HOME}/hub.config.json
 
-# データディレクトリ + パッケージキャッシュ
-RUN mkdir -p ${APP_HOME}/data /home/mcp-hub/.npm /home/mcp-hub/.cache/uv
+# データディレクトリ
+RUN mkdir -p ${APP_HOME}/data
 
 # 非rootユーザー
 RUN useradd --create-home --shell /bin/bash mcp-hub && \
