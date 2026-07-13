@@ -132,14 +132,10 @@ class MetaTools:
             server: Server name from search_tools results
             tool_name: Tool name from search_tools results
             arguments: Tool parameters (use get_tool_schema first to learn the format)
+
+        Exceptions propagate to FastMCP for proper JSON-RPC error reporting.
         """
-        try:
-            result = await self._execute_tool(server, tool_name, arguments)
-            return result
-        except ValueError as e:
-            return json.dumps({"error": str(e)})
-        except Exception as e:
-            return json.dumps({"error": f"Tool execution failed: {e}"})
+        return await self._execute_tool(server, tool_name, arguments)
 
 
 def create_meta_app(
@@ -152,7 +148,7 @@ def create_meta_app(
     # Build initial index from all connected proxy tools
     async def rebuild_index():
         all_tools = []
-        for server_name, proxy in proxy_manager._proxies.items():
+        for server_name, proxy in proxy_manager.get_connected_servers().items():
             try:
                 tools = await proxy.list_tools()
                 for t in tools:

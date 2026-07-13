@@ -62,8 +62,10 @@ SAMPLE_TOOLS = [
 def _build_mock_proxy_manager():
     """Create a ProxyManager mock with SAMPLE_TOOLS available."""
     pm = MagicMock()
-    pm._proxies = {}
+    pm._proxies = {}  # kept for internal consistency
     pm.call_tool = AsyncMock(return_value="ok")
+    # Support the public API — get_connected_servers returns snapshot of _proxies
+    pm.get_connected_servers = MagicMock(side_effect=lambda: dict(pm._proxies))
     return pm
 
 

@@ -232,6 +232,15 @@ class ProxyManager:
         """プロキシインスタンスを取得。"""
         return self._proxies.get(name)
 
+    def get_connected_servers(self) -> dict[str, Any]:
+        """Return snapshot of connected proxy instances.
+
+        Returns a dict mapping server_name → proxy. This exposes only
+        connected servers (not disabled or errored ones).
+        Use this instead of accessing _proxies directly.
+        """
+        return dict(self._proxies)
+
     async def _health_check(self) -> None:
         """Check all connected servers, recover failed ones."""
         # Snapshots under lock (prevents dict mutation during iteration)
