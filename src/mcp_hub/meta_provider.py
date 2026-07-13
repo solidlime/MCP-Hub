@@ -6,6 +6,7 @@ Exposes 3 tools instead of all child server tools.
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -18,7 +19,21 @@ MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 
 
 class ToolIndex:
-    """BM25 search over all proxied tools. Thread-safe via asyncio.Lock."""
+    """BM25 search over all proxied tools. Thread-safe via asyncio.Lock.
+
+    Indexes tool metadata and inputSchema content with field-aware weighting.
+    Uses token duplication to simulate BM25F since rank_bm25 is a plain BM25
+    implementation without native field weights.
+
+    Indexed fields (with simulated weights):
+        Tool name:      ×5  (highest — exact match is the strongest signal)
+        Server name:    ×3  (disambiguates same-named tools across servers)
+        Description:    ×2  (natural language description)
+        Enum values:    ×2  (concrete values are highly specific)
+        Parameter name: ×1  (included for schema-aware search)
+        Parameter desc: ×1  (natural language, useful for semantic matching)
+        Parameter type: ×1  (weak signal — many tools share common types)
+    """
 
     def __init__(self):
         self._lock = asyncio.Lock()
@@ -26,29 +41,119 @@ class ToolIndex:
         self._bm25: BM25Okapi | None = None
         self._corpus: list[list[str]] = []
 
+    # ── Tokenization ──────────────────────────────────────────────
+
     @staticmethod
     def _tokenize(text: str) -> list[str]:
-        return text.lower().split()
+        """Code-aware tokenizer with camelCase and digit boundary splitting.
+
+        Strategy (informed by trusty_search_core / veles-core / arXiv:2605.18561):
+        1. Split on whitespace first (handles natural language descriptions)
+        2. Always keep the original word lowercased for exact identifier matches
+        3. Additionally split on non-alphanumeric boundaries (_, -, ., /, etc.)
+        4. Split camelCase/PascalCase within each piece:
+           getHTTPResponse → [get, http, response]
+           Handle acronyms:   HTTPServer → [http, server]
+        5. Split at digit boundaries: parse2Things → [parse, 2, things]
+        6. Deduplicate while preserving order
+
+        Snake_case identifiers are preserved intact (step 2) AND also split
+        (step 3), giving both exact match and component match capability.
+        """
+        seen: set[str] = set()
+        out: list[str] = []
+
+        def emit(token: str) -> None:
+            token = token.strip().lower()
+            if token and token not in seen:
+                seen.add(token)
+                out.append(token)
+
+        for word in text.split():
+            # Step 2: Keep the original word (preserves snake_case: "file_read" stays intact)
+            emit(word)
+
+            # Step 3: Split on non-alnum to get components
+            sub_parts = re.findall(r"[a-zA-Z0-9]+", word)
+            for part in sub_parts:
+                emit(part)
+
+                # Step 4: camelCase/PascalCase splitting
+                crunched = re.sub(r"([a-z])([A-Z])", r"\1 \2", part)
+                crunched = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", crunched)
+                if crunched != part:
+                    for camel_piece in crunched.split():
+                        emit(camel_piece)
+
+                # Step 5: Digit boundary splitting
+                digit_parts = re.split(r"(\d+)", part)
+                if len(digit_parts) > 1:
+                    for dp in digit_parts:
+                        if dp and dp != part:
+                            emit(dp)
+
+        return out
+
+    # ── Document building ─────────────────────────────────────────
+
+    @staticmethod
+    def _build_doc_tokens(doc: dict) -> list[str]:
+        """Build a weighted token list for a single tool document.
+
+        Uses token duplication to approximate BM25F field weights.
+        Heavier weights → more copies → higher term frequency → higher score.
+        """
+        tokens: list[str] = []
+
+        def _add(text: str, copies: int = 1) -> None:
+            field_tokens = ToolIndex._tokenize(text)
+            for _ in range(copies):
+                tokens.extend(field_tokens)
+
+        # Core fields with explicit weights
+        _add(doc["name"], copies=5)               # Tool name: ×5
+        _add(doc["server"], copies=3)              # Server name: ×3
+        _add(doc.get("description", ""), copies=2) # Description: ×2
+
+        # InputSchema fields — included at ×1 (baseline)
+        schema = doc.get("inputSchema", {})
+        if isinstance(schema, dict):
+            for param_name, param_info in schema.get("properties", {}).items():
+                _add(param_name, copies=1)  # Parameter name
+
+                if isinstance(param_info, dict):
+                    _add(param_info.get("type", ""), copies=1)      # Type
+                    _add(param_info.get("description", ""), copies=1)  # Param desc
+
+                    # Enum values are highly specific → ×2
+                    for ev in param_info.get("enum", []):
+                        if isinstance(ev, str):
+                            _add(ev, copies=2)
+
+        return tokens
+
+    # ── Build + Search ────────────────────────────────────────────
 
     async def rebuild(self, documents: list[dict]) -> None:
         """Rebuild index from pre-built tool documents.
+
         Each document: {server, name, description, inputSchema}.
         Caller is responsible for building the document list.
         """
         async with self._lock:
             self._documents = documents
-            self._corpus = [
-                self._tokenize(f"{d['server']} {d['name']} {d.get('description', '')}")
-                for d in documents
-            ]
+            self._corpus = [self._build_doc_tokens(d) for d in documents]
             self._bm25 = BM25Okapi(self._corpus) if self._corpus else None
         logger.info("ToolIndex rebuilt: %d tools indexed", len(documents))
 
     def search(self, query: str, top_k: int = 10) -> list[dict]:
         """Search tools by keyword. Returns list of {server, name, description, inputSchema, score}.
+
         inputSchema is included so the LLM can proceed directly to execute_tool without
         a separate get_tool_schema call.
-        Read-only — does not modify shared state, safe without lock."""
+
+        Read-only — does not modify shared state, safe without lock.
+        """
         if not self._bm25 or not self._corpus:
             return []
         tokens = self._tokenize(query)
@@ -70,6 +175,8 @@ class ToolIndex:
                 "score": round(float(scores[idx]), 4),
             })
         return results
+
+    # ── Schema + Server listing ───────────────────────────────────
 
     def get_schema(self, server: str, tool_name: str) -> dict | None:
         """Get full inputSchema for a tool. Read-only, safe without lock."""

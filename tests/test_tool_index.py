@@ -34,9 +34,11 @@ class TestToolIndex:
         assert idx.search("anything") == []
 
     async def test_search_exact_match(self, index):
-        """Query exact tool name returns the matching tool."""
+        """Query exact tool name returns the matching tool at the top.
+        With schema-aware tokenizer, other tools sharing common tokens (e.g. 'web')
+        may also appear below the exact match."""
         results = index.search("brave_web_search")
-        assert len(results) == 1
+        assert len(results) >= 1
         assert results[0]["name"] == "brave_web_search"
         assert results[0]["server"] == "brave-search"
         assert "score" in results[0]
@@ -66,3 +68,145 @@ class TestToolIndex:
         """Query with no match returns empty list."""
         results = index.search("nonexistent_tool_xyz")
         assert results == []
+
+
+class TestTokenizer:
+    """Code-aware tokenizer unit tests."""
+
+    def test_snake_case_preserved(self):
+        """snake_case identifiers stay intact AND are split."""
+        tokens = ToolIndex._tokenize("brave_web_search")
+        assert "brave_web_search" in tokens  # original preserved
+        assert "brave" in tokens
+        assert "web" in tokens
+        assert "search" in tokens
+
+    def test_camel_case_split(self):
+        """camelCase tokens are split while preserving original."""
+        tokens = ToolIndex._tokenize("getHTTPResponse")
+        assert "gethttpresponse" in tokens  # original lowered
+        assert "get" in tokens
+        assert "http" in tokens
+        assert "response" in tokens
+
+    def test_digit_boundary(self):
+        """Digit boundaries are split."""
+        tokens = ToolIndex._tokenize("parse2Things")
+        assert "parse2things" in tokens  # original
+        assert "parse" in tokens
+        assert "2" in tokens
+        assert "things" in tokens
+
+    def test_natural_language(self):
+        """Natural language text splits on whitespace."""
+        tokens = ToolIndex._tokenize("Search the web using Brave API")
+        assert "search" in tokens
+        assert "web" in tokens
+        assert "brave" in tokens
+        assert "api" in tokens
+
+    def test_dedup(self):
+        """Duplicate tokens are removed."""
+        # "file file_read file" → many "file" tokens, but only one kept
+        tokens = ToolIndex._tokenize("file file_read file")
+        count = sum(1 for t in tokens if t == "file")
+        assert count == 1
+
+    def test_empty_input(self):
+        """Empty string returns empty list."""
+        assert ToolIndex._tokenize("") == []
+        assert ToolIndex._tokenize("   ") == []
+
+
+class TestSchemaAwareSearch:
+    """Search tests that verify inputSchema inclusion."""
+
+    @pytest.fixture
+    def schema_rich_docs(self):
+        return [
+            {
+                "name": "create_issue",
+                "description": "Create a GitHub issue",
+                "server": "github",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "repo": {"type": "string", "description": "Repository name", "enum": ["owner/repo"]},
+                        "title": {"type": "string"},
+                        "labels": {"type": "array", "enum": ["bug", "feature", "docs"]},
+                    }
+                }
+            },
+            {
+                "name": "search_code",
+                "description": "Search code on GitHub",
+                "server": "github",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query"},
+                        "language": {"type": "string", "enum": ["python", "javascript", "rust"]},
+                    }
+                }
+            },
+            {
+                "name": "read_file",
+                "description": "Read file from disk",
+                "server": "filesystem",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                    }
+                }
+            },
+        ]
+
+    @pytest.fixture
+    async def schema_index(self, schema_rich_docs):
+        idx = ToolIndex()
+        await idx.rebuild(schema_rich_docs)
+        return idx
+
+    async def test_search_by_param_name(self, schema_index):
+        """Searching 'repo' finds create_issue (has 'repo' parameter)."""
+        results = schema_index.search("repo")
+        assert len(results) >= 1
+        assert results[0]["name"] == "create_issue"
+
+    async def test_search_by_enum_value(self, schema_index):
+        """Searching 'bug' finds create_issue (has 'bug' enum)."""
+        results = schema_index.search("bug")
+        assert len(results) >= 1
+        names = {r["name"] for r in results}
+        assert "create_issue" in names
+
+    async def test_search_by_enum_language(self, schema_index):
+        """Searching 'python' finds search_code (has 'python' enum)."""
+        results = schema_index.search("python")
+        assert len(results) >= 1
+        assert results[0]["name"] == "search_code"
+
+    async def test_search_by_param_description(self, schema_index):
+        """Searching 'query' matches param description."""
+        results = schema_index.search("search query")
+        assert len(results) >= 1
+        assert results[0]["name"] == "search_code"
+
+    async def test_inputschema_in_search_results(self, schema_index):
+        """Search results include inputSchema for 2-hop flow."""
+        results = schema_index.search("create")
+        assert len(results) >= 1
+        assert "inputSchema" in results[0]
+        assert isinstance(results[0]["inputSchema"], dict)
+        # Should have at least one property
+        props = results[0]["inputSchema"].get("properties", {})
+        assert len(props) >= 1
+
+    async def test_tool_name_stronger_than_param(self, schema_index, schema_rich_docs):
+        """'create' should rank create_issue above search_code even though
+        both appear in schemas, because tool name is weighted ×5 vs param ×1."""
+        results = schema_index.search("create")
+        assert len(results) >= 1
+        # create_issue has 'create' in name → should be top
+        assert results[0]["name"] == "create_issue"
