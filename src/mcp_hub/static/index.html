@@ -1178,6 +1178,110 @@
         }
 
         /* ============================================================
+           SETTINGS MODAL
+           ============================================================ */
+        .settings-section {
+            padding: 18px 20px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-subtle);
+        }
+        .settings-section-title {
+            font-size: 0.82rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .settings-section-title .section-icon {
+            font-size: 1rem;
+        }
+        .settings-toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 14px;
+        }
+        .settings-toggle-label {
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .settings-toggle-switch {
+            position: relative;
+            width: 48px;
+            height: 26px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .settings-toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+            position: absolute;
+        }
+        .settings-toggle-track {
+            position: absolute;
+            inset: 0;
+            background: var(--toggle-off);
+            border-radius: var(--radius-pill);
+            transition: background var(--transition-normal);
+        }
+        .settings-toggle-switch input:checked + .settings-toggle-track {
+            background: var(--toggle-on);
+        }
+        .settings-toggle-thumb {
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: transform var(--transition-normal);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+        }
+        .settings-toggle-switch input:checked ~ .settings-toggle-thumb {
+            transform: translateX(22px);
+        }
+        .settings-toggle-switch input:focus-visible + .settings-toggle-track {
+            outline: 2px solid var(--accent-primary);
+            outline-offset: 2px;
+        }
+        .settings-mode-description {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+            padding: 12px 14px;
+            background: var(--bg-input);
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border-subtle);
+            transition: all var(--transition-normal);
+        }
+        .settings-mode-description .desc-icon {
+            display: inline-block;
+            margin-right: 4px;
+        }
+        .settings-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 12px;
+            font-size: 0.72rem;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+        .settings-status .status-indicator {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent-green);
+        }
+
+        /* ============================================================
            ANIMATIONS
            ============================================================ */
         .fade-in {
@@ -1227,6 +1331,9 @@
                 </div>
                 <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" aria-label="テーマ切替" title="ライト/ダーク切替">
                     🌙
+                </button>
+                <button class="theme-toggle" id="settingsBtn" onclick="openSettingsModal()" aria-label="設定" title="Hub 設定">
+                    ⚙️
                 </button>
                 <button class="btn btn-primary" onclick="openAddServerModal()" aria-label="MCP サーバーを追加">
                     <span aria-hidden="true">＋</span>
@@ -1386,6 +1493,39 @@
         </div>
     </div>
 
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title" id="settingsModalTitle">⚙️ Hub 設定</h2>
+                <button class="modal-close" onclick="closeSettingsModal()" aria-label="閉じる">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-section">
+                    <div class="settings-section-title">
+                        <span class="section-icon" aria-hidden="true">🔍</span>
+                        <span>Progressive Discovery</span>
+                    </div>
+                    <div class="settings-toggle-row">
+                        <span class="settings-toggle-label" id="metaModeLabel">meta_mode</span>
+                        <label class="settings-toggle-switch" title="meta_mode ON/OFF 切替">
+                            <input type="checkbox" id="metaModeToggle"
+                                   onchange="toggleMetaMode(this.checked)"
+                                   aria-label="Progressive Discovery (meta_mode) の ON/OFF 切替">
+                            <span class="settings-toggle-track"></span>
+                            <span class="settings-toggle-thumb"></span>
+                        </label>
+                    </div>
+                    <div id="metaModeDescription" class="settings-mode-description" aria-live="polite"></div>
+                    <div class="settings-status">
+                        <span class="status-indicator" id="settingsStatusDot"></span>
+                        <span id="settingsStatusText">読み込み中...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
@@ -1400,6 +1540,7 @@
         let editingServer = null;
         let editTags = [];
         let activeTagFilters = new Set();
+        let metaMode = null; // null = unknown, true/false = loaded
 
         // ============================================================
         // THEME
@@ -1506,6 +1647,29 @@
             async getConnection(name) {
                 const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}/connection`);
                 if (!response.ok) throw new Error('接続情報の取得に失敗しました');
+                return response.json();
+            },
+
+            async getSettings() {
+                const response = await fetch('/admin/api/settings');
+                if (!response.ok) throw new Error('設定の取得に失敗しました');
+                return response.json();
+            },
+
+            async patchSettings(settings) {
+                const response = await fetch('/admin/api/settings', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(settings)
+                });
+                if (!response.ok) {
+                    let msg = '設定の更新に失敗しました';
+                    try {
+                        const err = await response.json();
+                        msg = err.detail || msg;
+                    } catch (_) {}
+                    throw new Error(msg);
+                }
                 return response.json();
             }
         };
@@ -2380,10 +2544,82 @@
         }
 
         // ============================================================
+        // SETTINGS
+        // ============================================================
+        function updateMetaModeDescription(enabled) {
+            const desc = document.getElementById('metaModeDescription');
+            const label = document.getElementById('metaModeLabel');
+            if (enabled) {
+                desc.innerHTML = '<span class="desc-icon" aria-hidden="true">✓</span> ツールを3つの検索・実行メタツールに圧縮。ツール選択精度が向上します（推奨）';
+                label.textContent = 'meta_mode — ON';
+            } else {
+                desc.innerHTML = '<span class="desc-icon" aria-hidden="true">ℹ</span> 全ツールを直接公開。ツール数が多いと精度が低下する場合があります';
+                label.textContent = 'meta_mode — OFF';
+            }
+        }
+
+        async function loadSettings() {
+            const statusDot = document.getElementById('settingsStatusDot');
+            const statusText = document.getElementById('settingsStatusText');
+            try {
+                const settings = await API.getSettings();
+                metaMode = settings.meta_mode;
+                document.getElementById('metaModeToggle').checked = metaMode;
+                updateMetaModeDescription(metaMode);
+                statusDot.style.background = 'var(--accent-green)';
+                statusText.textContent = '接続済';
+            } catch (error) {
+                metaMode = null;
+                statusDot.style.background = 'var(--accent-red)';
+                statusText.textContent = '設定の取得に失敗';
+                console.error('Settings load error:', error);
+            }
+        }
+
+        function openSettingsModal() {
+            document.getElementById('settingsModal').classList.add('active');
+            // Re-fetch latest settings when opening
+            loadSettings();
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settingsModal').classList.remove('active');
+        }
+
+        async function toggleMetaMode(enabled) {
+            const toggle = document.getElementById('metaModeToggle');
+            const statusDot = document.getElementById('settingsStatusDot');
+            const statusText = document.getElementById('settingsStatusText');
+
+            try {
+                toggle.disabled = true;
+                statusDot.style.background = 'var(--accent-primary)';
+                statusText.textContent = '保存中...';
+
+                const result = await API.patchSettings({ meta_mode: enabled });
+                metaMode = result.meta_mode;
+                updateMetaModeDescription(metaMode);
+                toggle.checked = metaMode;
+
+                statusDot.style.background = 'var(--accent-green)';
+                statusText.textContent = '保存済';
+                showToast(`Progressive Discovery を ${metaMode ? 'ON' : 'OFF'} にしました`, 'success');
+            } catch (error) {
+                // Revert toggle on error
+                toggle.checked = metaMode;
+                statusDot.style.background = 'var(--accent-red)';
+                statusText.textContent = '保存に失敗';
+                showToast(error.message, 'error');
+            } finally {
+                toggle.disabled = false;
+            }
+        }
+
+        // ============================================================
         // INITIALIZATION
         // ============================================================
         document.addEventListener('DOMContentLoaded', async () => {
-            await loadServers();
+            await Promise.all([loadServers(), loadSettings()]);
             await updateHealthStatus();
 
             // Periodic refresh: reload servers + health every 30s
