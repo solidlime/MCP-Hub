@@ -45,7 +45,9 @@ class ToolIndex:
         logger.info("ToolIndex rebuilt: %d tools indexed", len(documents))
 
     def search(self, query: str, top_k: int = 10) -> list[dict]:
-        """Search tools by keyword. Returns list of {server, name, description, score}.
+        """Search tools by keyword. Returns list of {server, name, description, inputSchema, score}.
+        inputSchema is included so the LLM can proceed directly to execute_tool without
+        a separate get_tool_schema call.
         Read-only — does not modify shared state, safe without lock."""
         if not self._bm25 or not self._corpus:
             return []
@@ -64,6 +66,7 @@ class ToolIndex:
                 "server": doc["server"],
                 "name": doc["name"],
                 "description": doc.get("description", ""),
+                "inputSchema": doc.get("inputSchema", {}),
                 "score": round(float(scores[idx]), 4),
             })
         return results
@@ -99,7 +102,9 @@ class MetaTools:
     async def search_tools(self, query: str, top_k: int = 10) -> str:
         """Search across all upstream server tools by keyword or capability.
 
-        Use this FIRST to discover available tools before calling get_tool_schema or execute_tool.
+        Returns matching tools with their full inputSchema — you can use execute_tool
+        directly with the returned server/name and the inputSchema parameters.
+        No need for a separate get_tool_schema call.
 
         Args:
             query: Natural language description of what you want to do (e.g. "read files", "search web")
@@ -172,7 +177,8 @@ def create_meta_app(
     async def search_tools(query: str, top_k: int = 10) -> str:
         """Search across all upstream server tools by keyword or capability.
         
-        Returns matching tool names, descriptions, and which server they belong to.
+        Returns matching tools with their full inputSchema — use execute_tool
+        directly with the returned server/name and inputSchema parameters.
         Always search first before trying to use any tool.
         
         Args:
