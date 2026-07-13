@@ -229,6 +229,57 @@ async def test_server(name: str):
         }
 
 
+@router.get("/servers/{name}/resources")
+async def list_server_resources(name: str):
+    """List resources for a connected server."""
+    pm = _get_proxy_manager()
+    proxy = pm.get_proxy(name)
+    if proxy is None:
+        raise HTTPException(404, detail=f"Server {name!r} not found or not connected")
+    try:
+        resources = await proxy.list_resources()
+        return {"resources": [
+            {"uri": str(r.uri), "name": r.name, "description": r.description or ""}
+            for r in resources
+        ]}
+    except Exception:
+        raise HTTPException(502, detail=f"Failed to list resources from {name!r}")
+
+
+@router.get("/servers/{name}/prompts")
+async def list_server_prompts(name: str):
+    """List prompts for a connected server."""
+    pm = _get_proxy_manager()
+    proxy = pm.get_proxy(name)
+    if proxy is None:
+        raise HTTPException(404, detail=f"Server {name!r} not found or not connected")
+    try:
+        prompts = await proxy.list_prompts()
+        return {"prompts": [
+            {"name": p.name, "description": p.description or ""}
+            for p in prompts
+        ]}
+    except Exception:
+        raise HTTPException(502, detail=f"Failed to list prompts from {name!r}")
+
+
+@router.get("/servers/{name}/resource-templates")
+async def list_server_resource_templates(name: str):
+    """List resource templates for a connected server."""
+    pm = _get_proxy_manager()
+    proxy = pm.get_proxy(name)
+    if proxy is None:
+        raise HTTPException(404, detail=f"Server {name!r} not found or not connected")
+    try:
+        templates = await proxy.list_resource_templates()
+        return {"resource_templates": [
+            {"uriTemplate": str(rt.uriTemplate), "name": rt.name, "description": rt.description or ""}
+            for rt in templates
+        ]}
+    except Exception:
+        raise HTTPException(502, detail=f"Failed to list resource templates from {name!r}")
+
+
 @router.post("/servers/{name}/tools/{tool_name}/call")
 async def call_tool(name: str, tool_name: str, body: CallToolRequest):
     pm = _get_proxy_manager()

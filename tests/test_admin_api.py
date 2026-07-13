@@ -5,6 +5,7 @@ Tests CRUD endpoints, PATCH update, enable/disable, metrics, connection info.
 import pytest
 from fastapi.testclient import TestClient
 from mcp_hub.main import create_app
+from mcp_hub.state import app_state
 
 
 @pytest.fixture
@@ -174,3 +175,85 @@ class TestTagFilter:
         assert data["tags"] == ["web", "api", "db"]
         assert "tags=web,api,db" in data["url"]
         assert data["example_header"] == "X-MCP-Hub-Tags: web,api,db"
+
+
+class TestResourcesPrompts:
+    """Tests for GET /servers/{name}/resources, /prompts, /resource-templates."""
+
+    def _inject_mock_proxy(self, name: str):
+        """Inject a mock FastMCPProxy into the proxy manager for testing."""
+        from unittest.mock import AsyncMock
+        mock = AsyncMock()
+        mock.list_resources.return_value = []
+        mock.list_prompts.return_value = []
+        mock.list_resource_templates.return_value = []
+        if app_state.proxy_manager is not None:
+            app_state.proxy_manager._proxies[name] = mock
+        return mock
+
+    # --- 404: nonexistent server ---
+
+    def test_resources_nonexistent_is_404(self, client):
+        r = client.get("/admin/api/servers/nonexistent/resources")
+        assert r.status_code == 404
+
+    def test_prompts_nonexistent_is_404(self, client):
+        r = client.get("/admin/api/servers/nonexistent/prompts")
+        assert r.status_code == 404
+
+    def test_resource_templates_nonexistent_is_404(self, client):
+        r = client.get("/admin/api/servers/nonexistent/resource-templates")
+        assert r.status_code == 404
+
+    # --- 200: connected server returns data ---
+
+    def test_resources_connected_server_returns_list(self, client):
+        mock = self._inject_mock_proxy("res-srv")
+        from mcp.types import Resource
+        mock.list_resources.return_value = [
+            Resource(uri="file:///test.txt", name="test.txt", description="A test file"),
+        ]
+        r = client.get("/admin/api/servers/res-srv/resources")
+        assert r.status_code == 200
+        data = r.json()
+        assert data == {
+            "resources": [
+                {"uri": "file:///test.txt", "name": "test.txt", "description": "A test file"},
+            ]
+        }
+
+    def test_resources_connected_server_empty(self, client):
+        self._inject_mock_proxy("empty-srv")
+        r = client.get("/admin/api/servers/empty-srv/resources")
+        assert r.status_code == 200
+        assert r.json() == {"resources": []}
+
+    def test_prompts_connected_server_returns_list(self, client):
+        mock = self._inject_mock_proxy("prompt-srv")
+        from mcp.types import Prompt
+        mock.list_prompts.return_value = [
+            Prompt(name="greet", description="A greeting prompt"),
+        ]
+        r = client.get("/admin/api/servers/prompt-srv/prompts")
+        assert r.status_code == 200
+        data = r.json()
+        assert data == {
+            "prompts": [
+                {"name": "greet", "description": "A greeting prompt"},
+            ]
+        }
+
+    def test_resource_templates_connected_server_returns_list(self, client):
+        mock = self._inject_mock_proxy("tmpl-srv")
+        from mcp.types import ResourceTemplate
+        mock.list_resource_templates.return_value = [
+            ResourceTemplate(uriTemplate="file:///{path}", name="file", description="File access"),
+        ]
+        r = client.get("/admin/api/servers/tmpl-srv/resource-templates")
+        assert r.status_code == 200
+        data = r.json()
+        assert data == {
+            "resource_templates": [
+                {"uriTemplate": "file:///{path}", "name": "file", "description": "File access"},
+            ]
+        }
