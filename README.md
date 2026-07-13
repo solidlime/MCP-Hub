@@ -106,3 +106,7 @@ FastMCPのResource機構で `hub://servers` が利用可能。接続サーバー
   "tool_count": 5
 }
 ```
+
+## 制限事項
+
+- **Progress通知の転送未対応**: FastMCPの`ProxyProvider`が`onprogress`コールバックを露出していないため、子MCPサーバーの進捗通知（`notifications/progress`）はクライアントに転送されない。詳細は [`docs/progress-forwarding.md`](docs/progress-forwarding.md) 参照。
