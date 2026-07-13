@@ -263,10 +263,10 @@ class TestSettings:
     """Settings API (meta_mode toggle)."""
 
     def test_get_settings_default(self, client):
-        """GET /admin/api/settings returns meta_mode=false by default."""
+        """GET /admin/api/settings returns meta_mode=true by default."""
         r = client.get("/admin/api/settings")
         assert r.status_code == 200
-        assert r.json() == {"meta_mode": False}
+        assert r.json() == {"meta_mode": True}
 
     def test_patch_settings_enable(self, client):
         """PATCH meta_mode=true persists and reflects in subsequent GET."""
