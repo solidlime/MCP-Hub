@@ -170,14 +170,39 @@ def create_meta_app(
     # Register meta tools via FastMCP tool decorator
     @mcp.tool()
     async def search_tools(query: str, top_k: int = 10) -> str:
+        """Search across all upstream server tools by keyword or capability.
+        
+        Returns matching tool names, descriptions, and which server they belong to.
+        Always search first before trying to use any tool.
+        
+        Args:
+            query: Natural language description of what you want to do
+            top_k: Maximum number of results to return (default 10)
+        """
         return await meta.search_tools(query, top_k)
 
     @mcp.tool()
     async def get_tool_schema(server: str, tool_name: str) -> str:
+        """Get the full input schema for a specific tool on a specific server.
+        
+        Always call this after search_tools to learn the exact parameters needed
+        before calling execute_tool.
+        
+        Args:
+            server: Server name from search_tools results
+            tool_name: Tool name from search_tools results
+        """
         return await meta.get_tool_schema(server, tool_name)
 
     @mcp.tool()
     async def execute_tool(server: str, tool_name: str, arguments: dict[str, Any]) -> Any:
+        """Execute a tool on any upstream server.
+        
+        Args:
+            server: Server name from search_tools results
+            tool_name: Tool name from search_tools results (use get_tool_schema first)
+            arguments: Tool parameters matching the tool's input schema
+        """
         return await meta.execute_tool(server, tool_name, arguments)
 
     # Rebuild index after server changes
