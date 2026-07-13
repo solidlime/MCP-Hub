@@ -22,8 +22,15 @@ fi
 groupmod -o -g "$PGID" mcp-hub 2>/dev/null || true
 usermod -o -u "$PUID" -g "$PGID" mcp-hub 2>/dev/null || true
 
-# Ensure data directory is writable by the remapped user
+# Ensure data and cache directories are writable by the remapped user
 chown -R mcp-hub:mcp-hub "$DATA_DIR"
+# npm/npx and uv/uvx caches — persist to avoid re-download on restart
+NPM_DIR="${NPM_CONFIG_CACHE:-/home/mcp-hub/.npm}"
+mkdir -p "$NPM_DIR"
+chown -R mcp-hub:mcp-hub "$NPM_DIR"
+UV_DIR="${UV_CACHE_DIR:-/home/mcp-hub/.cache/uv}"
+mkdir -p "$UV_DIR"
+chown -R mcp-hub:mcp-hub "$UV_DIR"
 
 # Drop privileges and execute the command
 exec gosu mcp-hub "$@"

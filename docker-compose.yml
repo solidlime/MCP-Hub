@@ -6,12 +6,15 @@ services:
       - "26263:26263"
     environment:
       - MCP_HUB_DATA_DIR=/data
+      - UV_CACHE_DIR=/home/mcp-hub/.cache/uv
       # PUID/PGID: auto-detected from data directory owner.
       # Uncomment to override:
       # - PUID=1000
       # - PGID=1000
     volumes:
       - /volume1/docker/mcp-hub/data:/data
+      - /volume1/docker/mcp-hub/cache/npm:/home/mcp-hub/.npm
+      - /volume1/docker/mcp-hub/cache/uv:/home/mcp-hub/.cache/uv
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:26263/admin/api/health"]
       interval: 30s
