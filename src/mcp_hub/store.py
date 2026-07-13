@@ -37,32 +37,35 @@ class JsonStore:
 
         return await asyncio.to_thread(_do)
 
+    async def _write_internal(self, data: dict) -> None:
+        """Write data to file. No lock — caller must hold self._lock."""
+        def _do():
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self._path.parent,
+                delete=False,
+                suffix=".tmp",
+            )
+            try:
+                json.dump(data, tmp, indent=2, ensure_ascii=False)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+                tmp.close()
+                os.replace(tmp.name, self._path)
+            except Exception:
+                tmp.close()
+                os.unlink(tmp.name)
+                raise
+
+        await asyncio.to_thread(_do)
+        self._data = data
+
     async def _write(self, data: dict) -> None:
         """Atomic write: temp file + os.replace, protected by asyncio.Lock."""
         async with self._lock:
-
-            def _do():
-                self._path.parent.mkdir(parents=True, exist_ok=True)
-                tmp = tempfile.NamedTemporaryFile(
-                    mode="w",
-                    encoding="utf-8",
-                    dir=self._path.parent,
-                    delete=False,
-                    suffix=".tmp",
-                )
-                try:
-                    json.dump(data, tmp, indent=2, ensure_ascii=False)
-                    tmp.flush()
-                    os.fsync(tmp.fileno())
-                    tmp.close()
-                    os.replace(tmp.name, self._path)
-                except Exception:
-                    tmp.close()
-                    os.unlink(tmp.name)
-                    raise
-
-            await asyncio.to_thread(_do)
-            self._data = data
+            await self._write_internal(data)
 
     async def init(self, seed_servers: dict | None = None) -> None:
         """Ensure config file exists. Copy from bundled default if missing."""
@@ -148,3 +151,10 @@ class JsonStore:
         del servers[name]
         await self._write(self._data)
         return True
+
+    async def set_meta_mode(self, enabled: bool) -> None:
+        """Atomically update meta_mode. Uses lock to prevent read-modify-write races."""
+        async with self._lock:
+            data = await self._read()
+            data["meta_mode"] = enabled
+            await self._write_internal(data)

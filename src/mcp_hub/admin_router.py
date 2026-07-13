@@ -62,6 +62,24 @@ def _get_proxy_manager():
     return app_state.proxy_manager
 
 
+@router.get("/settings")
+async def get_settings():
+    registry = _get_registry()
+    data = await registry._read()
+    return {
+        "meta_mode": data.get("meta_mode", False),
+    }
+
+
+@router.patch("/settings")
+async def update_settings(body: dict):
+    registry = _get_registry()
+    if "meta_mode" in body:
+        await registry.set_meta_mode(bool(body["meta_mode"]))
+    data = await registry._read()
+    return {"meta_mode": data.get("meta_mode", False)}
+
+
 @router.get("/health")
 async def health():
     try:

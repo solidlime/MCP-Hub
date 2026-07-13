@@ -1,6 +1,7 @@
 {
   "version": 1,
   "log_level": "info",
+  "meta_mode": false,
   "mcpServers": {
     "filesystem": {
       "command": "npx",
