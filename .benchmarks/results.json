@@ -1,0 +1,128 @@
+{
+  "benchmark": "meta_mode_tool_call_benchmark",
+  "timestamp": "2026-07-13T18:51:46.958456+00:00",
+  "model": "tencent/hy3:free",
+  "runs_per_case": 3,
+  "meta_mode_off": {
+    "mode": "OFF",
+    "model": "tencent/hy3:free",
+    "runs_per_case": 3,
+    "cases": [
+      {
+        "query": "最新のAIニュースを検索して",
+        "expected_tool": "brave_web_search",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "example.comをブラウザで開いて",
+        "expected_tool": "puppeteer_navigate",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "東京のピザ屋を探して",
+        "expected_tool": "brave_local_search",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "現在のページのスクリーンショットを撮って",
+        "expected_tool": "puppeteer_screenshot",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "この問題を段階的に考えて",
+        "expected_tool": "sequentialthinking",
+        "passed": 1,
+        "total": 3,
+        "success_rate": 33.3
+      },
+      {
+        "query": "ログインボタンをクリックして",
+        "expected_tool": "puppeteer_click",
+        "passed": 0,
+        "total": 3,
+        "success_rate": 0.0
+      },
+      {
+        "query": "このURLの内容を取得して",
+        "expected_tool": "web_search_exa",
+        "passed": 0,
+        "total": 3,
+        "success_rate": 0.0
+      }
+    ],
+    "summary": {
+      "total_passed": 13,
+      "total_attempts": 21,
+      "overall_success_rate": 61.9
+    }
+  },
+  "meta_mode_on": {
+    "mode": "ON",
+    "model": "tencent/hy3:free",
+    "runs_per_case": 3,
+    "cases": [
+      {
+        "query": "最新のAIニュースを検索して",
+        "expected_tool": "brave_web_search",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "example.comをブラウザで開いて",
+        "expected_tool": "puppeteer_navigate",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "東京のピザ屋を探して",
+        "expected_tool": "brave_local_search",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "現在のページのスクリーンショットを撮って",
+        "expected_tool": "puppeteer_screenshot",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "この問題を段階的に考えて",
+        "expected_tool": "sequentialthinking",
+        "passed": 0,
+        "total": 3,
+        "success_rate": 0.0
+      },
+      {
+        "query": "ログインボタンをクリックして",
+        "expected_tool": "puppeteer_click",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "このURLの内容を取得して",
+        "expected_tool": "web_search_exa",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      }
+    ],
+    "summary": {
+      "total_passed": 18,
+      "total_attempts": 21,
+      "overall_success_rate": 85.7
+    }
+  }
+}

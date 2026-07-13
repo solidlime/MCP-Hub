@@ -107,6 +107,31 @@ FastMCPのResource機構で `hub://servers` が利用可能。接続サーバー
 }
 ```
 
+## meta_mode ベンチマーク
+
+`meta_mode` は Progressive Discovery を有効にする設定。通常モード（15ツールを直接公開）と比較して、ツール選択の精度が向上する。
+
+### 比較結果 (tencent/hy3:free, 7ケース×3回)
+
+| テストケース | meta_mode OFF | meta_mode ON |
+|---|---|---|
+| brave_web_search（Web検索） | 3/3 (100%) | 3/3 (100%) |
+| puppeteer_navigate（ページ遷移） | 3/3 (100%) | 3/3 (100%) |
+| brave_local_search（ローカル検索） | 3/3 (100%) | 3/3 (100%) |
+| puppeteer_screenshot（スクリーンショット） | 3/3 (100%) | 3/3 (100%) |
+| sequentialthinking（段階的思考） | 1/3 (33%) | 0/3 (0%) |
+| puppeteer_click（クリック操作） | 0/3 (0%) | 3/3 (100%) |
+| web_search_exa（Exa検索） | 0/3 (0%) | 3/3 (100%) |
+| **総合** | **13/21 (62%)** | **18/21 (86%)** |
+
+**結論**: `meta_mode ON` ではツール数が3つに圧縮されることで、LLMのツール選択精度が 62% → 86% に向上（+24pt）。特に類似ツールの多いカテゴリ（ブラウザ操作系、検索系）で効果が顕著。
+
+ベンチマークの再実行:
+```bash
+export OPENROUTER_API_KEY='sk-or-v1-...'
+python .benchmarks/meta_mode_benchmark.py
+```
+
 ## 制限事項
 
 - **Progress通知の転送未対応**: FastMCPの`ProxyProvider`が`onprogress`コールバックを露出していないため、子MCPサーバーの進捗通知（`notifications/progress`）はクライアントに転送されない。詳細は [`docs/progress-forwarding.md`](docs/progress-forwarding.md) 参照。
