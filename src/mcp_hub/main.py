@@ -68,6 +68,9 @@ async def lifespan(app: FastAPI):
     await proxy_manager.load_all()
     logger.info("Loaded %d proxy servers", len(proxy_manager._proxies))
 
+    # Start health monitor AFTER all servers loaded
+    proxy_manager.start_health_monitor()
+
     # 内部リソース: hub://servers — 接続サーバーのJSONスナップショット
     @mcp_server.resource("hub://servers")
     def get_hub_servers() -> str:
@@ -121,6 +124,7 @@ async def lifespan(app: FastAPI):
         yield
 
     # --- 終了処理 ---
+    await proxy_manager.stop_health_monitor()
     logger.info("MCP Hub shutting down")
     app_state.registry = None
     app_state.proxy_manager = None

@@ -5,6 +5,7 @@ FastMCP の create_proxy + mount を管理。
 
 import asyncio
 import logging
+import os
 from typing import Any
 
 from fastmcp import FastMCP
@@ -15,6 +16,9 @@ from fastmcp.server.providers.proxy import FastMCPProxy
 from .store import JsonStore
 
 logger = logging.getLogger(__name__)
+
+
+RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
 
 
 class ProxyManager:
@@ -31,6 +35,40 @@ class ProxyManager:
         self._server_configs: dict[str, dict] = {}
         self._status: dict[str, str] = {}
         self._lock = asyncio.Lock()
+        self._health_task: asyncio.Task | None = None
+
+    @staticmethod
+    def _retry_env() -> tuple[int, float]:
+        """(max_retries, base_delay_seconds) from env."""
+        return (
+            int(os.environ.get("MCP_HUB_RETRY_MAX", "3")),
+            float(os.environ.get("MCP_HUB_RETRY_DELAY", "1.0")),
+        )
+
+    async def _connect_server(self, name: str, config: dict) -> "FastMCPProxy | None":
+        """Create proxy + mount with retry. Call OUTSIDE asyncio.Lock.
+        Returns proxy on success, None on exhaustion."""
+        max_retries, base_delay = self._retry_env()
+        for attempt in range(max_retries + 1):
+            try:
+                proxy = self._create_proxy(name, config)
+                self.mcp.mount(proxy, namespace=name)
+                return proxy
+            except RETRYABLE_EXCEPTIONS as e:
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(
+                        "Retry %d/%d for %s in %.1fs: %s",
+                        attempt + 1, max_retries, name, delay, e,
+                    )
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error("Exhausted %d retries for %s", max_retries, name)
+            except Exception:
+                # Non-retryable error — don't retry
+                logger.exception("Non-retryable error connecting %s", name)
+                break
+        return None
 
     async def load_all(self) -> None:
         """DB から全サーバーを読み込んでマウント。"""
@@ -42,20 +80,20 @@ class ProxyManager:
         for srv in servers:
             name = srv["name"]
             config = srv["config"]
-            self._server_configs[name] = config
+            async with self._lock:
+                self._server_configs[name] = config
             if config.get("disabled"):
-                logger.info("Skipping disabled server %s", name)
-                self._status[name] = "disabled"
+                async with self._lock:
+                    self._status[name] = "disabled"
                 continue
-            try:
-                proxy = self._create_proxy(name, config)
-                self._proxies[name] = proxy
-                self.mcp.mount(proxy, namespace=name)
-                self._status[name] = "connected"
-                logger.info("Loaded server %s", name)
-            except Exception:
-                logger.exception("Failed to load server %s", name)
-                self._status[name] = "error"
+
+            proxy = await self._connect_server(name, config)
+            async with self._lock:
+                if proxy is not None:
+                    self._proxies[name] = proxy
+                    self._status[name] = "connected"
+                else:
+                    self._status[name] = "error"
 
     async def register_server(self, name: str, config: dict) -> list[str]:
         """サーバー登録 + DB保存 + マウント。
@@ -63,29 +101,33 @@ class ProxyManager:
         Returns:
             プロキシ経由で利用可能なツール名のリスト。
         """
-        # DB 保存
         await self.registry.add_server(name, config)
-        self._server_configs[name] = config
+        async with self._lock:
+            self._server_configs[name] = config
+
+        if config.get("disabled"):
+            async with self._lock:
+                self._status[name] = "disabled"
+            return []
+
+        proxy = await self._connect_server(name, config)
+        if proxy is None:
+            async with self._lock:
+                self._status[name] = "error"
+            return []
 
         async with self._lock:
-            if config.get("disabled"):
-                logger.info("Server %s registered as disabled", name)
-                self._status[name] = "disabled"
-                return []
-
-            # プロキシ生成 + マウント (namespace = server_name)
-            proxy = self._create_proxy(name, config)
             self._proxies[name] = proxy
-            self.mcp.mount(proxy, namespace=name)
             self._status[name] = "connected"
 
-        # ツール一覧を取得（lock外: ネットワークI/Oを含むため）
+        # list_tools outside lock (fast network call)
         try:
             tools = await proxy.list_tools()
             return [t.name for t in tools]
         except Exception:
-            logger.warning("Could not list tools for %s (server may not be reachable)", name)
-            self._status[name] = "error"
+            logger.warning("Could not list tools for %s", name)
+            async with self._lock:
+                self._status[name] = "error"
             return []
 
     async def unregister_server(self, name: str) -> bool:
@@ -172,6 +214,106 @@ class ProxyManager:
     def get_proxy(self, name: str) -> FastMCPProxy | None:
         """プロキシインスタンスを取得。"""
         return self._proxies.get(name)
+
+    async def _health_check(self) -> None:
+        """Check all connected servers, recover failed ones."""
+        # Snapshots under lock (prevents dict mutation during iteration)
+        async with self._lock:
+            proxies_snapshot = dict(self._proxies)
+            configs_snapshot = dict(self._server_configs)
+            status_snapshot = dict(self._status)
+
+        timeout = int(os.environ.get("MCP_HUB_HEALTH_TIMEOUT", "10"))
+        to_recover: list[str] = []
+
+        for name, proxy in proxies_snapshot.items():
+            config = configs_snapshot.get(name, {})
+            if config.get("disabled"):
+                continue
+            try:
+                await asyncio.wait_for(proxy.list_tools(), timeout=timeout)
+                # Was in error → mark recovering
+                if status_snapshot.get(name) == "error":
+                    logger.info("Server %s appears reachable — attempting recovery", name)
+                    async with self._lock:
+                        self._status[name] = "recovering"
+                    to_recover.append(name)
+            except asyncio.TimeoutError:
+                logger.warning("Health check timeout for %s", name)
+                async with self._lock:
+                    self._status[name] = "error"
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                if status_snapshot.get(name) == "connected":
+                    logger.warning("Server %s health check failed", name)
+                async with self._lock:
+                    self._status[name] = "error"
+
+        # Recovery: reconnect failed servers that HAVE a proxy (outside lock for IO)
+        for name in to_recover:
+            config = configs_snapshot.get(name, {})
+            if not config:
+                continue
+            proxy = await self._connect_server(name, config)
+            async with self._lock:
+                if proxy is not None:
+                    self._proxies[name] = proxy
+                    self._status[name] = "connected"
+                    logger.info("Server %s recovered", name)
+                else:
+                    self._status[name] = "error"
+
+        # Recovery: servers that failed initial connection (status="error", no proxy in _proxies)
+        for name, config in configs_snapshot.items():
+            if config.get("disabled"):
+                continue
+            if name in proxies_snapshot:
+                continue  # already handled above
+            if status_snapshot.get(name) != "error":
+                continue
+            # Attempt initial recovery
+            logger.info("Attempting recovery for %s (never connected)", name)
+            proxy = await self._connect_server(name, config)
+            async with self._lock:
+                if proxy is not None:
+                    self._proxies[name] = proxy
+                    self._status[name] = "connected"
+                    logger.info("Server %s recovered (initial)", name)
+                # else: stays "error", will retry next interval
+
+    async def _health_monitor_loop(self, interval: int) -> None:
+        """Background loop. Never dies — exceptions are caught and logged."""
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await self._health_check()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Health monitor iteration failed — will retry")
+
+    def start_health_monitor(self, interval: int | None = None) -> None:
+        """Start background health check. Cancels any existing task first."""
+        if interval is None:
+            interval = int(os.environ.get("MCP_HUB_HEALTH_INTERVAL", "60"))
+        if interval <= 0:
+            return
+        # Cancel existing task to prevent zombie
+        if self._health_task and not self._health_task.done():
+            self._health_task.cancel()
+        self._health_task = asyncio.create_task(self._health_monitor_loop(interval))
+        logger.info("Health monitor started (interval=%ds)", interval)
+
+    async def stop_health_monitor(self) -> None:
+        """Cancel background health task. Safe to call multiple times."""
+        if self._health_task and not self._health_task.done():
+            self._health_task.cancel()
+            try:
+                await self._health_task
+            except asyncio.CancelledError:
+                pass
+        self._health_task = None
 
     def _create_proxy(self, name: str, config: dict) -> FastMCPProxy:
         """config から FastMCPProxy を生成。env変数はここで展開する。"""

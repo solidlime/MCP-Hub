@@ -19,5 +19,8 @@ dev = [
     "httpx>=0.28",
 ]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [tool.setuptools.packages.find]
 where = ["src"]
