@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
                     "disabled": config.get("disabled", False),
                     "tags": config.get("tags", []),
                     "status": proxy_manager._status.get(name, "unknown"),
-                    "tool_count": len(proxy_manager._proxies.get(name, [])),
+                    "tool_count": proxy_manager._tool_counts.get(name, 0),
                 }
             )
         return json.dumps(servers_info, indent=2, ensure_ascii=False)

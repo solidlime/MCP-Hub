@@ -35,6 +35,7 @@ class ProxyManager:
         self._proxies: dict[str, FastMCPProxy] = {}
         self._server_configs: dict[str, dict] = {}
         self._status: dict[str, str] = {}
+        self._tool_counts: dict[str, int] = {}
         self._lock = asyncio.Lock()
         self._health_task: asyncio.Task | None = None
         self._on_change_callbacks: list[Callable] = []
@@ -125,6 +126,7 @@ class ProxyManager:
         # list_tools outside lock (fast network call)
         try:
             tools = await proxy.list_tools()
+            self._tool_counts[name] = len(tools)
             result = [t.name for t in tools]
         except Exception:
             logger.warning("Could not list tools for %s", name)
@@ -145,6 +147,7 @@ class ProxyManager:
         self._proxies.pop(name, None)
         self._server_configs.pop(name, None)
         self._status.pop(name, None)
+        self._tool_counts.pop(name, None)
 
         # 再マウント: providers から全 proxy を除去して再追加
         async with self._lock:
@@ -209,6 +212,7 @@ class ProxyManager:
 
             try:
                 tools = await proxy.list_tools()
+                self._tool_counts[srv_name] = len(tools)
                 result[srv_name] = [{"name": t.name, "description": t.description or ""} for t in tools]
             except Exception:
                 logger.warning("Failed to list tools for %s", srv_name)
@@ -257,7 +261,8 @@ class ProxyManager:
             if config.get("disabled"):
                 continue
             try:
-                await asyncio.wait_for(proxy.list_tools(), timeout=timeout)
+                tools = await asyncio.wait_for(proxy.list_tools(), timeout=timeout)
+                self._tool_counts[name] = len(tools)
                 # Was in error → mark recovering
                 if status_snapshot.get(name) == "error":
                     logger.info("Server %s appears reachable — attempting recovery", name)
