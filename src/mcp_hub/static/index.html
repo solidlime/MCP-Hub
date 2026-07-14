@@ -1886,7 +1886,7 @@
                             <span>テスト</span>
                         </button>
                         <button class="btn btn-sm btn-ghost" onclick="showConnectionInfo('${server.name}')"
-                                aria-label="接続情報を表示">
+                                aria-label="接続URLをクリップボードにコピー">
                             <span aria-hidden="true">🔗</span>
                             <span>接続URL</span>
                         </button>
@@ -2016,11 +2016,6 @@
             const header = card.querySelector('.server-header');
             const isExpanded = card.classList.toggle('expanded');
             header.setAttribute('aria-expanded', isExpanded.toString());
-
-            // Load connection info when expanded
-            if (isExpanded) {
-                loadConnectionInfo(name);
-            }
         }
 
         // ============================================================
@@ -2120,56 +2115,19 @@
         // CONNECTION INFO
         // ============================================================
         async function showConnectionInfo(name) {
-            const card = document.querySelector(`[data-server="${name}"]`);
-            const section = document.getElementById(`conn-${name}`);
-            if (!section) return;
-
-            // Toggle visibility
-            if (section.style.display !== 'none') {
-                section.style.display = 'none';
-                return;
-            }
-
-            section.style.display = 'block';
-            section.innerHTML = '<div style="color: var(--text-muted); font-size: 0.75rem;">読み込み中...</div>';
-
             try {
                 const conn = await API.getConnection(name);
-                const urlInput = document.getElementById(`conn-url-${name}`) || document.createElement('input');
-                urlInput.id = `conn-url-${name}`;
-                urlInput.value = conn.url || '';
+                const url = conn.url;
 
-                section.innerHTML = `
-                    <div class="conn-label">接続情報</div>
-                    <div class="connection-url-row">
-                        <input type="text" class="connection-url-input" id="conn-url-${name}" readonly value="${escapeHtml(conn.url || '')}" aria-label="接続URL">
-                    </div>
-                    ${conn.example_header ? `<div class="connection-header-code">${escapeHtml(conn.example_header)}</div>` : ''}
-                `;
-            } catch (error) {
-                section.innerHTML = `<div style="color: var(--accent-red); font-size: 0.75rem;">接続情報の取得に失敗しました</div>`;
-            }
-        }
-
-        async function loadConnectionInfo(name) {
-            // Preload connection info when card is expanded
-            const section = document.getElementById(`conn-${name}`);
-            if (!section) return;
-
-            try {
-                const conn = await API.getConnection(name);
-                if (conn.url) {
-                    section.style.display = 'block';
-                    section.innerHTML = `
-                        <div class="conn-label">接続情報</div>
-                        <div class="connection-url-row">
-                            <input type="text" class="connection-url-input" id="conn-url-${name}" readonly value="${escapeHtml(conn.url || '')}" aria-label="接続URL">
-                        </div>
-                        ${conn.example_header ? `<div class="connection-header-code">${escapeHtml(conn.example_header)}</div>` : ''}
-                    `;
+                if (!url) {
+                    showToast('接続URLが見つかりません', 'error');
+                    return;
                 }
-            } catch (_) {
-                // Silently fail — user can click "接続URL" button to retry
+
+                await navigator.clipboard.writeText(url);
+                showToast('接続URLをコピーしました', 'success');
+            } catch (error) {
+                showToast('接続情報の取得に失敗しました', 'error');
             }
         }
 
