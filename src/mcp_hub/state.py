@@ -18,6 +18,7 @@ class _AppState:
     start_time: float = 0.0
     tool_calls_total: int = 0
     tool_call_errors: int = 0
+    mcp_dispatcher: object | None = None
 
 
 app_state = _AppState()

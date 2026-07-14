@@ -165,7 +165,7 @@ async def lifespan(app: FastAPI):
     # Wire rebuild_index to proxy changes
     proxy_manager.on_change(meta_mcp.rebuild_index)
 
-    # /mcp に動的ディスパッチャをマウント（meta_mode 設定で正常/メタモードを切替）
+    # /mcp に動的ディスパッチャをマウント
     app.mount("/mcp", MCPDispatcher(mcp_http, meta_http))
 
     # Python 3.12+ parenthesized context managers
@@ -186,13 +186,13 @@ async def lifespan(app: FastAPI):
     app_state.proxy_manager = None
 
 
+
 def create_app() -> FastAPI:
     """FastAPI アプリケーションを生成。"""
     app = FastAPI(
         title="MCP Hub Admin",
         version="0.1.0",
         lifespan=lifespan,
-        redirect_slashes=False,
     )
 
     # 管理 API ルーターをマウント
