@@ -39,26 +39,28 @@ PORT = int(os.environ.get("MCP_HUB_PORT", "26263"))
 HOST = os.environ.get("MCP_HUB_HOST", "0.0.0.0")
 
 
-def create_mcp_dispatcher(normal_app, meta_app):
-    """ASGI dispatcher: /mcp リクエストごとに meta_mode 設定を読み、適切なアプリに転送。"""
-    from .state import app_state
+class MCPDispatcher:
+    """ASGI app that dispatches to normal or meta MCP app based on meta_mode setting."""
 
-    async def _get_meta_mode():
+    def __init__(self, normal_app, meta_app):
+        self.normal_app = normal_app
+        self.meta_app = meta_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.normal_app(scope, receive, send)
+            return
+
+        from .state import app_state
+
         try:
             data = await app_state.registry._read()
-            return data.get("meta_mode", False)
+            meta_mode = data.get("meta_mode", False)
         except Exception:
-            return False
+            meta_mode = False
 
-    async def dispatcher(scope, receive, send):
-        if scope["type"] != "http":
-            await normal_app(scope, receive, send)
-            return
-        meta_mode = await _get_meta_mode()
-        target = meta_app if meta_mode else normal_app
+        target = self.meta_app if meta_mode else self.normal_app
         await target(scope, receive, send)
-
-    return dispatcher
 
 
 @asynccontextmanager
@@ -164,7 +166,7 @@ async def lifespan(app: FastAPI):
     proxy_manager.on_change(meta_mcp.rebuild_index)
 
     # /mcp に動的ディスパッチャをマウント（meta_mode 設定で正常/メタモードを切替）
-    app.mount("/mcp", create_mcp_dispatcher(mcp_http, meta_http))
+    app.mount("/mcp", MCPDispatcher(mcp_http, meta_http))
 
     # Python 3.12+ parenthesized context managers
     async with (
