@@ -95,6 +95,17 @@ class JsonStore:
                     self._data["mcpServers"] = {}
             await self._write(self._data)
 
+        # Seed meta_mode from bundled config if not yet stored
+        if "meta_mode" not in self._data:
+            bundled = self._find_bundled_default()
+            if bundled and bundled.exists():
+                bundled_data = json.loads(bundled.read_text(encoding="utf-8"))
+                if "meta_mode" in bundled_data:
+                    self._data["meta_mode"] = bundled_data["meta_mode"]
+                    await self._write(self._data)
+                    logger.info("Seeded meta_mode=%s from bundled config",
+                                bundled_data["meta_mode"])
+
         count = len(self._data.get("mcpServers", {}))
         logger.info("JsonStore initialized: %d servers at %s", count, self._path)
 
