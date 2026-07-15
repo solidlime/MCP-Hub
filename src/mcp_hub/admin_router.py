@@ -121,25 +121,34 @@ async def metrics():
 
 
 @router.get("/servers")
-async def list_servers():
+async def list_servers(include_tools: bool = True):
+    """List all servers. include_tools=True (default) returns tool names (backward compat).
+
+    Set include_tools=false for fast listing without per-server network calls.
+    """
     registry = _get_registry()
     pm = _get_proxy_manager()
 
     servers = await registry.list_servers()
-    tools_map = await pm.list_tools()
     status_map = pm.get_all_status()
+
+    if include_tools:
+        tools_map = await pm.list_tools()
+    else:
+        tools_map = {name: [] for name in [s["name"] for s in servers]}
 
     result = []
     for srv in servers:
         name = srv["name"]
         config = srv["config"]
+        tools = tools_map.get(name, [])
         info = {
             "name": name,
             "config": config,
             "disabled": config.get("disabled", False),
             "status": status_map.get(name, "unknown"),
-            "tools_count": len(tools_map.get(name, [])),
-            "tools": tools_map.get(name, []),
+            "tools_count": len(tools),
+            "tools": tools,
         }
         result.append(info)
     return {"servers": result}
