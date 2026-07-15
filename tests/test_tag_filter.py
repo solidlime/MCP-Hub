@@ -29,9 +29,9 @@ class TestTagMiddleware:
         r = client.post("/mcp?tags=web,local", json={
             "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}
         })
-        # The FastMCP sub-app is mounted during lifespan
-        # On fresh DB with no servers, tools/list returns empty but valid
-        assert r.status_code in (200, 307, 404, 405, 406)
+        # FastMCP returns 406 (Not Acceptable) for streamable-http
+        # without proper Accept header — that's expected
+        assert r.status_code == 406
 
     def test_header_override_query(self, client):
         """X-MCP-Hub-Tags header takes priority over ?tags= query param."""
@@ -40,4 +40,4 @@ class TestTagMiddleware:
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
             headers={"X-MCP-Hub-Tags": "local"}
         )
-        assert r.status_code in (200, 307, 404, 405, 406)
+        assert r.status_code == 406
