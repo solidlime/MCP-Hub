@@ -1282,6 +1282,55 @@
         }
 
         /* ============================================================
+           SETTINGS: API KEY GROUP
+           ============================================================ */
+        .setting-group {
+            margin-top: 16px;
+            padding: 18px 20px;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-subtle);
+        }
+        .setting-label {
+            font-size: 0.82rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .setting-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .setting-input {
+            flex: 1;
+            padding: 9px 14px;
+            background: var(--bg-input);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            color: var(--text-primary);
+            font-size: 0.85rem;
+            font-family: var(--font-sans);
+            transition: all var(--transition-fast);
+            outline: none;
+        }
+        .setting-input:focus {
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px var(--accent-primary-bg);
+        }
+        .setting-input::placeholder { color: var(--text-muted); }
+        .setting-hint {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            line-height: 1.5;
+            margin: 0;
+        }
+
+        /* ============================================================
            ANIMATIONS
            ============================================================ */
         .fade-in {
@@ -1521,6 +1570,20 @@
                         <span class="status-indicator" id="settingsStatusDot"></span>
                         <span id="settingsStatusText">読み込み中...</span>
                     </div>
+                </div>
+
+                <div class="setting-group">
+                    <label class="setting-label">🔑 APIキー</label>
+                    <div class="setting-row">
+                        <input type="password" id="settings-apikey" class="setting-input"
+                               placeholder="管理APIの認証に使用（空欄で無効）"
+                               aria-label="管理APIキー">
+                        <button class="btn btn-sm btn-primary" onclick="saveApiKey()">保存</button>
+                    </div>
+                    <p class="setting-hint">
+                        設定すると管理APIへのリクエストにX-API-Keyヘッダーが付与されます。
+                        空欄の場合は認証なしで動作します。
+                    </p>
                 </div>
             </div>
         </div>
@@ -2600,9 +2663,51 @@
         }
 
         // ============================================================
+        // SETTINGS: API KEY MANAGEMENT
+        // ============================================================
+        const API_KEY_STORAGE_KEY = 'mcp_hub_api_key';
+
+        function loadApiKey() {
+            const el = document.getElementById('settings-apikey');
+            if (el) el.value = localStorage.getItem(API_KEY_STORAGE_KEY) || '';
+        }
+
+        function getApiKey() {
+            return localStorage.getItem(API_KEY_STORAGE_KEY) || '';
+        }
+
+        function saveApiKey() {
+            const el = document.getElementById('settings-apikey');
+            const key = el ? el.value.trim() : '';
+            localStorage.setItem(API_KEY_STORAGE_KEY, key);
+            showToast(key ? 'APIキーを保存しました' : 'APIキーをクリアしました', 'success');
+        }
+
+        // ⚠️ SECURITY NOTE: APIキーはlocalStorageに平文保存されます。
+        // XSS脆弱性があるとキーが漏洩するリスクがあります。
+        // 運用環境ではブラウザ拡張・CDN読み込み元の管理を徹底してください。
+
+        // Inject X-API-Key into same-origin admin API calls
+        const _origFetch = window.fetch;
+        window.fetch = function(url, options = {}) {
+            const apiKey = getApiKey();
+            const urlStr = typeof url === 'string' ? url : url.toString();
+            if (apiKey && urlStr.startsWith(window.location.origin) && urlStr.includes('/admin/api/')) {
+                options.headers = options.headers || {};
+                if (options.headers instanceof Headers) {
+                    options.headers.set('X-API-Key', apiKey);
+                } else {
+                    options.headers['X-API-Key'] = apiKey;
+                }
+            }
+            return _origFetch(url, options);
+        };
+
+        // ============================================================
         // INITIALIZATION
         // ============================================================
         document.addEventListener('DOMContentLoaded', async () => {
+            loadApiKey();
             await Promise.all([loadServers(), loadSettings()]);
             await updateHealthStatus();
 
