@@ -14,6 +14,7 @@ from fastmcp.client.transports.stdio import StdioTransport
 from fastmcp.server import create_proxy
 from fastmcp.server.providers.proxy import FastMCPProxy
 
+from .env_expand import expand_env_vars
 from .store import JsonStore
 
 logger = logging.getLogger(__name__)
@@ -348,8 +349,6 @@ class ProxyManager:
 
     def _create_proxy(self, name: str, config: dict) -> FastMCPProxy:
         """config から FastMCPProxy を生成。env変数はここで展開する。"""
-        from .env_expand import expand_env_vars
-
         config = expand_env_vars(config)
         url = config.get("url")
         command = config.get("command")
