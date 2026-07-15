@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from fastmcp import FastMCP
 
 from .admin_router import router as admin_router
+from .auth import ApiKeyMiddleware
 from .config import load_config
 from .proxy_manager import ProxyManager
 from .store import JsonStore
@@ -194,6 +195,9 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    # X-API-Key 認証ミドルウェア (MCP_HUB_API_KEY 環境変数で有効化)
+    app.add_middleware(ApiKeyMiddleware)
 
     # 管理 API ルーターをマウント
     app.include_router(admin_router)
