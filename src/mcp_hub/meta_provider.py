@@ -250,10 +250,20 @@ class MetaTools:
         return await self._execute_tool(server, tool_name, arguments)
 
 
+class MetaApp:
+    """Wrapper exposing FastMCP app with clean attribute interface."""
+
+    def __init__(self, mcp: FastMCP, index: ToolIndex, meta: MetaTools, rebuild_fn):
+        self.mcp = mcp
+        self.index = index
+        self.meta_tools = meta
+        self.rebuild_index = rebuild_fn
+
+
 def create_meta_app(
     proxy_manager,  # ProxyManager instance
-) -> FastMCP:
-    """Create a FastMCP app with meta-tools."""
+) -> MetaApp:
+    """Create a MetaApp with meta-tools."""
     mcp = FastMCP("MCP Hub Meta")
     index = ToolIndex()
 
@@ -283,11 +293,11 @@ def create_meta_app(
     @mcp.tool()
     async def search_tools(query: str, top_k: int = 10) -> str:
         """Search across all upstream server tools by keyword or capability.
-        
+
         Returns matching tools with their full inputSchema — use execute_tool
         directly with the returned server/name and inputSchema parameters.
         Always search first before trying to use any tool.
-        
+
         Args:
             query: Natural language description of what you want to do
             top_k: Maximum number of results to return (default 10)
@@ -297,10 +307,10 @@ def create_meta_app(
     @mcp.tool()
     async def get_tool_schema(server: str, tool_name: str) -> str:
         """Get the full input schema for a specific tool on a specific server.
-        
+
         Always call this after search_tools to learn the exact parameters needed
         before calling execute_tool.
-        
+
         Args:
             server: Server name from search_tools results
             tool_name: Tool name from search_tools results
@@ -310,7 +320,7 @@ def create_meta_app(
     @mcp.tool()
     async def execute_tool(server: str, tool_name: str, arguments: dict[str, Any]) -> Any:
         """Execute a tool on any upstream server.
-        
+
         Args:
             server: Server name from search_tools results
             tool_name: Tool name from search_tools results (use get_tool_schema first)
@@ -318,9 +328,4 @@ def create_meta_app(
         """
         return await meta.execute_tool(server, tool_name, arguments)
 
-    # Rebuild index after server changes
-    mcp._index = index
-    mcp._meta = meta
-    mcp.rebuild_index = rebuild_index
-
-    return mcp
+    return MetaApp(mcp=mcp, index=index, meta=meta, rebuild_fn=rebuild_index)

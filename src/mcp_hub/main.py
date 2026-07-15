@@ -201,7 +201,8 @@ async def lifespan(app: FastAPI):
     # === meta app (Progressive Discovery, used when meta_mode=True) ===
     from .meta_provider import create_meta_app
 
-    meta_mcp = create_meta_app(proxy_manager)
+    meta_app = create_meta_app(proxy_manager)
+    meta_mcp = meta_app.mcp
     meta_http = meta_mcp.http_app(transport="streamable-http", path="/")
 
     meta_inner_app: StreamableHTTPASGIApp | None = None
@@ -219,10 +220,10 @@ async def lifespan(app: FastAPI):
     meta_inner_app.session_manager = meta_sm
 
     # Rebuild index after initial load
-    await meta_mcp.rebuild_index()
+    await meta_app.rebuild_index()
 
     # Wire rebuild_index to proxy changes
-    proxy_manager.on_change(meta_mcp.rebuild_index)
+    proxy_manager.on_change(meta_app.rebuild_index)
 
     # /mcp に動的ディスパッチャをマウント
     dispatcher = MCPDispatcher(mcp_http, meta_http, sm, meta_sm)
