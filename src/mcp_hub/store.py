@@ -27,15 +27,20 @@ class JsonStore:
         self._lock = asyncio.Lock()
         self._data: dict = {}
 
+    def _do_read(self) -> dict:
+        """Actual file read (no lock). Caller must handle synchronization."""
+        if not self._path.exists():
+            return {"version": 1, "log_level": "info", "mcpServers": {}}
+        return json.loads(self._path.read_text(encoding="utf-8"))
+
     async def _read(self) -> dict:
-        """Read config from file (via thread to not block event loop)."""
+        """Thread-safe read from file. Protected by lock."""
+        async with self._lock:
+            return await asyncio.to_thread(self._do_read)
 
-        def _do():
-            if not self._path.exists():
-                return {"version": 1, "log_level": "info", "mcpServers": {}}
-            return json.loads(self._path.read_text(encoding="utf-8"))
-
-        return await asyncio.to_thread(_do)
+    async def _read_locked(self) -> dict:
+        """Read from file. Caller must hold self._lock. Avoids double-acquire."""
+        return await asyncio.to_thread(self._do_read)
 
     async def _write_internal(self, data: dict) -> None:
         """Write data to file. No lock — caller must hold self._lock."""
@@ -139,34 +144,38 @@ class JsonStore:
 
     async def _add_or_update(self, name: str, config: dict) -> None:
         """Internal: add or update a server in JSON, then atomic write."""
-        self._data = await self._read()
-        servers = self._data.setdefault("mcpServers", {})
-        servers[name] = dict(config)
-        await self._write(self._data)
+        async with self._lock:
+            data = await self._read_locked()
+            servers = data.setdefault("mcpServers", {})
+            servers[name] = dict(config)
+            await self._write_internal(data)
 
     async def add_server(self, name: str, config: dict) -> None:
         await self._add_or_update(name, config)
 
     async def update_server(self, name: str, config: dict) -> bool:
-        self._data = await self._read()
-        if name not in self._data.get("mcpServers", {}):
-            return False
-        await self._add_or_update(name, config)
+        async with self._lock:
+            data = await self._read_locked()
+            if name not in data.get("mcpServers", {}):
+                return False
+            data["mcpServers"][name] = dict(config)
+            await self._write_internal(data)
         return True
 
     async def remove_server(self, name: str) -> bool:
-        self._data = await self._read()
-        servers = self._data.get("mcpServers", {})
-        if name not in servers:
-            return False
-        del servers[name]
-        await self._write(self._data)
+        async with self._lock:
+            data = await self._read_locked()
+            servers = data.get("mcpServers", {})
+            if name not in servers:
+                return False
+            del servers[name]
+            await self._write_internal(data)
         return True
 
     async def set_meta_mode(self, enabled: bool) -> None:
         """Atomically update meta_mode. Uses lock to prevent read-modify-write races."""
         async with self._lock:
-            data = await self._read()
+            data = await self._read_locked()
             data["meta_mode"] = enabled
             await self._write_internal(data)
 
