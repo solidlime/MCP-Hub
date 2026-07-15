@@ -23,6 +23,9 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "integration: slow integration tests that need real processes",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
