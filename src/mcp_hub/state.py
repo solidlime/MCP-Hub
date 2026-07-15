@@ -7,13 +7,13 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .proxy_manager import ProxyManager
-    from .registry import SqliteStore
+    from .store import JsonStore
 
 request_tags: ContextVar[list[str] | None] = ContextVar("request_tags", default=None)
 
 
 class _AppState:
-    registry: SqliteStore | None = None
+    registry: JsonStore | None = None
     proxy_manager: ProxyManager | None = None
     start_time: float = 0.0
     tool_calls_total: int = 0
