@@ -263,15 +263,18 @@ class JsonFormatter(logging.Formatter):
     """JSON 構造化ログフォーマッター。"""
 
     def format(self, record: logging.LogRecord) -> str:
-        return json.dumps(
-            {
-                "timestamp": datetime.now(UTC).isoformat(),
-                "level": record.levelname,
-                "logger": record.name,
-                "message": record.getMessage(),
-            },
-            ensure_ascii=False,
-        )
+        import traceback
+        log_entry = {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[1]:
+            log_entry["exception"] = "".join(
+                traceback.format_exception(*record.exc_info)
+            )
+        return json.dumps(log_entry, ensure_ascii=False)
 
 
 def main():
