@@ -12,6 +12,14 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .state import app_state
+from .validators import (
+    ValidationError,
+    validate_command,
+    validate_url,
+    validate_args,
+    validate_env,
+    validate_server_config,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,9 +168,6 @@ async def register_server(body: RegisterRequest):
     registry = _get_registry()
     pm = _get_proxy_manager()
 
-    if not body.name.strip():
-        raise HTTPException(status_code=422, detail="Server name must not be empty")
-
     existing = await registry.get_server(body.name)
     if existing:
         raise HTTPException(
@@ -171,11 +176,10 @@ async def register_server(body: RegisterRequest):
         )
 
     config = body.config.model_dump_for_config()
-    if not config.get("url") and not config.get("command"):
-        raise HTTPException(
-            status_code=422,
-            detail="Either 'url' or 'command' is required",
-        )
+    try:
+        config = validate_server_config(body.name, config)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
     try:
         tool_names = await pm.register_server(body.name, config)
@@ -205,6 +209,22 @@ async def patch_server(name: str, body: ServerConfig):
     # 部分更新: 送信されたフィールドのみ既存 config にマージ
     updates = body.model_dump(exclude_unset=True)
     merged_config = existing["config"] | updates
+
+    # Partial validation for PATCH (may not have both url/command)
+    if "url" in merged_config and merged_config["url"]:
+        try:
+            merged_config["url"] = validate_url(merged_config["url"])
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    if "command" in merged_config and merged_config["command"]:
+        try:
+            merged_config["command"] = validate_command(merged_config["command"])
+            if "args" in merged_config:
+                merged_config["args"] = validate_args(merged_config["args"])
+            if "env" in merged_config:
+                merged_config["env"] = validate_env(merged_config["env"])
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
 
     # 恒久化
     await registry.update_server(name, merged_config)
