@@ -169,3 +169,9 @@ class JsonStore:
             data = await self._read()
             data["meta_mode"] = enabled
             await self._write_internal(data)
+
+        # Invalidate dispatcher cache (safe if dispatcher not yet initialized)
+        from .state import app_state
+        dispatcher = getattr(app_state, 'mcp_dispatcher', None)
+        if dispatcher is not None:
+            dispatcher.invalidate_cache()

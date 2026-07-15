@@ -14,6 +14,7 @@ MCP Hub - MCPプロキシ + 管理Web UI
   MCP_HUB_LOG       : "json" でJSON形式ログ出力
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -41,26 +42,62 @@ HOST = os.environ.get("MCP_HUB_HOST", "0.0.0.0")
 
 
 class MCPDispatcher:
-    """ASGI app that dispatches to normal or meta MCP app based on meta_mode setting."""
+    """ASGI dispatcher with cached meta_mode. Call invalidate_cache() after toggling."""
 
-    def __init__(self, normal_app, meta_app):
+    def __init__(self, normal_app, meta_app, normal_sm=None, meta_sm=None):
         self.normal_app = normal_app
         self.meta_app = meta_app
+        self._cached_meta_mode: bool | None = None
+        import asyncio
+        self._cleanup_task = asyncio.create_task(self._session_cleanup_loop())
+        self._shutdown = False
+
+    def invalidate_cache(self):
+        self._cached_meta_mode = None
+
+    async def shutdown(self):
+        """Cancel background cleanup task. Call during lifespan cleanup."""
+        self._shutdown = True
+        if hasattr(self, '_cleanup_task'):
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.exceptions.CancelledError:
+                pass
+
+    async def _session_cleanup_loop(self):
+        """Every 5 minutes, trim sessions on the inactive side."""
+        import asyncio
+        while not self._shutdown:
+            try:
+                await asyncio.sleep(300)
+            except asyncio.CancelledError:
+                break
+            try:
+                if hasattr(self, '_last_active_side'):
+                    if self._last_active_side == 'normal':
+                        if hasattr(self, '_normal_sm') and hasattr(self._normal_sm, '_cleanup_stale'):
+                            await self._normal_sm._cleanup_stale()
+                    elif self._last_active_side == 'meta':
+                        if hasattr(self, '_meta_sm') and hasattr(self._meta_sm, '_cleanup_stale'):
+                            await self._meta_sm._cleanup_stale()
+            except Exception:
+                pass
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             await self.normal_app(scope, receive, send)
             return
 
-        from .state import app_state
+        if self._cached_meta_mode is None:
+            from .state import app_state
+            try:
+                data = await app_state.registry._read()
+                self._cached_meta_mode = data.get("meta_mode", False)
+            except Exception:
+                self._cached_meta_mode = False
 
-        try:
-            data = await app_state.registry._read()
-            meta_mode = data.get("meta_mode", False)
-        except Exception:
-            meta_mode = False
-
-        target = self.meta_app if meta_mode else self.normal_app
+        target = self.meta_app if self._cached_meta_mode else self.normal_app
         await target(scope, receive, send)
 
 
@@ -167,7 +204,9 @@ async def lifespan(app: FastAPI):
     proxy_manager.on_change(meta_mcp.rebuild_index)
 
     # /mcp に動的ディスパッチャをマウント
-    app.mount("/mcp", MCPDispatcher(mcp_http, meta_http))
+    dispatcher = MCPDispatcher(mcp_http, meta_http)
+    app_state.mcp_dispatcher = dispatcher
+    app.mount("/mcp", dispatcher)
 
     # Python 3.12+ parenthesized context managers
     async with (
