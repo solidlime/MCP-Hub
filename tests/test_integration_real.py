@@ -1,6 +1,5 @@
 """Smoke tests with real ASGI app lifecycle. No mocks."""
 import asyncio
-import os
 import pytest
 from httpx import ASGITransport, AsyncClient
 from src.mcp_hub.main import create_app

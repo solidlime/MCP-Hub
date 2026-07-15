@@ -3,7 +3,7 @@ Tag filter tests — verify that tag_middleware and ProxyManager filtering work.
 """
 import pytest
 from fastapi.testclient import TestClient
-from mcp_hub.main import create_app, request_tags
+from mcp_hub.main import create_app
 
 
 @pytest.fixture

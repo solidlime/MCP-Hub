@@ -1,6 +1,6 @@
 import json
 import pytest
-from mcp_hub.config import load_config, HubConfig
+from mcp_hub.config import load_config
 
 
 class TestLoadConfig:

@@ -311,10 +311,10 @@ class ProxyManager:
             async with self._lock:
                 if name in self._refreshing:
                     continue  # skip — refresh_server is handling it
-            proxy = await self._connect_server(name, config)
+            new_proxy = await self._connect_server(name, config)
             async with self._lock:
-                if proxy is not None:
-                    self._proxies[name] = proxy
+                if new_proxy is not None:
+                    self._proxies[name] = new_proxy
                     self._status[name] = "connected"
                     logger.info("Server %s recovered", name)
                 else:
@@ -333,10 +333,10 @@ class ProxyManager:
                     continue  # skip — refresh_server is handling it
             # Attempt initial recovery
             logger.info("Attempting recovery for %s (never connected)", name)
-            proxy = await self._connect_server(name, config)
+            new_proxy = await self._connect_server(name, config)
             async with self._lock:
-                if proxy is not None:
-                    self._proxies[name] = proxy
+                if new_proxy is not None:
+                    self._proxies[name] = new_proxy
                     self._status[name] = "connected"
                     logger.info("Server %s recovered (initial)", name)
                 # else: stays "error", will retry next interval

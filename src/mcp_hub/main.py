@@ -186,8 +186,8 @@ async def lifespan(app: FastAPI):
 
     inner_app: StreamableHTTPASGIApp | None = None
     for route in mcp_http.routes:
-        if isinstance(getattr(route, "endpoint", None), StreamableHTTPASGIApp):
-            inner_app = route.endpoint
+        if isinstance(getattr(route, "endpoint", None), StreamableHTTPASGIApp):  # type: ignore[attr-defined]
+            inner_app = route.endpoint  # type: ignore[attr-defined]
             break
 
     if inner_app is None:
@@ -207,8 +207,8 @@ async def lifespan(app: FastAPI):
 
     meta_inner_app: StreamableHTTPASGIApp | None = None
     for route in meta_http.routes:
-        if isinstance(getattr(route, "endpoint", None), StreamableHTTPASGIApp):
-            meta_inner_app = route.endpoint
+        if isinstance(getattr(route, "endpoint", None), StreamableHTTPASGIApp):  # type: ignore[attr-defined]
+            meta_inner_app = route.endpoint  # type: ignore[attr-defined]
             break
 
     if meta_inner_app is None:
