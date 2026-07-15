@@ -38,6 +38,7 @@ class ProxyManager:
         self._status: dict[str, str] = {}
         self._tool_counts: dict[str, int] = {}
         self._lock = asyncio.Lock()
+        self._rebuilding: bool = False  # Protected by self._lock
         self._health_task: asyncio.Task | None = None
         self._on_change_callbacks: list[Callable] = []
 
@@ -221,13 +222,26 @@ class ProxyManager:
 
         return result
 
-    async def call_tool(self, server_name: str, tool_name: str, arguments: dict) -> Any:
-        """ツール実行。"""
-        proxy = self._proxies.get(server_name)
-        if not proxy:
+    async def call_tool(self, server_name: str, tool_name: str,
+                        arguments: dict, retries: int = 3) -> Any:
+        """ツール実行。TOCTOU回避のため _rebuild_mounts と lock で調整。"""
+        import asyncio
+
+        for attempt in range(retries):
+            proxy = None
+            async with self._lock:
+                if not self._rebuilding:
+                    proxy = self._proxies.get(server_name)
+            if proxy is not None:
+                break
+            if attempt < retries - 1:
+                await asyncio.sleep(0.05)
+        else:
+            raise RuntimeError("Server mounts are being rebuilt, retry shortly")
+
+        if proxy is None:
             raise ValueError(f"Server {server_name!r} not found")
-        result = await proxy.call_tool(tool_name, arguments)
-        return result
+        return await proxy.call_tool(tool_name, arguments)
 
     def on_change(self, callback: Callable) -> None:
         """Register a callback invoked after server add/remove/refresh."""
@@ -365,14 +379,18 @@ class ProxyManager:
 
     async def _rebuild_mounts(self) -> None:
         """全プロキシを再マウント（追加/削除後の整合性確保）。
-        
+
         NOTE: Callers must hold self._lock when calling this method.
         """
         # NOTE: self.mcp.providers and self.mcp.local_provider are FastMCP
         # internal/private APIs. These may break across FastMCP minor
         # version updates. FastMCP is pinned to <3.5.0 in pyproject.toml.
-        self.mcp.providers = [self.mcp.local_provider]
+        self._rebuilding = True
+        try:
+            self.mcp.providers = [self.mcp.local_provider]
 
-        # 全 proxy を再マウント
-        for srv_name, proxy in self._proxies.items():
-            self.mcp.mount(proxy, namespace=srv_name)
+            # 全 proxy を再マウント
+            for srv_name, proxy in self._proxies.items():
+                self.mcp.mount(proxy, namespace=srv_name)
+        finally:
+            self._rebuilding = False
