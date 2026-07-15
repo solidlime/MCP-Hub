@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+import fastmcp
 from fastmcp import FastMCP
 
 from .admin_router import router as admin_router
@@ -120,6 +121,23 @@ async def lifespan(app: FastAPI):
     logger.info("Registry initialized")
 
     mcp_server = FastMCP("MCP Hub")
+
+    # Check FastMCP version compatibility
+    import sys
+
+    try:
+        from packaging import version as _v
+
+        _fver = _v.parse(fastmcp.__version__)
+        if _fver >= _v.parse("3.5.0"):
+            logger.critical(
+                "FastMCP %s is incompatible (tested against <3.5.0). Refusing startup.",
+                fastmcp.__version__,
+            )
+            sys.exit(1)
+    except ImportError:
+        logger.warning("Cannot check FastMCP version — packaging not installed")
+
     proxy_manager = ProxyManager(mcp_server, registry)
 
     # 共有状態にセット（admin_router から参照可能に）
