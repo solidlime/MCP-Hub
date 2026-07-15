@@ -92,7 +92,7 @@ jobs:
 
   # ── Docker Build & Push ───────────────────────────────────────
   docker:
-    needs: test
+    needs: [test, lint]
     # Build always (verification), push only on main / workflow_dispatch
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -131,6 +131,46 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          load: true
+
+      - name: Smoke test with docker compose
+        run: |
+          # Override image and volume for CI
+          cat > docker-compose.ci.yml << 'YAML'
+          services:
+            mcp-hub:
+              image: ${{ steps.meta.outputs.tags }}
+              volumes:
+                - /tmp/mcp-hub-ci-data:/data
+          YAML
+
+          mkdir -p /tmp/mcp-hub-ci-data
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+
+          # Wait for healthy
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:26263/admin/api/health | grep -q '"status":"ok"'; then
+              echo "✅ Healthy after ${i}s"
+              break
+            fi
+            if [ "$i" -eq 60 ]; then
+              echo "❌ Health check timeout"
+              docker compose -f docker-compose.yml -f docker-compose.ci.yml logs
+              exit 1
+            fi
+            sleep 1
+          done
+
+          # Verify no ERROR in logs
+          if docker compose -f docker-compose.yml -f docker-compose.ci.yml logs 2>&1 | grep -i "ERROR"; then
+            echo "❌ ERROR found in logs"
+            exit 1
+          fi
+          echo "✅ No errors in logs"
+
+          docker compose -f docker-compose.yml -f docker-compose.ci.yml down
+          rm -rf /tmp/mcp-hub-ci-data
+          rm docker-compose.ci.yml
 
       - name: Report results
         if: always()
