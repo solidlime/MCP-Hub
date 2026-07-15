@@ -39,6 +39,7 @@ class ProxyManager:
         self._tool_counts: dict[str, int] = {}
         self._lock = asyncio.Lock()
         self._rebuilding: bool = False  # Protected by self._lock
+        self._refreshing: set[str] = set()  # Protected by self._lock
         self._health_task: asyncio.Task | None = None
         self._on_change_callbacks: list[Callable] = []
 
@@ -162,33 +163,39 @@ class ProxyManager:
     async def refresh_server(self, name: str, config: dict) -> None:
         """プロキシの再生成 + 設定更新。disable 時はアンマウントのみ。"""
         async with self._lock:
-            self._server_configs[name] = config
-            self._status[name] = "disabled" if config.get("disabled") else "connected"
+            self._refreshing.add(name)
+        try:
+            async with self._lock:
+                self._server_configs[name] = config
+                self._status[name] = "disabled" if config.get("disabled") else "connected"
 
-            # 古い proxy をアンマウント
-            old_proxy = self._proxies.pop(name, None)
-            if old_proxy:
-                await self._rebuild_mounts()
+                # 古い proxy をアンマウント
+                old_proxy = self._proxies.pop(name, None)
+                if old_proxy:
+                    await self._rebuild_mounts()
 
-            # disabled なら再生成しない
-            if config.get("disabled"):
-                logger.info("Server %s is disabled, not mounting", name)
-                for cb in self._on_change_callbacks:
-                    await cb()
-                return
+                # disabled なら再生成しない
+                if config.get("disabled"):
+                    logger.info("Server %s is disabled, not mounting", name)
+                    for cb in self._on_change_callbacks:
+                        await cb()
+                    return
 
-            try:
-                proxy = self._create_proxy(name, config)
-                self._proxies[name] = proxy
-                self.mcp.mount(proxy, namespace=name)
-                self._status[name] = "connected"
-                logger.info("Refreshed server %s", name)
-            except Exception:
-                logger.exception("Failed to refresh server %s", name)
-                self._status[name] = "error"
+                try:
+                    proxy = self._create_proxy(name, config)
+                    self._proxies[name] = proxy
+                    self.mcp.mount(proxy, namespace=name)
+                    self._status[name] = "connected"
+                    logger.info("Refreshed server %s", name)
+                except Exception:
+                    logger.exception("Failed to refresh server %s", name)
+                    self._status[name] = "error"
 
-        for cb in self._on_change_callbacks:
-            await cb()
+            for cb in self._on_change_callbacks:
+                await cb()
+        finally:
+            async with self._lock:
+                self._refreshing.discard(name)
 
     def get_all_status(self) -> dict[str, str]:
         """全サーバーのステータス一覧。"""
@@ -301,6 +308,9 @@ class ProxyManager:
             config = configs_snapshot.get(name, {})
             if not config:
                 continue
+            async with self._lock:
+                if name in self._refreshing:
+                    continue  # skip — refresh_server is handling it
             proxy = await self._connect_server(name, config)
             async with self._lock:
                 if proxy is not None:
@@ -318,6 +328,9 @@ class ProxyManager:
                 continue  # already handled above
             if status_snapshot.get(name) != "error":
                 continue
+            async with self._lock:
+                if name in self._refreshing:
+                    continue  # skip — refresh_server is handling it
             # Attempt initial recovery
             logger.info("Attempting recovery for %s (never connected)", name)
             proxy = await self._connect_server(name, config)
