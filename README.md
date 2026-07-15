@@ -44,6 +44,19 @@ python -m mcp_hub.main
 | `MCP_HUB_DATA_DIR` | `data` | 設定 + DB の保存ディレクトリ |
 | `MCP_HUB_LOG` | `text` | `json` でJSON構造化ログ |
 | `MCP_HUB_RESEED` | — | `1` でDBクリア+設定から再シード |
+| `MCP_HUB_API_KEY` | — | 管理APIの認証キー（未設定時は認証無効） |
+
+### 管理API認証
+
+`MCP_HUB_API_KEY` を設定すると、`/admin/api/*` へのリクエストに `X-API-Key` ヘッダーが必須になる。ヘルスチェックエンドポイント (`/admin/api/health`) は認証免除。
+
+```bash
+# 認証なし — 401
+curl http://localhost:26263/admin/api/servers
+
+# 認証あり — 200
+curl http://localhost:26263/admin/api/servers -H "X-API-Key: your-secret"
+```
 
 ## タグフィルタリング
 
@@ -76,6 +89,12 @@ docker run -p 26263:26263 mcp-hub
 - `/admin/api/servers` — サーバー一覧・管理API
 - `/admin/api/servers/{name}/connection` — サーバー接続情報
 - `/admin/api/metrics` — Hubメトリクス
+
+### `GET /admin/api/servers` パラメータ
+
+| パラメータ | 型 | デフォルト | 説明 |
+|-----------|-----|-----------|------|
+| `include_tools` | bool | `true` | ツール一覧を含めるか。`false` でレスポンスサイズ ~90%削減 |
 
 ## Metrics
 
@@ -131,6 +150,20 @@ FastMCPのResource機構で `hub://servers` が利用可能。接続サーバー
 export OPENROUTER_API_KEY='sk-or-v1-...'
 python .benchmarks/meta_mode_benchmark.py
 ```
+
+## セキュリティ
+
+### 入力検証
+
+管理者API経由で登録されるサーバー設定は自動検証される:
+
+- **コマンド**: `$()`（サブシェル実行）、`;`, `|`, `` ` ``（シェルメタ文字）をブロック。`${VAR}` テンプレートは許可
+- **URL**: `http`/`https` スキームのみ許可（file://, gopher:// 等は拒否）
+- **環境変数**: `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH` 等の危険な変数上書きをブロック
+
+### バージョンガード
+
+非互換な FastMCP >=3.5.0 での起動を `sys.exit(1)` で拒否する。
 
 ## 制限事項
 

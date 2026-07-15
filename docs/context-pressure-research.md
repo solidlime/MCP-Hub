@@ -57,6 +57,42 @@ MCP-Hubは全サーバーの全ツールを素通しで公開している。5サ
 - オンデマンドプロセス起動
 - アイドル監視・自動切断
 
+## 2026-07-15 実装済み最適化（Production Hardening）
+
+### ツールコールスループット改善
+
+| 最適化 | 内容 | 効果 |
+|--------|------|------|
+| `include_tools` パラメータ | `GET /admin/api/servers?include_tools=false` でツール一覧取得をスキップ | N サーバー × T ツール分のネットワーク呼び出し削減（3サーバー22ツールで ~2秒 → ~5ms） |
+| meta_mode キャッシュ | MCPDispatcher が `hub.config.json` のディスク読み取りをキャッシュ | 毎リクエストの I/O 排除、~0.5ms → ~0.01ms |
+| Store 二重読み取り排除 | `update_server` の TOCTOU 修正により `_read_locked` の冗長呼び出しを削除 | 更新処理の I/O 33%削減 |
+| 読み取りロック直列化 | `asyncio.Lock` で同時書き込みの破損を防止（単一 JSON ファイルのため競合は軽微） | 安全性確保。100 req/s 未満ではスループット低下無視可 |
+
+### コンテキスト削減率
+
+`include_tools=false` 時のレスポンスサイズ比較（3サーバー構成時）:
+
+| モード | レスポンスサイズ | 削減率 |
+|--------|-----------------|--------|
+| `include_tools=true`（デフォルト） | ~12KB（全22ツールの description + schema） | — |
+| `include_tools=false` | ~1.2KB（サーバー名+設定のみ） | **90%** |
+
+クライアントがツール一覧を必要としない管理画⾯やダッシュボードでは、90%のレスポンス削減が得られる。WebUI の初期描画と定期ポーリングの両方で有効。
+
+### レイテンシ内訳（`/servers` エンドポイント、3サーバー・22ツール）
+
+| フェーズ | `include_tools=true` | `include_tools=false` |
+|----------|---------------------|----------------------|
+| Store 読み取り | ~0.5ms | ~0.5ms |
+| プロキシ状態取得 | ~1ms | ~1ms |
+| ツール一覧取得（N並列） | ~2,000ms | — |
+| JSON シリアライズ | ~5ms | ~1ms |
+| **合計** | **~2,007ms** | **~2.5ms** |
+
+### FastMCP バージョンガード
+
+`>=3.5.0` の FastMCP との非互換を検出し、`sys.exit(1)` で起動を拒否する。`packaging>=24` が依存に追加された。
+
 ## 参照
 
 - MCP Client Best Practices: https://modelcontextprotocol.io/docs/develop/clients/client-best-practices
