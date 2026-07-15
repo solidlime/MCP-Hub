@@ -95,18 +95,19 @@ async def meta_app():
         [t for t in SAMPLE_TOOLS if "puppeteer" in t.name]
     )
 
-    meta_mcp = create_meta_app(pm)
+    meta_app = create_meta_app(pm)
+    meta_mcp = meta_app.mcp
     meta_http = meta_mcp.http_app(
         transport="streamable-http", path="/", stateless_http=True
     )
 
     # Populate the index from mock proxies
-    await meta_mcp.rebuild_index()
+    await meta_app.rebuild_index()
 
     app = FastAPI(lifespan=meta_http.lifespan)
     app.mount("/mcp-meta", meta_http)
 
-    app.state.meta_mcp = meta_mcp
+    app.state.meta_app = meta_app
     app.state.meta_http = meta_http
     return app
 
