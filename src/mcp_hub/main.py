@@ -48,7 +48,10 @@ class MCPDispatcher:
     def __init__(self, normal_app, meta_app, normal_sm=None, meta_sm=None):
         self.normal_app = normal_app
         self.meta_app = meta_app
+        self._normal_sm = normal_sm
+        self._meta_sm = meta_sm
         self._cached_meta_mode: bool | None = None
+        self._last_active_side: str | None = None
         import asyncio
         self._cleanup_task = asyncio.create_task(self._session_cleanup_loop())
         self._shutdown = False
@@ -222,7 +225,7 @@ async def lifespan(app: FastAPI):
     proxy_manager.on_change(meta_mcp.rebuild_index)
 
     # /mcp に動的ディスパッチャをマウント
-    dispatcher = MCPDispatcher(mcp_http, meta_http)
+    dispatcher = MCPDispatcher(mcp_http, meta_http, sm, meta_sm)
     app_state.mcp_dispatcher = dispatcher
     app.mount("/mcp", dispatcher)
 
@@ -238,6 +241,7 @@ async def lifespan(app: FastAPI):
         yield
 
     # --- 終了処理 ---
+    await dispatcher.shutdown()
     await proxy_manager.stop_health_monitor()
     logger.info("MCP Hub shutting down")
     app_state.registry = None
