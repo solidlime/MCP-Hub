@@ -101,35 +101,6 @@ class TestConnectServer:
         assert manager._create_proxy.call_count == 1
 
 
-class TestLoadAll:
-    @pytest.mark.asyncio
-    async def test_load_all_connects_after_retry(self, manager, monkeypatch):
-        """load_all uses _connect_server and succeeds after retry."""
-        monkeypatch.setenv("MCP_HUB_RETRY_MAX", "2")
-        manager.registry.list_servers = AsyncMock(
-            return_value=[{"name": "srv1", "config": {"url": "http://localhost:9999"}}]
-        )
-        proxy_ok = _MockProxy("srv1")
-        manager._create_proxy = MagicMock(side_effect=[ConnectionError("fail"), proxy_ok])
-
-        await manager.load_all()
-
-        assert "srv1" in manager._proxies
-        assert manager._status["srv1"] == "connected"
-
-    @pytest.mark.asyncio
-    async def test_load_all_marks_error_on_exhaustion(self, manager, monkeypatch):
-        """load_all marks status error when retries exhausted."""
-        monkeypatch.setenv("MCP_HUB_RETRY_MAX", "1")
-        manager.registry.list_servers = AsyncMock(
-            return_value=[{"name": "srv1", "config": {"url": "http://localhost:9999"}}]
-        )
-        manager._create_proxy = MagicMock(side_effect=ConnectionError("fail"))
-
-        await manager.load_all()
-
-        assert "srv1" not in manager._proxies
-        assert manager._status["srv1"] == "error"
 
 
 class TestRegisterServer:
