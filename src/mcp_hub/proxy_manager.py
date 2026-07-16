@@ -42,6 +42,11 @@ class ProxyManager:
         self._refreshing: set[str] = set()  # Protected by self._lock
         self._health_task: asyncio.Task | None = None
         self._on_change_callbacks: list[Callable] = []
+        self._rebuild_complete = asyncio.Event()
+        self._rebuild_complete.set()  # initially not rebuilding
+        # Concurrency cap for tool calls (prevents DoS via unlimited process/connection spawn)
+        _max_calls = int(os.environ.get("MCP_HUB_MAX_CONCURRENT_CALLS", "50"))
+        self._call_semaphore = asyncio.Semaphore(_max_calls)
 
     @staticmethod
     def _retry_env() -> tuple[int, float]:
@@ -76,13 +81,38 @@ class ProxyManager:
                 break
         return None
 
+    async def _connect_and_mount(self, name: str, config: dict) -> None:
+        """Single-shot connect + mount (no retry). Used by load_all() for
+        non-blocking startup.  Failed connections are left as 'error' for the
+        health monitor to recover."""
+        try:
+            proxy = self._create_proxy(name, config)
+            async with self._lock:
+                self.mcp.mount(proxy, namespace=name)
+                self._proxies[name] = proxy
+                self._status[name] = "connected"
+            logger.info("Server %s connected (background)", name)
+        except Exception:
+            logger.warning(
+                "Server %s failed initial connection — health monitor will retry",
+                name, exc_info=True,
+            )
+            async with self._lock:
+                self._status[name] = "error"
+
     async def load_all(self) -> None:
-        """DB から全サーバーを読み込んでマウント。"""
+        """DB から全サーバーをバックグラウンドで読み込んでマウント。
+
+        起動時のブロッキングを避けるため、各サーバー接続は
+        asyncio.create_task で起動し即座に return する。
+        失敗した接続はヘルスモニターがリカバリする。
+        """
         servers = await self.registry.list_servers()
         if not servers:
             logger.info("No servers to load from DB")
             return
 
+        launched = 0
         for srv in servers:
             name = srv["name"]
             config = srv["config"]
@@ -93,13 +123,12 @@ class ProxyManager:
                     self._status[name] = "disabled"
                 continue
 
-            proxy = await self._connect_server(name, config)
             async with self._lock:
-                if proxy is not None:
-                    self._proxies[name] = proxy
-                    self._status[name] = "connected"
-                else:
-                    self._status[name] = "error"
+                self._status[name] = "connecting"
+            asyncio.create_task(self._connect_and_mount(name, config))
+            launched += 1
+
+        logger.info("Launched %d server connections in background", launched)
 
     async def register_server(self, name: str, config: dict) -> list[str]:
         """サーバー登録 + DB保存 + マウント。
@@ -129,7 +158,8 @@ class ProxyManager:
         # list_tools outside lock (fast network call)
         try:
             tools = await proxy.list_tools()
-            self._tool_counts[name] = len(tools)
+            async with self._lock:
+                self._tool_counts[name] = len(tools)
             result = [t.name for t in tools]
         except Exception:
             logger.warning("Could not list tools for %s", name)
@@ -147,13 +177,11 @@ class ProxyManager:
         if not existed:
             return False
 
-        self._proxies.pop(name, None)
-        self._server_configs.pop(name, None)
-        self._status.pop(name, None)
-        self._tool_counts.pop(name, None)
-
-        # 再マウント: providers から全 proxy を除去して再追加
         async with self._lock:
+            self._proxies.pop(name, None)
+            self._server_configs.pop(name, None)
+            self._status.pop(name, None)
+            self._tool_counts.pop(name, None)
             await self._rebuild_mounts()
 
         for cb in self._on_change_callbacks:
@@ -177,20 +205,18 @@ class ProxyManager:
                 # disabled なら再生成しない
                 if config.get("disabled"):
                     logger.info("Server %s is disabled, not mounting", name)
-                    for cb in self._on_change_callbacks:
-                        await cb()
-                    return
+                else:
+                    try:
+                        proxy = self._create_proxy(name, config)
+                        self._proxies[name] = proxy
+                        self.mcp.mount(proxy, namespace=name)
+                        self._status[name] = "connected"
+                        logger.info("Refreshed server %s", name)
+                    except Exception:
+                        logger.exception("Failed to refresh server %s", name)
+                        self._status[name] = "error"
 
-                try:
-                    proxy = self._create_proxy(name, config)
-                    self._proxies[name] = proxy
-                    self.mcp.mount(proxy, namespace=name)
-                    self._status[name] = "connected"
-                    logger.info("Refreshed server %s", name)
-                except Exception:
-                    logger.exception("Failed to refresh server %s", name)
-                    self._status[name] = "error"
-
+            # Callbacks outside lock — they may perform IO (rebuild_index calls list_tools)
             for cb in self._on_change_callbacks:
                 await cb()
         finally:
@@ -201,6 +227,24 @@ class ProxyManager:
         """全サーバーのステータス一覧。"""
         return dict(self._status)
 
+    def get_servers_info(self) -> list[dict]:
+        """Return consistent snapshot of all server metadata.
+
+        Safe to call from sync contexts (no await points). In asyncio, sync
+        functions run atomically — no event-loop preemption between dict reads.
+        All four dicts are read within one event-loop tick.
+        """
+        servers_info = []
+        for name, config in self._server_configs.items():
+            servers_info.append({
+                "name": name,
+                "disabled": config.get("disabled", False),
+                "tags": config.get("tags", []),
+                "status": self._status.get(name, "unknown"),
+                "tool_count": self._tool_counts.get(name, 0),
+            })
+        return servers_info
+
     async def list_tools(self, tags: list[str] | None = None) -> dict[str, list[dict]]:
         """全サーバーのツール一覧。オプションの tags フィルター。"""
         from .state import request_tags  # no circular dep needed; state is shared
@@ -210,11 +254,16 @@ class ProxyManager:
 
         logger.debug("list_tools called with tags=%s", tags)
 
+        # Snapshot under lock to prevent dict-mutation-during-iteration races
+        async with self._lock:
+            proxies_snapshot = dict(self._proxies)
+            configs_snapshot = dict(self._server_configs)
+
         result: dict[str, list[dict]] = {}
-        for srv_name, proxy in self._proxies.items():
+        for srv_name, proxy in proxies_snapshot.items():
             # Tag filter (OR logic)
             if tags:
-                config = self._server_configs.get(srv_name, {})
+                config = configs_snapshot.get(srv_name, {})
                 server_tags = config.get("tags", [])
                 if not any(t in server_tags for t in tags):
                     continue
@@ -230,25 +279,22 @@ class ProxyManager:
         return result
 
     async def call_tool(self, server_name: str, tool_name: str,
-                        arguments: dict, retries: int = 3) -> Any:
-        """ツール実行。TOCTOU回避のため _rebuild_mounts と lock で調整。"""
-        import asyncio
+                        arguments: dict) -> Any:
+        """ツール実行。asyncio.Event で rebuild 完了を待ち、Semaphore で同時実行数を制限。"""
+        # Wait for any ongoing rebuild to complete (with timeout)
+        timeout = int(os.environ.get("MCP_HUB_CALL_TOOL_TIMEOUT", "30"))
+        try:
+            await asyncio.wait_for(self._rebuild_complete.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Server mounts rebuild timed out — retry later")
 
-        for attempt in range(retries):
-            proxy = None
-            async with self._lock:
-                if not self._rebuilding:
-                    proxy = self._proxies.get(server_name)
-            if proxy is not None:
-                break
-            if attempt < retries - 1:
-                await asyncio.sleep(0.05)
-        else:
-            raise RuntimeError("Server mounts are being rebuilt, retry shortly")
-
+        async with self._lock:
+            proxy = self._proxies.get(server_name)
         if proxy is None:
             raise ValueError(f"Server {server_name!r} not found")
-        return await proxy.call_tool(tool_name, arguments)
+
+        async with self._call_semaphore:
+            return await proxy.call_tool(tool_name, arguments)
 
     def on_change(self, callback: Callable) -> None:
         """Register a callback invoked after server add/remove/refresh."""
@@ -284,7 +330,8 @@ class ProxyManager:
                 continue
             try:
                 tools = await asyncio.wait_for(proxy.list_tools(), timeout=timeout)
-                self._tool_counts[name] = len(tools)
+                async with self._lock:
+                    self._tool_counts[name] = len(tools)
                 # Was in error → mark recovering
                 if status_snapshot.get(name) == "error":
                     logger.info("Server %s appears reachable — attempting recovery", name)
@@ -311,8 +358,15 @@ class ProxyManager:
             async with self._lock:
                 if name in self._refreshing:
                     continue  # skip — refresh_server is handling it
-            new_proxy = await self._connect_server(name, config)
+                current_config = self._server_configs.get(name)
+            if not current_config:
+                continue
+            new_proxy = await self._connect_server(name, current_config)
             async with self._lock:
+                if name in self._refreshing:
+                    # refresh_server took over during our IO — discard
+                    logger.debug("Server %s being refreshed concurrently, discarding recovery", name)
+                    continue
                 if new_proxy is not None:
                     self._proxies[name] = new_proxy
                     self._status[name] = "connected"
@@ -335,6 +389,10 @@ class ProxyManager:
             logger.info("Attempting recovery for %s (never connected)", name)
             new_proxy = await self._connect_server(name, config)
             async with self._lock:
+                if name in self._refreshing:
+                    # refresh_server took over during our IO — discard
+                    logger.debug("Server %s being refreshed concurrently, discarding init recovery", name)
+                    continue
                 if new_proxy is not None:
                     self._proxies[name] = new_proxy
                     self._status[name] = "connected"
@@ -399,6 +457,7 @@ class ProxyManager:
         # internal/private APIs. These may break across FastMCP minor
         # version updates. FastMCP is pinned to <3.5.0 in pyproject.toml.
         self._rebuilding = True
+        self._rebuild_complete.clear()
         try:
             self.mcp.providers = [self.mcp.local_provider]
 
@@ -407,3 +466,4 @@ class ProxyManager:
                 self.mcp.mount(proxy, namespace=srv_name)
         finally:
             self._rebuilding = False
+            self._rebuild_complete.set()

@@ -79,7 +79,8 @@ class JsonStore:
             if bundled and bundled.exists():
                 logger.info("Copying default config from %s → %s", bundled, self._path)
                 self._path.parent.mkdir(parents=True, exist_ok=True)
-                self._path.write_text(bundled.read_text(encoding="utf-8"))
+                bundled_data = json.loads(bundled.read_text(encoding="utf-8"))
+                await self._write(bundled_data)
             else:
                 logger.info("No default config found, creating empty")
                 await self._write({"version": 1, "log_level": "info", "mcpServers": {}})

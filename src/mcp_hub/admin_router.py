@@ -330,14 +330,14 @@ async def list_server_resource_templates(name: str):
 @router.post("/servers/{name}/tools/{tool_name}/call")
 async def call_tool(name: str, tool_name: str, body: CallToolRequest):
     pm = _get_proxy_manager()
-    app_state.tool_calls_total += 1
+    await app_state.inc_tool_calls()
     try:
         result = await pm.call_tool(name, tool_name, body.arguments)
         return {"result": result}
     except ValueError as e:
-        app_state.tool_call_errors += 1
+        await app_state.inc_tool_call_errors()
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as e:
-        app_state.tool_call_errors += 1
+        await app_state.inc_tool_call_errors()
         logger.exception("Tool call failed %s/%s", name, tool_name)
         raise HTTPException(status_code=500, detail=str(e)) from e

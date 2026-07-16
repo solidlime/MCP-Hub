@@ -155,17 +155,7 @@ async def lifespan(app: FastAPI):
     @mcp_server.resource("hub://servers")
     def get_hub_servers() -> str:
         """Return JSON snapshot of connected servers."""
-        servers_info = []
-        for name, config in proxy_manager._server_configs.items():
-            servers_info.append(
-                {
-                    "name": name,
-                    "disabled": config.get("disabled", False),
-                    "tags": config.get("tags", []),
-                    "status": proxy_manager._status.get(name, "unknown"),
-                    "tool_count": proxy_manager._tool_counts.get(name, 0),
-                }
-            )
+        servers_info = proxy_manager.get_servers_info()
         return json.dumps(servers_info, indent=2, ensure_ascii=False)
 
     # FastMCP の HTTP ASGI アプリを生成
