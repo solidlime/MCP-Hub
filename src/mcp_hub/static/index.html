@@ -882,6 +882,59 @@
         }
 
         /* ============================================================
+           SEGMENT TOGGLE (Command / URL)
+           ============================================================ */
+        .segment-toggle {
+            display: flex;
+            background: var(--bg-elevated);
+            border-radius: var(--radius-md);
+            padding: 3px;
+            border: 1px solid var(--border-default);
+            margin-bottom: 16px;
+        }
+        .segment-toggle-btn {
+            flex: 1;
+            padding: 8px 14px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 0.82rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: calc(var(--radius-md) - 2px);
+            transition: all var(--transition-fast);
+            font-family: var(--font-sans);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+        .segment-toggle-btn:hover {
+            color: var(--text-primary);
+        }
+        .segment-toggle-btn.active {
+            background: var(--bg-surface);
+            color: var(--accent-primary);
+            font-weight: 600;
+            box-shadow: var(--shadow-sm);
+        }
+        .segment-toggle-btn:focus-visible {
+            outline: 2px solid var(--accent-primary);
+            outline-offset: 2px;
+        }
+        .segment-toggle-btn .seg-icon {
+            font-size: 0.9rem;
+        }
+
+        /* Toggleable form sections */
+        .mode-section {
+            transition: opacity var(--transition-fast);
+        }
+        .mode-section[style*="display: none"] {
+            opacity: 0;
+        }
+
+        /* ============================================================
            FORMS
            ============================================================ */
         .form-group { margin-bottom: 16px; }
@@ -1451,19 +1504,53 @@
                     <input type="text" class="form-input" id="editName" placeholder="例: my-mcp-server">
                     <div class="form-hint">識別しやすい名前を付けてください</div>
                 </div>
-                <div class="form-group">
-                    <label class="form-label" for="editCommand">コマンド</label>
-                    <input type="text" class="form-input" id="editCommand" placeholder="npx">
+                <!-- トグル: コマンド / URL -->
+                <div class="segment-toggle" role="tablist" aria-label="接続方式の選択">
+                    <button type="button" class="segment-toggle-btn active" role="tab" aria-selected="true"
+                            id="modeCommandBtn" onclick="setEditMode('command')">
+                        <span class="seg-icon" aria-hidden="true">⌨️</span> コマンド
+                    </button>
+                    <button type="button" class="segment-toggle-btn" role="tab" aria-selected="false"
+                            id="modeUrlBtn" onclick="setEditMode('url')">
+                        <span class="seg-icon" aria-hidden="true">🌐</span> URL
+                    </button>
                 </div>
-                <div class="form-group">
-                    <label class="form-label" for="editArgs">引数 (1行に1つ)</label>
-                    <textarea class="form-input" id="editArgs" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
-                    <div class="form-hint">1行に1つの引数を入力してください</div>
+
+                <!-- コマンドモード -->
+                <div id="commandModeSection" class="mode-section">
+                    <div class="form-group">
+                        <label class="form-label" for="editCommand">コマンド</label>
+                        <input type="text" class="form-input" id="editCommand" placeholder="npx">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="editArgs">引数 (1行に1つ)</label>
+                        <textarea class="form-input" id="editArgs" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
+                        <div class="form-hint">1行に1つの引数を入力してください</div>
+                    </div>
+
+                    <!-- 環境変数 -->
+                    <div class="form-group">
+                        <label class="form-label">環境変数</label>
+                        <textarea class="form-input" id="editEnv" rows="3" placeholder="KEY=value&#10;ANOTHER_KEY=value2"></textarea>
+                        <div class="form-hint">1行に1つの KEY=value 形式で入力してください</div>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label class="form-label" for="editUrl">URL</label>
-                    <input type="text" class="form-input" id="editUrl" placeholder="http://localhost:3000">
+
+                <!-- URLモード -->
+                <div id="urlModeSection" class="mode-section" style="display: none;">
+                    <div class="form-group">
+                        <label class="form-label" for="editUrl">URL</label>
+                        <input type="text" class="form-input" id="editUrl" placeholder="http://localhost:3000">
+                    </div>
+
+                    <!-- HTTP ヘッダー -->
+                    <div class="form-group">
+                        <label class="form-label">HTTP ヘッダー</label>
+                        <textarea class="form-input" id="editHeaders" rows="3" placeholder="Authorization: Bearer YOUR_TOKEN&#10;X-API-Key: sk-xxx..."></textarea>
+                        <div class="form-hint">1行に1つの KEY: value 形式で入力してください</div>
+                    </div>
                 </div>
+
                 <div class="form-group">
                     <label class="form-label">タグ</label>
                     <div class="edit-tags-container" id="editTagsContainer">
@@ -1471,16 +1558,7 @@
                     </div>
                     <div class="form-hint">Enter で追加、✕ で削除</div>
                 </div>
-                <div class="form-group">
-                    <label class="form-label">環境変数</label>
-                    <textarea class="form-input" id="editEnv" rows="3" placeholder="KEY=value&#10;ANOTHER_KEY=value2"></textarea>
-                    <div class="form-hint">1行に1つの KEY=value 形式で入力してください</div>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">HTTP ヘッダー</label>
-                    <textarea class="form-input" id="editHeaders" rows="3" placeholder="Authorization=Bearer token&#10;X-API-Key=yourkey"></textarea>
-                    <div class="form-hint">1行に1つの KEY=value 形式で入力してください</div>
-                </div>
+
                 <div class="form-group" id="editDisabledGroup">
                     <label class="form-label">無効化</label>
                     <label class="toggle-switch" style="margin-top: 4px;">
@@ -1607,6 +1685,7 @@
         let currentServer = null;
         let editingServer = null;
         let editTags = [];
+        let editMode = 'command'; // 'command' or 'url'
         let activeTagFilters = new Set();
         let metaMode = null; // null = unknown, true/false = loaded
 
@@ -2228,6 +2307,37 @@
         // ============================================================
         // EDIT MODAL (Add/Edit共用)
         // ============================================================
+        function setEditMode(mode) {
+            editMode = mode;
+            const cmdBtn = document.getElementById('modeCommandBtn');
+            const urlBtn = document.getElementById('modeUrlBtn');
+            const cmdSection = document.getElementById('commandModeSection');
+            const urlSection = document.getElementById('urlModeSection');
+
+            if (mode === 'command') {
+                cmdBtn.classList.add('active');
+                cmdBtn.setAttribute('aria-selected', 'true');
+                urlBtn.classList.remove('active');
+                urlBtn.setAttribute('aria-selected', 'false');
+                cmdSection.style.display = '';
+                urlSection.style.display = 'none';
+                // URLモード側の値をクリア
+                document.getElementById('editHeaders').value = '';
+                document.getElementById('editUrl').value = '';
+            } else {
+                urlBtn.classList.add('active');
+                urlBtn.setAttribute('aria-selected', 'true');
+                cmdBtn.classList.remove('active');
+                cmdBtn.setAttribute('aria-selected', 'false');
+                urlSection.style.display = '';
+                cmdSection.style.display = 'none';
+                // コマンドモード側の値をクリア
+                document.getElementById('editEnv').value = '';
+                document.getElementById('editCommand').value = '';
+                document.getElementById('editArgs').value = '';
+            }
+        }
+
         function openEditModal(name) {
             const isAddMode = !name;
             const nameGroup = document.getElementById('editNameGroup');
@@ -2253,6 +2363,7 @@
                 document.getElementById('editHeaders').value = '';
                 document.getElementById('editDisabled').checked = false;
                 document.getElementById('editFormError').style.display = 'none';
+                setEditMode('command');
             } else {
                 // 編集モード: 既存データを設定
                 const server = servers.find(s => s.name === name);
@@ -2269,6 +2380,9 @@
                 document.getElementById('editUrl').value = server.config.url || '';
                 document.getElementById('editDisabled').checked = getServerDisabled(server);
                 document.getElementById('editFormError').style.display = 'none';
+
+                // URLがあればURLモード、なければコマンドモード
+                setEditMode(server.config.url ? 'url' : 'command');
 
                 // Parse env
                 const env = server.config.env || {};
@@ -2375,31 +2489,52 @@
                 // Build patch payload with only changed fields
                 const payload = {};
 
-                if (command !== (server.config.command || '')) {
-                    payload.command = command || undefined;
-                }
-
-                const oldArgs = server.config.args || [];
-                if (JSON.stringify(newArgs) !== JSON.stringify(oldArgs)) {
-                    payload.args = newArgs;
-                }
-
-                if (url !== (server.config.url || '')) {
-                    payload.url = url || undefined;
+                if (editMode === 'command') {
+                    if (command !== (server.config.command || '')) {
+                        payload.command = command || undefined;
+                    }
+                    const oldArgs = server.config.args || [];
+                    if (JSON.stringify(newArgs) !== JSON.stringify(oldArgs)) {
+                        payload.args = newArgs;
+                    }
+                    // コマンドモード切替時、既存URLをクリア
+                    if (server.config.url) {
+                        payload.url = undefined;
+                    }
+                    // コマンドモード切替時、既存headersをクリア
+                    if (server.config.headers && Object.keys(server.config.headers).length > 0) {
+                        payload.headers = {};
+                    }
+                    // 環境変数
+                    const oldEnv = server.config.env || {};
+                    if (JSON.stringify(newEnv) !== JSON.stringify(oldEnv)) {
+                        payload.env = newEnv;
+                    }
+                } else {
+                    // URLモード
+                    if (url !== (server.config.url || '')) {
+                        payload.url = url || undefined;
+                    }
+                    // URLモード切替時、既存command/argsをクリア
+                    if (server.config.command) {
+                        payload.command = undefined;
+                    }
+                    if (server.config.args && server.config.args.length > 0) {
+                        payload.args = [];
+                    }
+                    // URLモード切替時、既存envをクリア
+                    if (server.config.env && Object.keys(server.config.env).length > 0) {
+                        payload.env = {};
+                    }
+                    // HTTPヘッダー
+                    const oldHeaders = server.config.headers || {};
+                    if (JSON.stringify(newHeaders) !== JSON.stringify(oldHeaders)) {
+                        payload.headers = newHeaders;
+                    }
                 }
 
                 if (disabled !== getServerDisabled(server)) {
                     payload.disabled = disabled;
-                }
-
-                const oldEnv = server.config.env || {};
-                if (JSON.stringify(newEnv) !== JSON.stringify(oldEnv)) {
-                    payload.env = newEnv;
-                }
-
-                const oldHeaders = server.config.headers || {};
-                if (JSON.stringify(newHeaders) !== JSON.stringify(oldHeaders)) {
-                    payload.headers = newHeaders;
                 }
 
                 // Tags
@@ -2442,25 +2577,29 @@
                     return;
                 }
 
-                if (!command && !url) {
-                    errorEl.textContent = 'コマンドまたはURLのいずれかを入力してください';
+                if (editMode === 'command' && !command) {
+                    errorEl.textContent = 'コマンドを入力してください';
+                    errorEl.style.display = 'block';
+                    return;
+                }
+                if (editMode === 'url' && !url) {
+                    errorEl.textContent = 'URLを入力してください';
                     errorEl.style.display = 'block';
                     return;
                 }
 
                 const config = {};
-                if (url) {
+                if (editMode === 'url') {
                     config.url = url;
-                }
-                if (command) {
+                    if (Object.keys(newHeaders).length > 0) {
+                        config.headers = newHeaders;
+                    }
+                } else {
                     config.command = command;
                     config.args = newArgs;
-                }
-                if (Object.keys(newEnv).length > 0) {
-                    config.env = newEnv;
-                }
-                if (Object.keys(newHeaders).length > 0) {
-                    config.headers = newHeaders;
+                    if (Object.keys(newEnv).length > 0) {
+                        config.env = newEnv;
+                    }
                 }
                 if (editTags.length > 0) {
                     config.tags = editTags;
