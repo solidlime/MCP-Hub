@@ -25,6 +25,8 @@ MAX_COMMAND_LENGTH = 512
 MAX_URL_LENGTH = 2048
 MAX_ARGS_COUNT = 50
 MAX_ARG_LENGTH = 1024
+MAX_HEADER_KEY_LENGTH = 256
+MAX_HEADER_VALUE_LENGTH = 8192
 
 
 class ValidationError(ValueError):
@@ -102,6 +104,27 @@ def validate_env(env: dict) -> dict:
     return env
 
 
+def validate_headers(headers: dict) -> dict[str, str]:
+    """Validate custom HTTP headers for remote server connections.
+
+    Allows only dict[str, str] with reasonable size limits.
+    """
+    if not isinstance(headers, dict):
+        raise ValidationError("Headers must be a dict")
+    result: dict[str, str] = {}
+    for key, value in headers.items():
+        if not isinstance(key, str):
+            raise ValidationError(f"Header key must be a string: {key}")
+        if not isinstance(value, str):
+            raise ValidationError(f"Header value must be a string for key: {key}")
+        if len(key) > MAX_HEADER_KEY_LENGTH:
+            raise ValidationError(f"Header key too long (max {MAX_HEADER_KEY_LENGTH} chars): {key[:50]}...")
+        if len(value) > MAX_HEADER_VALUE_LENGTH:
+            raise ValidationError(f"Header value too long for key '{key}' (max {MAX_HEADER_VALUE_LENGTH} chars)")
+        result[key] = value
+    return result
+
+
 def validate_server_config(name: str, config: dict) -> dict:
     """Validate a complete server config (both register and patch)."""
     if not name or not isinstance(name, str):
@@ -133,4 +156,6 @@ def validate_server_config(name: str, config: dict) -> dict:
         for tag in tags:
             if not isinstance(tag, str) or len(tag) > 64:
                 raise ValidationError(f"Invalid tag: {tag}")
+    if "headers" in config:
+        config["headers"] = validate_headers(config["headers"])
     return config

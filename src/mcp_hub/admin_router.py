@@ -33,12 +33,13 @@ class ServerConfig(BaseModel):
     args: list[str] = []
     env: dict[str, str] = {}  # ← 追加: BRAVE_API_KEY 等
     tags: list[str] = []
+    headers: dict[str, str] = {}
     disabled: bool = False
 
     def model_dump_for_config(self) -> dict:
         """空文字・空リストを除外した config dict を返す。"""
         raw = self.model_dump(exclude_none=True)
-        for key in ("url", "command", "args", "env", "tags"):
+        for key in ("url", "command", "args", "env", "tags", "headers"):
             if key in raw and not raw[key]:
                 del raw[key]
         return raw

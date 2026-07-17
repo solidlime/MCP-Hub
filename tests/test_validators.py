@@ -1,7 +1,8 @@
 import pytest
 from src.mcp_hub.validators import (
     ValidationError,
-    validate_command, validate_url, validate_env, validate_server_config,
+    validate_command, validate_url, validate_env, validate_headers,
+    validate_server_config,
 )
 
 
@@ -78,6 +79,45 @@ class TestValidateEnv:
         assert result["TOKEN"] == "${BRAVE_API_KEY:-}"
 
 
+class TestValidateHeaders:
+    def test_valid_headers_passes(self):
+        headers = {"Authorization": "Bearer token123", "X-Custom": "value"}
+        assert validate_headers(headers) == headers
+
+    def test_empty_dict_passes(self):
+        assert validate_headers({}) == {}
+
+    def test_non_dict_blocked(self):
+        with pytest.raises(ValidationError, match="Headers must be a dict"):
+            validate_headers("not a dict")
+
+    def test_non_string_key_blocked(self):
+        with pytest.raises(ValidationError, match="Header key must be a string"):
+            validate_headers({123: "value"})
+
+    def test_non_string_value_blocked(self):
+        with pytest.raises(ValidationError, match="Header value must be a string"):
+            validate_headers({"X-Key": 42})
+
+    def test_key_too_long_blocked(self):
+        long_key = "X" * 257
+        with pytest.raises(ValidationError, match="Header key too long"):
+            validate_headers({long_key: "value"})
+
+    def test_value_too_long_blocked(self):
+        long_value = "X" * 8193
+        with pytest.raises(ValidationError, match="Header value too long"):
+            validate_headers({"X-Key": long_value})
+
+    def test_max_length_key_passes(self):
+        key = "X" * 256
+        assert validate_headers({key: "value"}) == {key: "value"}
+
+    def test_max_length_value_passes(self):
+        value = "X" * 8192
+        assert validate_headers({"X-Key": value}) == {"X-Key": value}
+
+
 class TestValidateServerConfig:
     def test_valid_command(self):
         cfg = {"command": "npx", "args": ["-y", "pkg"]}
@@ -94,3 +134,10 @@ class TestValidateServerConfig:
     def test_no_url_or_command_blocked(self):
         with pytest.raises(ValidationError):
             validate_server_config("test", {"tags": ["a"]})
+
+    def test_valid_url_with_headers(self):
+        cfg = {
+            "url": "https://example.com/mcp",
+            "headers": {"Authorization": "Bearer token123"},
+        }
+        validate_server_config("test", cfg)

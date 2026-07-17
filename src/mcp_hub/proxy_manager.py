@@ -6,10 +6,15 @@ FastMCP の create_proxy + mount を管理。
 import asyncio
 import logging
 import os
+import re
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlparse
 
 from fastmcp import FastMCP
+from fastmcp.client import Client
+from fastmcp.client.transports.http import StreamableHttpTransport
+from fastmcp.client.transports.sse import SSETransport
 from fastmcp.client.transports.stdio import StdioTransport
 from fastmcp.server import create_proxy
 from fastmcp.server.providers import proxy as _proxy_providers
@@ -480,7 +485,17 @@ class ProxyManager:
         url = config.get("url")
         command = config.get("command")
         if url:
-            proxy = create_proxy(url, name=name)
+            headers = config.get("headers")
+            if headers:
+                path = urlparse(url).path
+                if re.search(r"/sse(/|\?|&|$)", path):
+                    transport = SSETransport(url=url, headers=headers)
+                else:
+                    transport = StreamableHttpTransport(url=url, headers=headers)
+                client = Client(transport=transport)
+                proxy = create_proxy(client, name=name)
+            else:
+                proxy = create_proxy(url, name=name)
         elif command:
             args = config.get("args", [])
             env = config.get("env")
