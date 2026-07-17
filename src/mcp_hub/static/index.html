@@ -2404,7 +2404,7 @@
 
                 // Parse headers
                 const headers = server.config.headers || {};
-                document.getElementById('editHeaders').value = Object.entries(headers).map(([k, v]) => `${k}=${v}`).join('\n');
+                document.getElementById('editHeaders').value = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\n');
             }
 
             renderEditTags();
