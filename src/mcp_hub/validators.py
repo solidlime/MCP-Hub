@@ -117,6 +117,8 @@ def validate_headers(headers: dict) -> dict[str, str]:
             raise ValidationError(f"Header key must be a string: {key}")
         if not isinstance(value, str):
             raise ValidationError(f"Header value must be a string for key: {key}")
+        if re.search(r'[\r\n\x00-\x1f]', key):
+            raise ValidationError(f"Header key contains control characters: {key[:50]}")
         if len(key) > MAX_HEADER_KEY_LENGTH:
             raise ValidationError(f"Header key too long (max {MAX_HEADER_KEY_LENGTH} chars): {key[:50]}...")
         if len(value) > MAX_HEADER_VALUE_LENGTH:
