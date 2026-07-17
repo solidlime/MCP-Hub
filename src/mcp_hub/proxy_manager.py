@@ -290,7 +290,7 @@ class ProxyManager:
                     continue
 
             try:
-                tools = await proxy.list_tools()
+                tools = await self._list_tools_with_retry(proxy, srv_name)
                 self._tool_counts[srv_name] = len(tools)
                 result[srv_name] = [{"name": t.name, "description": t.description or ""} for t in tools]
             except Exception:
@@ -334,6 +334,25 @@ class ProxyManager:
         """
         return dict(self._proxies)
 
+    async def _list_tools_with_retry(self, proxy: FastMCPProxy, name: str,
+                                     max_retries: int = 2) -> list:
+        """Call proxy.list_tools() with retry on transient connection errors."""
+        retry_delay = float(os.environ.get("MCP_HUB_LIST_TOOLS_RETRY_DELAY", "0.3"))
+        last_error: Exception | None = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                return await proxy.list_tools()
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    logger.debug(
+                        "list_tools for %s attempt %d/%d failed: %s — retrying in %.1fs",
+                        name, attempt + 1, max_retries + 1, e, retry_delay,
+                    )
+                    await asyncio.sleep(retry_delay)
+        raise last_error  # type: ignore[misc]
+
     async def _health_check(self) -> None:
         """Check all connected servers, recover failed ones."""
         # Snapshots under lock (prevents dict mutation during iteration)
@@ -350,7 +369,9 @@ class ProxyManager:
             if config.get("disabled"):
                 continue
             try:
-                tools = await asyncio.wait_for(proxy.list_tools(), timeout=timeout)
+                tools = await asyncio.wait_for(
+                    self._list_tools_with_retry(proxy, name), timeout=timeout
+                )
                 async with self._lock:
                     self._tool_counts[name] = len(tools)
                 # Was in error → mark recovering
