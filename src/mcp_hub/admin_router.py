@@ -18,6 +18,7 @@ from .validators import (
     validate_url,
     validate_args,
     validate_env,
+    validate_headers,
     validate_server_config,
 )
 
@@ -235,6 +236,18 @@ async def patch_server(name: str, body: ServerConfig):
                 merged_config["env"] = validate_env(merged_config["env"])
         except ValidationError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
+    if "headers" in merged_config and merged_config["headers"]:
+        try:
+            merged_config["headers"] = validate_headers(merged_config["headers"])
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    if "tags" in merged_config:
+        tags = merged_config["tags"]
+        if not isinstance(tags, list):
+            raise HTTPException(status_code=422, detail="Tags must be a list")
+        for tag in tags:
+            if not isinstance(tag, str) or len(tag) > 64:
+                raise HTTPException(status_code=422, detail=f"Invalid tag: {tag}")
 
     # 恒久化
     await registry.update_server(name, merged_config)
