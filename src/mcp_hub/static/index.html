@@ -1721,16 +1721,23 @@
             },
 
             async addServer(config) {
-                const response = await fetch('/admin/api/servers', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(config)
-                });
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'サーバーの追加に失敗しました');
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 30000);
+                try {
+                    const response = await fetch('/admin/api/servers', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(config),
+                        signal: controller.signal,
+                    });
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || 'サーバーの追加に失敗しました');
+                    }
+                    return response.json();
+                } finally {
+                    clearTimeout(timeout);
                 }
-                return response.json();
             },
 
             async deleteServer(name) {
@@ -1741,20 +1748,27 @@
             },
 
             async patchServer(name, config) {
-                const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(config)
-                });
-                if (!response.ok) {
-                    let msg = 'サーバーの更新に失敗しました';
-                    try {
-                        const err = await response.json();
-                        msg = err.detail || msg;
-                    } catch (_) {}
-                    throw new Error(msg);
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 30000);
+                try {
+                    const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(config),
+                        signal: controller.signal,
+                    });
+                    if (!response.ok) {
+                        let msg = 'サーバーの更新に失敗しました';
+                        try {
+                            const err = await response.json();
+                            msg = err.detail || msg;
+                        } catch (_) {}
+                        throw new Error(msg);
+                    }
+                    return response.json();
+                } finally {
+                    clearTimeout(timeout);
                 }
-                return response.json();
             },
 
             async testServer(name) {
@@ -2463,18 +2477,31 @@
                 envStr.split('\n').forEach(line => {
                     const idx = line.indexOf('=');
                     if (idx > 0) {
-                        newEnv[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+                        const key = line.substring(0, idx).trim();
+                        let val = line.substring(idx + 1).trim();
+                        // Strip surrounding quotes for copy-paste convenience
+                        if ((val.startsWith('"') && val.endsWith('"')) ||
+                            (val.startsWith("'") && val.endsWith("'"))) {
+                            val = val.slice(1, -1);
+                        }
+                        newEnv[key] = val;
                     }
                 });
             }
-
-            // Parse headers
+            // Parse headers (KEY: value format)
             const newHeaders = {};
             if (hdrStr) {
                 hdrStr.split('\n').forEach(line => {
-                    const idx = line.indexOf('=');
+                    const idx = line.indexOf(':');
                     if (idx > 0) {
-                        newHeaders[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+                        const key = line.substring(0, idx).trim();
+                        let val = line.substring(idx + 1).trim();
+                        // Strip surrounding quotes for copy-paste convenience
+                        if ((val.startsWith('"') && val.endsWith('"')) ||
+                            (val.startsWith("'") && val.endsWith("'"))) {
+                            val = val.slice(1, -1);
+                        }
+                        newHeaders[key] = val;
                     }
                 });
             }
@@ -2561,7 +2588,10 @@
                     closeEditModal();
                     showToast(`「${editingServer}」の設定を更新しました`, 'success');
                 } catch (error) {
-                    errorEl.textContent = error.message;
+                    const msg = error.name === 'AbortError'
+                        ? '接続タイムアウト: サーバーの応答がありませんでした'
+                        : error.message;
+                    errorEl.textContent = msg;
                     errorEl.style.display = 'block';
                 } finally {
                     submitBtn.disabled = false;
@@ -2614,7 +2644,10 @@
                     closeEditModal();
                     showToast(`「${name}」を追加しました`, 'success');
                 } catch (error) {
-                    errorEl.textContent = error.message;
+                    const msg = error.name === 'AbortError'
+                        ? '接続タイムアウト: サーバーの応答がありませんでした'
+                        : error.message;
+                    errorEl.textContent = msg;
                     errorEl.style.display = 'block';
                 } finally {
                     submitBtn.disabled = false;

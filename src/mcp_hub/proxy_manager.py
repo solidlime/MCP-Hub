@@ -183,7 +183,7 @@ class ProxyManager:
 
         # list_tools outside lock (fast network call)
         try:
-            tools = await proxy.list_tools()
+            tools = await asyncio.wait_for(proxy.list_tools(), timeout=30.0)
             async with self._lock:
                 self._tool_counts[name] = len(tools)
             result = [t.name for t in tools]
