@@ -26,5 +26,19 @@ usermod -o -u "$PUID" -g "$PGID" mcp-hub 2>/dev/null || true
 # (includes npm/uv caches under $DATA_DIR/.npm and $DATA_DIR/.uv)
 chown -R mcp-hub:mcp-hub "$DATA_DIR"
 
+# Persist /home/mcp-hub across container restarts (npm cache, Chromium data, .uv fallback)
+HOME_DIR="/home/mcp-hub"
+mkdir -p "$HOME_DIR"
+chown -R mcp-hub:mcp-hub "$HOME_DIR"
+
+# Grant Docker socket access to mcp-hub user if socket is available
+# Enables Docker-based MCP servers (e.g., llm-sandbox) without root
+if [ -S /var/run/docker.sock ]; then
+    DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+    groupadd -o -g "$DOCKER_GID" docker-host 2>/dev/null || true
+    usermod -a -G docker-host mcp-hub 2>/dev/null || true
+    echo "Docker socket detected (GID=$DOCKER_GID) — access granted to mcp-hub"
+fi
+
 # Drop privileges and execute the command
 exec gosu mcp-hub "$@"

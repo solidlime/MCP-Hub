@@ -14,6 +14,8 @@ services:
       # - PGID=1000
     volumes:
       - /volume1/docker/mcp-hub/data:/data
+      - /volume1/docker/mcp-hub/home:/home/mcp-hub
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:26263/admin/api/health"]
       interval: 30s
