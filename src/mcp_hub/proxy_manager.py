@@ -12,12 +12,33 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.client.transports.stdio import StdioTransport
 from fastmcp.server import create_proxy
+from fastmcp.server.providers import proxy as _proxy_providers
 from fastmcp.server.providers.proxy import FastMCPProxy
 
 from .env_expand import expand_env_vars
 from .store import JsonStore
 
 logger = logging.getLogger(__name__)
+
+# === Resilient roots forwarding ===
+# When upstream servers request roots during initialization (before a client
+# connects to MCP-Hub), the default handler calls ctx.list_roots() which fails
+# with "session is not available".  Replace with a resilient version that
+# returns empty roots instead of raising RuntimeError.
+_orig_default_roots = _proxy_providers.default_proxy_roots_handler
+
+
+async def _resilient_default_roots(*args: Any, **kwargs: Any) -> list[Any]:
+    try:
+        return await _orig_default_roots(*args, **kwargs)
+    except RuntimeError:
+        logger.debug(
+            "Roots forwarding skipped — no client session available yet"
+        )
+        return []
+
+
+_proxy_providers.default_proxy_roots_handler = _resilient_default_roots
 
 
 RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
