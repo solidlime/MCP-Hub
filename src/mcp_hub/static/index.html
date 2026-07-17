@@ -1476,6 +1476,11 @@
                     <textarea class="form-input" id="editEnv" rows="3" placeholder="KEY=value&#10;ANOTHER_KEY=value2"></textarea>
                     <div class="form-hint">1行に1つの KEY=value 形式で入力してください</div>
                 </div>
+                <div class="form-group">
+                    <label class="form-label">HTTP ヘッダー</label>
+                    <textarea class="form-input" id="editHeaders" rows="3" placeholder="Authorization=Bearer token&#10;X-API-Key=yourkey"></textarea>
+                    <div class="form-hint">1行に1つの KEY=value 形式で入力してください</div>
+                </div>
                 <div class="form-group" id="editDisabledGroup">
                     <label class="form-label">無効化</label>
                     <label class="toggle-switch" style="margin-top: 4px;">
@@ -2245,6 +2250,7 @@
                 document.getElementById('editArgs').value = '';
                 document.getElementById('editUrl').value = '';
                 document.getElementById('editEnv').value = '';
+                document.getElementById('editHeaders').value = '';
                 document.getElementById('editDisabled').checked = false;
                 document.getElementById('editFormError').style.display = 'none';
             } else {
@@ -2267,6 +2273,10 @@
                 // Parse env
                 const env = server.config.env || {};
                 document.getElementById('editEnv').value = Object.entries(env).map(([k, v]) => `${k}=${v}`).join('\n');
+
+                // Parse headers
+                const headers = server.config.headers || {};
+                document.getElementById('editHeaders').value = Object.entries(headers).map(([k, v]) => `${k}=${v}`).join('\n');
             }
 
             renderEditTags();
@@ -2331,6 +2341,7 @@
             const url = document.getElementById('editUrl').value.trim();
             const disabled = document.getElementById('editDisabled').checked;
             const envStr = document.getElementById('editEnv').value.trim();
+            const hdrStr = document.getElementById('editHeaders').value.trim();
 
             // Parse env
             const newEnv = {};
@@ -2339,6 +2350,17 @@
                     const idx = line.indexOf('=');
                     if (idx > 0) {
                         newEnv[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+                    }
+                });
+            }
+
+            // Parse headers
+            const newHeaders = {};
+            if (hdrStr) {
+                hdrStr.split('\n').forEach(line => {
+                    const idx = line.indexOf('=');
+                    if (idx > 0) {
+                        newHeaders[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
                     }
                 });
             }
@@ -2373,6 +2395,11 @@
                 const oldEnv = server.config.env || {};
                 if (JSON.stringify(newEnv) !== JSON.stringify(oldEnv)) {
                     payload.env = newEnv;
+                }
+
+                const oldHeaders = server.config.headers || {};
+                if (JSON.stringify(newHeaders) !== JSON.stringify(oldHeaders)) {
+                    payload.headers = newHeaders;
                 }
 
                 // Tags
@@ -2431,6 +2458,9 @@
                 }
                 if (Object.keys(newEnv).length > 0) {
                     config.env = newEnv;
+                }
+                if (Object.keys(newHeaders).length > 0) {
+                    config.headers = newHeaders;
                 }
                 if (editTags.length > 0) {
                     config.tags = editTags;
