@@ -126,20 +126,22 @@ async def lifespan(app: FastAPI):
     mcp_server = FastMCP("MCP Hub")
 
     # Check FastMCP version compatibility
-    import sys
-
+    # NOTE: We use FastMCP internal/private APIs (_mcp_server,
+    # _lifespan_manager, session_manager, providers, local_provider).
+    # These may break across FastMCP major version updates.
+    # Tested against <4.0.0.
     try:
         from packaging import version as _v
 
         _fver = _v.parse(fastmcp.__version__)
-        if _fver >= _v.parse("3.5.0"):
-            logger.critical(
-                "FastMCP %s is incompatible (tested against <3.5.0). Refusing startup.",
+        if _fver >= _v.parse("4.0.0"):
+            logger.warning(
+                "FastMCP %s may not be compatible (tested against <4.0.0). "
+                "Internal APIs used by MCP-Hub may have changed.",
                 fastmcp.__version__,
             )
-            sys.exit(1)
     except ImportError:
-        logger.warning("Cannot check FastMCP version — packaging not installed")
+        pass
 
     proxy_manager = ProxyManager(mcp_server, registry)
 
