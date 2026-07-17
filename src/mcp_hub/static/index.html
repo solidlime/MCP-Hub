@@ -2494,9 +2494,13 @@
                 hdrStr.split('\n').forEach(line => {
                     const idx = line.indexOf(':');
                     if (idx > 0) {
-                        const key = line.substring(0, idx).trim();
+                        let key = line.substring(0, idx).trim();
                         let val = line.substring(idx + 1).trim();
                         // Strip surrounding quotes for copy-paste convenience
+                        if ((key.startsWith('"') && key.endsWith('"')) ||
+                            (key.startsWith("'") && key.endsWith("'"))) {
+                            key = key.slice(1, -1);
+                        }
                         if ((val.startsWith('"') && val.endsWith('"')) ||
                             (val.startsWith("'") && val.endsWith("'"))) {
                             val = val.slice(1, -1);
