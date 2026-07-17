@@ -1,5 +1,7 @@
 """共有状態。lifespan で初期化され、admin_router から参照される。"""
 
+from __future__ import annotations
+
 import asyncio
 from contextvars import ContextVar
 from typing import TYPE_CHECKING
