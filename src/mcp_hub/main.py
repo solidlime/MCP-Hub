@@ -254,11 +254,17 @@ def create_app() -> FastAPI:
     # 管理 API ルーターをマウント
     app.include_router(admin_router)
 
-    # --- tag filtering middleware (/mcp のみ) ---
+    # --- tag filtering + slash normalization middleware (/mcp のみ) ---
     @app.middleware("http")
     async def tag_middleware(request: Request, call_next):
         try:
             if request.url.path.startswith("/mcp"):
+                # 正規化: Mount("/mcp") の正規表現 ^/mcp/(?P<path>.*)$ は
+                # 末尾スラッシュ必須のため、/mcp への POST が 307 redirect を
+                # 引き起こす。ASGI scope でパスを /mcp/ に書き換えて回避。
+                if request.url.path == "/mcp":
+                    request.scope["path"] = "/mcp/"
+                    request.scope["raw_path"] = b"/mcp/"
                 header_tags = request.headers.get("X-MCP-Hub-Tags", "")
                 query_tags = request.query_params.get("tags", "")
                 tags_raw = header_tags if header_tags else query_tags
