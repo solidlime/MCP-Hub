@@ -117,6 +117,14 @@ class TestValidateHeaders:
         value = "X" * 8192
         assert validate_headers({"X-Key": value}) == {"X-Key": value}
 
+    def test_control_chars_in_key_blocked(self):
+        with pytest.raises(ValidationError):
+            validate_headers({"X-CRLF\r\nHeader": "value"})
+
+    def test_null_byte_in_key_blocked(self):
+        with pytest.raises(ValidationError):
+            validate_headers({"X-\x00-Malicious": "value"})
+
 
 class TestValidateServerConfig:
     def test_valid_command(self):
