@@ -6,8 +6,6 @@ services:
       - "26263:26263"
     environment:
       - MCP_HUB_DATA_DIR=/data
-      - npm_config_cache=/data/.npm
-      - UV_CACHE_DIR=/data/.uv
       # PUID/PGID: auto-detected from data directory owner.
       # Uncomment to override:
       # - PUID=1000
