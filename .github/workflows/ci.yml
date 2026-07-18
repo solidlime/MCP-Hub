@@ -134,12 +134,16 @@ jobs:
           load: true
 
       - name: Smoke test with docker compose
+        env:
+          META_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
+          # Use first tag only — metadata action returns multiple lines
+          FIRST_TAG=$(echo "$META_TAGS" | head -1)
           # Override image and volume for CI
-          cat > docker-compose.ci.yml << 'YAML'
+          cat > docker-compose.ci.yml << YAML
           services:
             mcp-hub:
-              image: ${{ steps.meta.outputs.tags }}
+              image: ${FIRST_TAG}
               volumes:
                 - /tmp/mcp-hub-ci-data:/data
           YAML
