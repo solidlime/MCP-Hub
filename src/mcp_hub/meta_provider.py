@@ -13,26 +13,27 @@ from typing import Any
 from fastmcp import FastMCP
 from rank_bm25 import BM25Okapi
 
+try:
+    from fastembed import TextEmbedding
+    import numpy as np
+    _HAS_FASTEMBED = True
+except ImportError:
+    _HAS_FASTEMBED = False
+
 logger = logging.getLogger(__name__)
 
 MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 
 
 class ToolIndex:
-    """BM25 search over all proxied tools. Thread-safe via asyncio.Lock.
+    """Embedding-based semantic search over proxied tools, with BM25 fallback.
 
-    Indexes tool metadata and inputSchema content with field-aware weighting.
-    Uses token duplication to simulate BM25F since rank_bm25 is a plain BM25
-    implementation without native field weights.
+    Primary search uses fastembed (BAAI/bge-small-en-v1.5) for dense retrieval.
+    Falls back to BM25Okapi when fastembed is not available.
+    Thread-safe via asyncio.Lock.
 
-    Indexed fields (with simulated weights):
-        Tool name:      ×5  (highest — exact match is the strongest signal)
-        Server name:    ×3  (disambiguates same-named tools across servers)
-        Description:    ×2  (natural language description)
-        Enum values:    ×2  (concrete values are highly specific)
-        Parameter name: ×1  (included for schema-aware search)
-        Parameter desc: ×1  (natural language, useful for semantic matching)
-        Parameter type: ×1  (weak signal — many tools share common types)
+    Doc text for embedding: f"{server}/{name}: {description}"
+    BM25 uses token duplication to simulate BM25F field weights.
     """
 
     def __init__(self):
@@ -40,6 +41,9 @@ class ToolIndex:
         self._documents: list[dict] = []  # [{server, name, description, inputSchema}, ...]
         self._bm25: BM25Okapi | None = None
         self._corpus: list[list[str]] = []
+        self._embedder: "TextEmbedding | None" = None  # type: ignore[name-defined]
+        self._embeddings: "np.ndarray | None" = None  # type: ignore[name-defined]
+        self._use_embeddings: bool = _HAS_FASTEMBED
 
     # ── Tokenization ──────────────────────────────────────────────
 
@@ -139,21 +143,85 @@ class ToolIndex:
 
         Each document: {server, name, description, inputSchema}.
         Caller is responsible for building the document list.
+
+        When fastembed is available, also computes dense embeddings
+        for semantic search. Falls back to BM25 otherwise.
         """
         async with self._lock:
             self._documents = documents
             self._corpus = [self._build_doc_tokens(d) for d in documents]
             self._bm25 = BM25Okapi(self._corpus) if self._corpus else None
+
+            # Compute embeddings if fastembed is available
+            if self._use_embeddings and documents:
+                try:
+                    if self._embedder is None:  # type: ignore[truthiness-function]
+                        self._embedder = TextEmbedding("BAAI/bge-small-en-v1.5")  # type: ignore[name-defined]
+                    doc_texts = [
+                        f"{d['server']}/{d['name']}: {d.get('description', '')}"
+                        for d in documents
+                    ]
+                    gen = self._embedder.embed(doc_texts)
+                    self._embeddings = np.array(list(gen), dtype=np.float32)  # type: ignore[name-defined]
+                except Exception:
+                    logger.warning("Embedding failed, falling back to BM25", exc_info=True)
+                    self._embeddings = None
+                    self._use_embeddings = False
+            else:
+                self._embeddings = None
+
         logger.info("ToolIndex rebuilt: %d tools indexed", len(documents))
 
     def search(self, query: str, top_k: int = 10) -> list[dict]:
-        """Search tools by keyword. Returns list of {server, name, description, inputSchema, score}.
+        """Search tools by keyword or semantic query.
+
+        Uses embedding-based semantic search when fastembed is available,
+        otherwise falls back to BM25 keyword search.
+
+        Returns list of {server, name, description, inputSchema, score}.
 
         inputSchema is included so the LLM can proceed directly to execute_tool without
         a separate get_tool_schema call.
 
         Read-only — does not modify shared state, safe without lock.
         """
+        if not self._documents:
+            return []
+        if self._use_embeddings and self._embeddings is not None:
+            return self._semantic_search(query, top_k)
+        else:
+            return self._bm25_search(query, top_k)
+
+    def _semantic_search(self, query: str, top_k: int) -> list[dict]:
+        """Dense retrieval via embedding cosine similarity."""
+        query_vec = np.array(  # type: ignore[name-defined]
+            list(self._embedder.embed([query])), dtype=np.float32  # type: ignore[union-attr]
+        ).squeeze(0)
+        # L2-normalize query (bge-small produces normalized docs already)
+        norm = np.linalg.norm(query_vec)  # type: ignore[name-defined]
+        if norm > 0:
+            query_vec = query_vec / norm
+        # Dot product = cosine similarity (both vectors L2-normalized)
+        scores = self._embeddings @ query_vec  # type: ignore[name-defined]
+        ranked = sorted(
+            range(len(scores)), key=lambda i: scores[i], reverse=True
+        )
+        docs = self._documents
+        results = []
+        for idx in ranked[:top_k]:
+            score = float(scores[idx])
+            doc = docs[idx]
+            results.append({
+                "server": doc["server"],
+                "name": doc["name"],
+                "description": doc.get("description", ""),
+                "inputSchema": doc.get("inputSchema", {}),
+                "score": round(score, 4),
+            })
+        return results
+
+    def _bm25_search(self, query: str, top_k: int) -> list[dict]:
+        """BM25 keyword search (fallback when fastembed unavailable)."""
         if not self._bm25 or not self._corpus:
             return []
         tokens = self._tokenize(query)

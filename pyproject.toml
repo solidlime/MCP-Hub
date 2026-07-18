@@ -10,6 +10,9 @@ dependencies = [
     "rank_bm25>=0.2.2",
 ]
 
+[project.optional-dependencies]
+embeddings = ["fastembed>=0.4.0"]
+
 [build-system]
 requires = ["setuptools>=75.0"]
 build-backend = "setuptools.build_meta"
