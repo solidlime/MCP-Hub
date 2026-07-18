@@ -28,6 +28,9 @@ from fastapi.staticfiles import StaticFiles
 import fastmcp
 from fastmcp import FastMCP
 
+from . import bootstrap as _bootstrap
+_bootstrap.setup_path()
+
 from .admin_router import router as admin_router
 from .auth import ApiKeyMiddleware
 from .config import load_config

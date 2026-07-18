@@ -1,0 +1,42 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+.venv
+__pycache__
+*.pyc
+*.pyo
+.mypy_cache
+.pytest_cache
+.ruff_cache
+*.egg-info
+
+# Build artifacts
+dist
+build
+*.egg
+
+# Benchmarks / docs
+.benchmarks
+data
+docs
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode
+.idea
+
+# Markdown (not needed in image)
+*.md
+!README.md
+
+# Misc
+Dockerfile
+docker-compose*.yml
+.dockerignore

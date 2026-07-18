@@ -44,8 +44,7 @@ RUN uv venv /opt/venv && \
 # 依存パッケージのみ先にインストール（ソース変更の影響を受けない）
 RUN . /opt/venv/bin/activate && \
     uv pip install $(python3 -c "import tomllib; \
-    t = tomllib.load(open('pyproject.toml','rb')); \
-    print(*t['project']['dependencies'], *t['project']['optional-dependencies']['embeddings'])")
+    print(*tomllib.load(open('pyproject.toml','rb'))['project']['dependencies'])")
 
 # アプリケーションコード + 設定ファイル
 COPY src/ ${APP_HOME}/src/
@@ -82,17 +81,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Puppeteer 用 Chromium (headless browser automation)
-ENV PUPPETEER_SKIP_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
-
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-    chromium chromium-sandbox \
     && rm -rf /var/lib/apt/lists/*
 
 # gosu for PUID/PGID privilege dropping

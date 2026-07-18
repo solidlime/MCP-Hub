@@ -40,5 +40,9 @@ if [ -S /var/run/docker.sock ]; then
     echo "Docker socket detected (GID=$DOCKER_GID) — access granted to mcp-hub"
 fi
 
+# Bootstrap persistent dependencies (fastembed, etc.)
+# Runs once on first startup, subsequent startups are no-ops
+gosu mcp-hub python -m mcp_hub.bootstrap
+
 # Drop privileges and execute the command
 exec gosu mcp-hub "$@"
