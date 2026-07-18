@@ -262,6 +262,13 @@ class ToolIndex:
         """List all indexed server names."""
         return sorted(set(d["server"] for d in self._documents))
 
+    def get_tools_by_server(self) -> dict[str, list[str]]:
+        """Return {server_name: [tool_names]} for quick overview. Read-only."""
+        result: dict[str, list[str]] = {}
+        for doc in self._documents:
+            result.setdefault(doc["server"], []).append(doc["name"])
+        return result
+
 
 class MetaTools:
     """Manages meta-tool definitions and execution."""
@@ -275,47 +282,43 @@ class MetaTools:
         self._execute_tool = execute_tool_fn
 
     async def search_tools(self, query: str, top_k: int = 10) -> str:
-        """Search across all upstream server tools by keyword or capability.
-
-        Returns matching tools with their full inputSchema — you can use execute_tool
-        directly with the returned server/name and the inputSchema parameters.
-        No need for a separate get_tool_schema call.
+        """Search upstream tools. Always call FIRST before execute_tool.
 
         Args:
-            query: Natural language description of what you want to do (e.g. "read files", "search web")
-            top_k: Max results to return (default 10)
+            query: What you want to do (e.g. "read files", "search web")
+            top_k: Max results (default 10)
         """
         results = self._index.search(query, top_k)
         if not results:
             return json.dumps({"message": "No matching tools found", "hint": "Try broader keywords or check server connections."}, ensure_ascii=False, indent=2)
         return json.dumps({"results": results}, ensure_ascii=False, indent=2)
 
-    async def get_tool_schema(self, server: str, tool_name: str) -> str:
-        """Get the full input schema for a specific tool on a specific server.
-
-        ALWAYS call this after search_tools to learn the exact parameters required
-        before calling execute_tool.
-
-        Args:
-            server: Server name from search_tools results
-            tool_name: Tool name from search_tools results
-        """
-        schema = self._index.get_schema(server, tool_name)
-        if schema is None:
-            return json.dumps({"error": f"Tool '{tool_name}' not found on server '{server}'"})
-        return json.dumps(schema, ensure_ascii=False, indent=2)
-
     async def execute_tool(self, server: str, tool_name: str, arguments: dict[str, Any]) -> Any:
-        """Execute a tool on any upstream server.
+        """Execute a tool discovered via search_tools.
 
         Args:
-            server: Server name from search_tools results
-            tool_name: Tool name from search_tools results
-            arguments: Tool parameters (use get_tool_schema first to learn the format)
-
-        Exceptions propagate to FastMCP for proper JSON-RPC error reporting.
+            server: From search_tools results
+            tool_name: From search_tools results
+            arguments: Use inputSchema from search_tools results
         """
+        # Verify tool exists in index before dispatching
+        if self._index.get_schema(server, tool_name) is None:
+            return json.dumps({
+                "error": f"Tool '{tool_name}' not found on server '{server}'.",
+                "hint": "Use search_tools first to discover available tools on this server."
+            }, ensure_ascii=False, indent=2)
         return await self._execute_tool(server, tool_name, arguments)
+
+    async def list_upstream_tools(self) -> str:
+        """List all upstream tools grouped by server. Use for orientation, then search_tools."""
+        by_server = self._index.get_tools_by_server()
+        if not by_server:
+            return json.dumps({"message": "No upstream tools available. Add servers via admin API."}, ensure_ascii=False, indent=2)
+        total = sum(len(tools) for tools in by_server.values())
+        return json.dumps({
+            "total_tools": total,
+            "tools_by_server": by_server,
+        }, ensure_ascii=False, indent=2)
 
 
 class MetaApp:
@@ -360,40 +363,28 @@ def create_meta_app(
     # Register meta tools via FastMCP tool decorator
     @mcp.tool()
     async def search_tools(query: str, top_k: int = 10) -> str:
-        """Search across all upstream server tools by keyword or capability.
-
-        Returns matching tools with their full inputSchema — use execute_tool
-        directly with the returned server/name and inputSchema parameters.
-        Always search first before trying to use any tool.
+        """Search upstream tools. Always call FIRST before execute_tool.
 
         Args:
-            query: Natural language description of what you want to do
-            top_k: Maximum number of results to return (default 10)
+            query: What you want to do (e.g. "read files", "search web")
+            top_k: Max results (default 10)
         """
         return await meta.search_tools(query, top_k)
 
     @mcp.tool()
-    async def get_tool_schema(server: str, tool_name: str) -> str:
-        """Get the full input schema for a specific tool on a specific server.
-
-        Always call this after search_tools to learn the exact parameters needed
-        before calling execute_tool.
-
-        Args:
-            server: Server name from search_tools results
-            tool_name: Tool name from search_tools results
-        """
-        return await meta.get_tool_schema(server, tool_name)
-
-    @mcp.tool()
     async def execute_tool(server: str, tool_name: str, arguments: dict[str, Any]) -> Any:
-        """Execute a tool on any upstream server.
+        """Execute a tool discovered via search_tools.
 
         Args:
-            server: Server name from search_tools results
-            tool_name: Tool name from search_tools results (use get_tool_schema first)
-            arguments: Tool parameters matching the tool's input schema
+            server: From search_tools results
+            tool_name: From search_tools results
+            arguments: Use inputSchema from search_tools results
         """
         return await meta.execute_tool(server, tool_name, arguments)
+
+    @mcp.tool()
+    async def list_upstream_tools() -> str:
+        """List all upstream tools grouped by server. Use for orientation, then search_tools."""
+        return await meta.list_upstream_tools()
 
     return MetaApp(mcp=mcp, index=index, meta=meta, rebuild_fn=rebuild_index)

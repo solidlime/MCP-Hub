@@ -181,13 +181,13 @@ class TestMetaIntegration:
         # 406 Not Acceptable means the endpoint exists (without correct Accept)
         assert r.status_code != 404
 
-    def test_mcp_meta_has_three_tools(self, client):
-        """Meta app exposes exactly 3 tools: search_tools, get_tool_schema, execute_tool."""
+    def test_mcp_meta_has_expected_tools(self, client):
+        """Meta app exposes 3 tools: search_tools, execute_tool, list_upstream_tools."""
         parsed = _post_tools_list(client)
         tools = parsed["result"]["tools"]
         assert len(tools) == 3
         names = {t["name"] for t in tools}
-        assert names == {"search_tools", "get_tool_schema", "execute_tool"}
+        assert names == {"search_tools", "execute_tool", "list_upstream_tools"}
 
     def test_search_tools_returns_results(self, client):
         """search_tools with a query returns a JSON response with result list."""
@@ -202,34 +202,6 @@ class TestMetaIntegration:
         names = {r["name"] for r in results}
         # At least one of file_read/file_write should be in results
         assert "file_read" in names or "file_write" in names
-
-    def test_get_tool_schema(self, client):
-        """get_tool_schema for an indexed tool returns its inputSchema."""
-        parsed = _call_tool(
-            client,
-            "get_tool_schema",
-            {"server": "filesystem", "tool_name": "file_read"},
-            "s2",
-        )
-        text = _get_text_content(parsed)
-        data = json.loads(text)
-        assert "inputSchema" in data
-        assert data["name"] == "file_read"
-        assert data["server"] == "filesystem"
-        assert "path" in data["inputSchema"]["properties"]
-
-    def test_get_tool_schema_nonexistent(self, client):
-        """get_tool_schema for a nonexistent tool returns an error."""
-        parsed = _call_tool(
-            client,
-            "get_tool_schema",
-            {"server": "nonexistent", "tool_name": "foo"},
-            "s3",
-        )
-        text = _get_text_content(parsed)
-        data = json.loads(text)
-        assert "error" in data
-        assert "nonexistent" in data["error"]
 
     def test_execute_tool(self, client):
         """execute_tool dispatches to proxy_manager.call_tool and returns result."""

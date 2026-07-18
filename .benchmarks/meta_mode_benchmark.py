@@ -63,10 +63,10 @@ TEST_CASES: list[tuple[str, str, list[str], list[str]]] = [
         ["screenshot", "puppeteer"],
     ),
     (
-        "この問題を段階的に考えて",
-        "sequentialthinking",
-        [],
-        ["think", "sequential", "reason"],
+        "フォームの国選択ドロップダウンから「日本」を選んで",
+        "puppeteer_select",
+        ["puppeteer_click"],
+        ["select", "dropdown", "puppeteer", "form", "choose"],
     ),
     (
         "ログインボタンをクリックして",
@@ -75,10 +75,10 @@ TEST_CASES: list[tuple[str, str, list[str], list[str]]] = [
         ["click", "puppeteer"],
     ),
     (
-        "このURLの内容を取得して",
-        "web_search_exa",
-        ["brave_web_search", "puppeteer_navigate"],
-        ["web", "fetch", "url", "browse"],
+        "検索ボックスに「MCP Hub」と入力して",
+        "puppeteer_fill",
+        ["puppeteer_click"],
+        ["fill", "input", "puppeteer", "form"],
     ),
 ]
 
@@ -434,6 +434,57 @@ TOOLS_ON: list[dict[str, Any]] = [
     },
 ]
 
+TOOLS_ON_NEW: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "search_tools",
+            "description": "Search upstream tools. Always call FIRST before execute_tool.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "What you want to do (e.g. 'read files', 'search web')",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "Max results (default 10)",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_tool",
+            "description": "Execute a tool discovered via search_tools.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "server": {"type": "string", "description": "From search_tools results"},
+                    "tool_name": {"type": "string", "description": "From search_tools results"},
+                    "arguments": {"type": "object", "description": "Use inputSchema from search_tools results"},
+                },
+                "required": ["server", "tool_name", "arguments"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_upstream_tools",
+            "description": "List all upstream tools grouped by server. Use for orientation, then search_tools.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+            },
+        },
+    },
+]
+
 # ── Core Logic ─────────────────────────────────────────────────────────────
 
 
@@ -580,39 +631,47 @@ def print_header() -> None:
 def print_comparison(
     results_off: dict[str, Any],
     results_on: dict[str, Any],
+    results_new: dict[str, Any],
 ) -> None:
-    """Print formatted comparison table."""
+    """Print formatted comparison table with 3 columns."""
     print()
-    print(f"{'Test Case':<42s} | {'meta_mode OFF':<13s} | {'meta_mode ON':<13s}")
-    print("-" * 42 + "-+-" + "-" * 13 + "-+-" + "-" * 13)
-    print("-" * 42 + " | " + "-" * 13 + " | " + "-" * 13)
+    header = f"{'Test Case':<42s} | {'meta_mode OFF':<13s} | {'OLD meta':<13s} | {'NEW meta':<13s}"
+    print(header)
+    sep = "-" * 42 + "-+-" + "-" * 13 + "-+-" + "-" * 13 + "-+-" + "-" * 13
+    print(sep)
 
-    for c_off, c_on in zip(results_off["cases"], results_on["cases"]):
-        assert c_off["expected_tool"] == c_on["expected_tool"], "case mismatch"
+    for c_off, c_on, c_new in zip(results_off["cases"], results_on["cases"], results_new["cases"]):
+        assert c_off["expected_tool"] == c_on["expected_tool"] == c_new["expected_tool"], "case mismatch"
         case_name = f"search_tools → {c_off['expected_tool']}"
         off_str = f"{c_off['passed']}/{c_off['total']} ({c_off['success_rate']}%)"
         on_str = f"{c_on['passed']}/{c_on['total']} ({c_on['success_rate']}%)"
-        print(f"{case_name:<42s} | {off_str:>13s} | {on_str:>13s}")
+        new_str = f"{c_new['passed']}/{c_new['total']} ({c_new['success_rate']}%)"
+        print(f"{case_name:<42s} | {off_str:>13s} | {on_str:>13s} | {new_str:>13s}")
 
-    print("-" * 42 + "-+-" + "-" * 13 + "-+-" + "-" * 13)
+    print(sep)
     so = results_off["summary"]
     sn = results_on["summary"]
+    sn_new = results_new["summary"]
     off_total = f"{so['total_passed']}/{so['total_attempts']} ({so['overall_success_rate']}%)"
     on_total = f"{sn['total_passed']}/{sn['total_attempts']} ({sn['overall_success_rate']}%)"
+    new_total = f"{sn_new['total_passed']}/{sn_new['total_attempts']} ({sn_new['overall_success_rate']}%)"
 
-    off_label = f"meta_mode OFF: {so['total_passed']}/{so['total_attempts']} ({so['overall_success_rate']}%)"
-    on_label = f"meta_mode ON:  {sn['total_passed']}/{sn['total_attempts']} ({sn['overall_success_rate']}%)"
+    off_label = f"meta_mode OFF:  {so['total_passed']}/{so['total_attempts']} ({so['overall_success_rate']}%)"
+    on_label = f"OLD meta:       {sn['total_passed']}/{sn['total_attempts']} ({sn['overall_success_rate']}%)"
+    new_label = f"NEW meta:       {sn_new['total_passed']}/{sn_new['total_attempts']} ({sn_new['overall_success_rate']}%)"
 
-    print(f"{'OVERALL':<42s} | {off_total:>13s} | {on_total:>13s}")
+    print(f"{'OVERALL':<42s} | {off_total:>13s} | {on_total:>13s} | {new_total:>13s}")
     print()
     print(f"  {off_label}")
     print(f"  {on_label}")
+    print(f"  {new_label}")
     print()
 
 
 def save_results(
     results_off: dict[str, Any],
     results_on: dict[str, Any],
+    results_new: dict[str, Any],
     path: str = ".benchmarks/results.json",
 ) -> None:
     """Save benchmark results to JSON."""
@@ -623,6 +682,7 @@ def save_results(
         "runs_per_case": RUNS,
         "meta_mode_off": results_off,
         "meta_mode_on": results_on,
+        "meta_mode_new": results_new,
     }
     with open(path, "w") as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)
@@ -649,15 +709,21 @@ def main() -> None:
     results_off = run_benchmark(client, "OFF", TOOLS_OFF)
     print()
 
-    # ── meta_mode ON benchmark ──
-    print(">>> meta_mode ON (3 progressive discovery tools)")
+    # ── OLD meta benchmark ──
+    print(">>> OLD meta (3 progressive discovery tools: search_tools + get_tool_schema + execute_tool)")
     print("-" * 60)
     results_on = run_benchmark(client, "ON", TOOLS_ON)
     print()
 
+    # ── NEW meta benchmark ──
+    print(">>> NEW meta (3 slim tools: search_tools + execute_tool + list_upstream_tools)")
+    print("-" * 60)
+    results_new = run_benchmark(client, "ON", TOOLS_ON_NEW)
+    print()
+
     # ── comparison ──
-    print_comparison(results_off, results_on)
-    save_results(results_off, results_on)
+    print_comparison(results_off, results_on, results_new)
+    save_results(results_off, results_on, results_new)
 
     print("Done.")
 

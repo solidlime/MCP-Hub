@@ -1,6 +1,6 @@
 {
   "benchmark": "meta_mode_tool_call_benchmark",
-  "timestamp": "2026-07-13T18:51:46.958456+00:00",
+  "timestamp": "2026-07-18T10:28:42.830338+00:00",
   "model": "tencent/hy3:free",
   "runs_per_case": 3,
   "meta_mode_off": {
@@ -18,9 +18,9 @@
       {
         "query": "example.comをブラウザで開いて",
         "expected_tool": "puppeteer_navigate",
-        "passed": 3,
+        "passed": 0,
         "total": 3,
-        "success_rate": 100.0
+        "success_rate": 0.0
       },
       {
         "query": "東京のピザ屋を探して",
@@ -32,16 +32,16 @@
       {
         "query": "現在のページのスクリーンショットを撮って",
         "expected_tool": "puppeteer_screenshot",
-        "passed": 3,
+        "passed": 0,
         "total": 3,
-        "success_rate": 100.0
+        "success_rate": 0.0
       },
       {
-        "query": "この問題を段階的に考えて",
+        "query": "複雑なロジックパズルを解く手順を段階的に考えて",
         "expected_tool": "sequentialthinking",
-        "passed": 1,
+        "passed": 0,
         "total": 3,
-        "success_rate": 33.3
+        "success_rate": 0.0
       },
       {
         "query": "ログインボタンをクリックして",
@@ -51,17 +51,17 @@
         "success_rate": 0.0
       },
       {
-        "query": "このURLの内容を取得して",
-        "expected_tool": "web_search_exa",
+        "query": "検索ボックスに「MCP Hub」と入力して",
+        "expected_tool": "puppeteer_fill",
         "passed": 0,
         "total": 3,
         "success_rate": 0.0
       }
     ],
     "summary": {
-      "total_passed": 13,
+      "total_passed": 6,
       "total_attempts": 21,
-      "overall_success_rate": 61.9
+      "overall_success_rate": 28.6
     }
   },
   "meta_mode_on": {
@@ -98,7 +98,7 @@
         "success_rate": 100.0
       },
       {
-        "query": "この問題を段階的に考えて",
+        "query": "複雑なロジックパズルを解く手順を段階的に考えて",
         "expected_tool": "sequentialthinking",
         "passed": 0,
         "total": 3,
@@ -112,8 +112,8 @@
         "success_rate": 100.0
       },
       {
-        "query": "このURLの内容を取得して",
-        "expected_tool": "web_search_exa",
+        "query": "検索ボックスに「MCP Hub」と入力して",
+        "expected_tool": "puppeteer_fill",
         "passed": 3,
         "total": 3,
         "success_rate": 100.0
@@ -123,6 +123,67 @@
       "total_passed": 18,
       "total_attempts": 21,
       "overall_success_rate": 85.7
+    }
+  },
+  "meta_mode_new": {
+    "mode": "ON",
+    "model": "tencent/hy3:free",
+    "runs_per_case": 3,
+    "cases": [
+      {
+        "query": "最新のAIニュースを検索して",
+        "expected_tool": "brave_web_search",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "example.comをブラウザで開いて",
+        "expected_tool": "puppeteer_navigate",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "東京のピザ屋を探して",
+        "expected_tool": "brave_local_search",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "現在のページのスクリーンショットを撮って",
+        "expected_tool": "puppeteer_screenshot",
+        "passed": 2,
+        "total": 3,
+        "success_rate": 66.7
+      },
+      {
+        "query": "複雑なロジックパズルを解く手順を段階的に考えて",
+        "expected_tool": "sequentialthinking",
+        "passed": 0,
+        "total": 3,
+        "success_rate": 0.0
+      },
+      {
+        "query": "ログインボタンをクリックして",
+        "expected_tool": "puppeteer_click",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      },
+      {
+        "query": "検索ボックスに「MCP Hub」と入力して",
+        "expected_tool": "puppeteer_fill",
+        "passed": 3,
+        "total": 3,
+        "success_rate": 100.0
+      }
+    ],
+    "summary": {
+      "total_passed": 17,
+      "total_attempts": 21,
+      "overall_success_rate": 81.0
     }
   }
 }
