@@ -9,7 +9,7 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-PERSIST_DIR = os.path.join(os.environ.get("HOME", "/home/mcp-hub"), ".mcp-hub")
+PERSIST_DIR = "/home/mcp-hub"
 EXTRAS_DIR = os.path.join(PERSIST_DIR, "pip-extras")
 BIN_DIR = os.path.join(PERSIST_DIR, "bin")
 
@@ -26,9 +26,14 @@ def setup_path():
 
 
 def setup_env():
-    """Add persistent bin dir to PATH for subprocesses (npx, uvx, etc.)."""
-    if os.path.isdir(BIN_DIR) and BIN_DIR not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = BIN_DIR + os.pathsep + os.environ.get("PATH", "")
+    """Add persistent bin dirs to PATH for subprocesses (npx, uvx, etc.)."""
+    paths = [BIN_DIR]
+    node_bin = os.path.join(BIN_DIR, "bin")
+    if os.path.isdir(node_bin):
+        paths.append(node_bin)
+    for p in paths:
+        if p not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = p + os.pathsep + os.environ.get("PATH", "")
 
 
 def run():
@@ -46,7 +51,7 @@ def _ensure_bin_dir():
 
 
 def _ensure_node():
-    node_bin = os.path.join(BIN_DIR, "node")
+    node_bin = os.path.join(BIN_DIR, "bin", "node")
     if os.path.isfile(node_bin):
         return
     logger.info("[bootstrap] Downloading Node.js %s...", NODE_VERSION)
@@ -71,9 +76,11 @@ def _ensure_fastembed():
         pass
     logger.info("[bootstrap] Installing fastembed to %s...", EXTRAS_DIR)
     os.makedirs(EXTRAS_DIR, exist_ok=True)
+    uv_bin = os.path.join(BIN_DIR, "uv")
     subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--target", EXTRAS_DIR, "fastembed"],
+        [uv_bin, "pip", "install", "--target", EXTRAS_DIR, "fastembed"],
         check=True,
+        env={**os.environ, "VIRTUAL_ENV": os.environ.get("VIRTUAL_ENV", "/opt/venv")},
     )
     logger.info("[bootstrap] fastembed installed.")
 
@@ -108,7 +115,7 @@ def _extract(tf, dest, strip_components, files):
                     m.name = parts[strip_components]
                 else:
                     continue
-        tf.extractall(dest, members=members)
+        tf.extractall(dest, members=members, filter="data")
     else:
         members = []
         for m in tf.getmembers():
@@ -117,7 +124,7 @@ def _extract(tf, dest, strip_components, files):
                 if strip_components > 0:
                     m.name = base
                 members.append(m)
-        tf.extractall(dest, members=members)
+        tf.extractall(dest, members=members, filter="data")
 
 
 if __name__ == "__main__":

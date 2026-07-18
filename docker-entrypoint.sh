@@ -45,7 +45,7 @@ fi
 gosu mcp-hub python -m mcp_hub.bootstrap
 
 # Export the bootstrapped bin path so downstream process inherits it
-export PATH="/home/mcp-hub/.mcp-hub/bin:$PATH"
+export PATH="/home/mcp-hub/bin:/home/mcp-hub/bin/bin:$PATH"
 
 # Drop privileges and execute the command
 exec gosu mcp-hub "$@"
