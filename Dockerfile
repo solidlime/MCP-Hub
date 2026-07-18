@@ -100,6 +100,6 @@ ENTRYPOINT ["docker-entrypoint.sh"]
 EXPOSE 26263
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:26263/admin/api/health || exit 1
+    CMD wget -qO- http://localhost:26263/admin/api/health || exit 1
 
 CMD ["python", "-m", "mcp_hub.main"]
