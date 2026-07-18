@@ -66,11 +66,13 @@ class TestToolIndex:
         assert len(results) <= 2
 
     async def test_search_no_match(self, index):
-        """With embeddings, everything has some similarity score.
-        Query for a nonsense string and verify results come back
-        (they'll just have low similarity)."""
+        """Query for a nonsense string. With embeddings: returns results
+        (low similarity). With BM25 fallback: returns empty (correct)."""
         results = index.search("zzz_xyzzy_nonexistent_12345")
-        assert len(results) >= 1  # embeddings always return something
+        if index._embeddings is not None:
+            assert len(results) >= 1  # embeddings always return something
+        else:
+            assert len(results) == 0  # BM25 correctly finds no match
 
 
 class TestTokenizer:
