@@ -44,7 +44,8 @@ RUN uv venv /opt/venv && \
 # 依存パッケージのみ先にインストール（ソース変更の影響を受けない）
 RUN . /opt/venv/bin/activate && \
     uv pip install $(python3 -c "import tomllib; \
-    print(*tomllib.load(open('pyproject.toml','rb'))['project']['dependencies'])")
+    t = tomllib.load(open('pyproject.toml','rb')); \
+    print(*t['project']['dependencies'], *t['project']['optional-dependencies']['embeddings'])")
 
 # アプリケーションコード + 設定ファイル
 COPY src/ ${APP_HOME}/src/
