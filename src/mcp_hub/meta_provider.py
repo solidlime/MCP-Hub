@@ -202,7 +202,7 @@ class ToolIndex:
         if norm > 0:
             query_vec = query_vec / norm
         # Dot product = cosine similarity (both vectors L2-normalized)
-        scores = self._embeddings @ query_vec  # type: ignore[name-defined]
+        scores = self._embeddings @ query_vec  # type: ignore[name-defined,operator]
         ranked = sorted(
             range(len(scores)), key=lambda i: scores[i], reverse=True
         )

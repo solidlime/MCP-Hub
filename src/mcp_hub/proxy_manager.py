@@ -340,14 +340,14 @@ class ProxyManager:
         return dict(self._proxies)
 
     async def _list_tools_with_retry(self, proxy: FastMCPProxy, name: str,
-                                     max_retries: int = 2) -> list:
+                                     max_retries: int = 2) -> list[Any]:
         """Call proxy.list_tools() with retry on transient connection errors."""
         retry_delay = float(os.environ.get("MCP_HUB_LIST_TOOLS_RETRY_DELAY", "0.3"))
         last_error: Exception | None = None
 
         for attempt in range(max_retries + 1):
             try:
-                return await proxy.list_tools()
+                return list(await proxy.list_tools())
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
@@ -489,7 +489,7 @@ class ProxyManager:
             if headers:
                 path = urlparse(url).path
                 if re.search(r"/sse(/|\?|&|$)", path):
-                    transport = SSETransport(url=url, headers=headers)
+                    transport: Any = SSETransport(url=url, headers=headers)
                 else:
                     transport = StreamableHttpTransport(url=url, headers=headers)
                 client = Client(transport=transport)
@@ -499,7 +499,7 @@ class ProxyManager:
         elif command:
             args = config.get("args", [])
             env = config.get("env")
-            transport = StdioTransport(command=command, args=args, env=env)
+            transport = StdioTransport(command=command, args=args, env=env)  # type: ignore[assignment]
             proxy = create_proxy(transport, name=name)
         else:
             raise ValueError(f"Invalid config for {name}: need 'url' or 'command'")
