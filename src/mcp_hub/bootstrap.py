@@ -118,3 +118,8 @@ def _extract(tf, dest, strip_components, files):
                     m.name = base
                 members.append(m)
         tf.extractall(dest, members=members)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+    run()
