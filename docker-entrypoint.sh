@@ -40,9 +40,12 @@ if [ -S /var/run/docker.sock ]; then
     echo "Docker socket detected (GID=$DOCKER_GID) — access granted to mcp-hub"
 fi
 
-# Bootstrap persistent dependencies (fastembed, etc.)
+# Bootstrap persistent dependencies (node, uv, fastembed)
 # Runs once on first startup, subsequent startups are no-ops
 gosu mcp-hub python -m mcp_hub.bootstrap
+
+# Export the bootstrapped bin path so downstream process inherits it
+export PATH="/home/mcp-hub/.mcp-hub/bin:$PATH"
 
 # Drop privileges and execute the command
 exec gosu mcp-hub "$@"

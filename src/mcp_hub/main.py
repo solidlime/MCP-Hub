@@ -30,6 +30,7 @@ from fastmcp import FastMCP
 
 from . import bootstrap as _bootstrap
 _bootstrap.setup_path()
+_bootstrap.setup_env()
 
 from .admin_router import router as admin_router
 from .auth import ApiKeyMiddleware

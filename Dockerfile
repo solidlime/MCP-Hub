@@ -67,28 +67,18 @@ ENV APP_HOME=/opt/mcp-hub \
 
 WORKDIR ${APP_HOME}
 
-# Node.js ランタイムのみ (MCP サーバー実行用、ビルドツールは含めない)
+# Runtime deps: wget for gosu download, ca-certificates for HTTPS
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-    curl ca-certificates wget gnupg \
-    && mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | \
-    gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
-    > /etc/apt/sources.list.d/nodesource.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-    nodejs \
+    ca-certificates wget \
     && rm -rf /var/lib/apt/lists/*
 
 # gosu for PUID/PGID privilege dropping
 RUN wget -O /usr/local/bin/gosu "https://github.com/tianon/gosu/releases/download/1.17/gosu-$(dpkg --print-architecture)" \
     && chmod +x /usr/local/bin/gosu
 
-# uv/uvx — Python MCP server runner (e.g., mcp-server-fetch)
-RUN pip install --no-cache-dir uv
 
 # builder から仮想環境とアプリケーションと設定ファイルをコピー
 COPY --from=builder /opt/venv /opt/venv

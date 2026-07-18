@@ -3,11 +3,20 @@ import logging
 import os
 import subprocess
 import sys
+import tarfile
+import tempfile
+import urllib.request
 
 logger = logging.getLogger(__name__)
 
 PERSIST_DIR = os.path.join(os.environ.get("HOME", "/home/mcp-hub"), ".mcp-hub")
 EXTRAS_DIR = os.path.join(PERSIST_DIR, "pip-extras")
+BIN_DIR = os.path.join(PERSIST_DIR, "bin")
+
+NODE_VERSION = "22.23.1"
+NODE_URL = f"https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-linux-x64.tar.xz"
+UV_VERSION = "0.11.29"
+UV_URL = f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"
 
 
 def setup_path():
@@ -16,10 +25,42 @@ def setup_path():
         sys.path.insert(0, EXTRAS_DIR)
 
 
+def setup_env():
+    """Add persistent bin dir to PATH for subprocesses (npx, uvx, etc.)."""
+    if os.path.isdir(BIN_DIR) and BIN_DIR not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = BIN_DIR + os.pathsep + os.environ.get("PATH", "")
+
+
 def run():
     """Ensure optional dependencies are installed. Idempotent — skips if already done."""
     setup_path()
+    setup_env()
+    _ensure_bin_dir()
+    _ensure_node()
+    _ensure_uv()
     _ensure_fastembed()
+
+
+def _ensure_bin_dir():
+    os.makedirs(BIN_DIR, exist_ok=True)
+
+
+def _ensure_node():
+    node_bin = os.path.join(BIN_DIR, "node")
+    if os.path.isfile(node_bin):
+        return
+    logger.info("[bootstrap] Downloading Node.js %s...", NODE_VERSION)
+    _download_and_extract(NODE_URL, BIN_DIR, strip_components=1)
+    logger.info("[bootstrap] Node.js installed.")
+
+
+def _ensure_uv():
+    uv_bin = os.path.join(BIN_DIR, "uv")
+    if os.path.isfile(uv_bin):
+        return
+    logger.info("[bootstrap] Downloading uv %s...", UV_VERSION)
+    _download_and_extract(UV_URL, BIN_DIR, strip_components=1, files=["uv", "uvx"])
+    logger.info("[bootstrap] uv installed.")
 
 
 def _ensure_fastembed():
@@ -35,3 +76,45 @@ def _ensure_fastembed():
         check=True,
     )
     logger.info("[bootstrap] fastembed installed.")
+
+
+def _download_and_extract(url, dest, strip_components=0, files=None):
+    """Download tarball and extract to dest. Supports .tar.xz and .tar.gz."""
+    tmp = tempfile.NamedTemporaryFile(suffix=".tar", delete=False)
+    try:
+        urllib.request.urlretrieve(url, tmp.name)
+
+        # .tar.xz needs lzma open; .tar.gz works directly with tarfile
+        if url.endswith(".tar.xz"):
+            import lzma
+            with lzma.open(tmp.name) as f:
+                with tarfile.open(fileobj=f) as tf:
+                    _extract(tf, dest, strip_components, files)
+        else:
+            with tarfile.open(tmp.name) as tf:
+                _extract(tf, dest, strip_components, files)
+    finally:
+        os.unlink(tmp.name)
+
+
+def _extract(tf, dest, strip_components, files):
+    """Extract members from an open tarfile, optionally filtering and stripping."""
+    if files is None:
+        members = tf.getmembers()
+        for m in members:
+            if strip_components > 0:
+                parts = m.name.split("/", strip_components)
+                if len(parts) > strip_components:
+                    m.name = parts[strip_components]
+                else:
+                    continue
+        tf.extractall(dest, members=members)
+    else:
+        members = []
+        for m in tf.getmembers():
+            base = os.path.basename(m.name)
+            if base in files:
+                if strip_components > 0:
+                    m.name = base
+                members.append(m)
+        tf.extractall(dest, members=members)
