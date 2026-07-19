@@ -105,29 +105,28 @@ class TestConnectServer:
 
 class TestRegisterServer:
     @pytest.mark.asyncio
-    async def test_register_server_handles_none_proxy(self, manager, monkeypatch):
-        """register_server handles None from _connect_server without error."""
-        monkeypatch.setenv("MCP_HUB_RETRY_MAX", "1")
+    async def test_register_server_saves_and_returns_immediately(self, manager):
+        """register_server saves to DB, starts background connect, returns immediately."""
         manager.registry.add_server = AsyncMock()
-        manager._create_proxy = MagicMock(side_effect=ConnectionError("fail"))
+        manager._create_proxy = MagicMock(return_value=_MockProxy("srv1"))
 
         result = await manager.register_server("srv1", {"url": "http://localhost:9999"})
 
-        assert result == []
-        assert manager._status["srv1"] == "error"
+        assert result["name"] == "srv1"
+        assert result["status"] == "connecting"
+        assert result["config"] == {"url": "http://localhost:9999"}
+        # Background task not yet awaited — proxy not in _proxies immediately
         assert "srv1" not in manager._proxies
+        assert manager._status["srv1"] == "connecting"
 
     @pytest.mark.asyncio
-    async def test_register_server_retry_succeeds(self, manager, monkeypatch):
-        """register_server succeeds after retry."""
-        monkeypatch.setenv("MCP_HUB_RETRY_MAX", "2")
+    async def test_register_server_disabled_server_no_connect(self, manager):
+        """register_server with disabled=True skips background connection."""
         manager.registry.add_server = AsyncMock()
-        manager.registry.get_server = AsyncMock(return_value=None)
-        proxy_ok = _MockProxy("srv1")
-        manager._create_proxy = MagicMock(side_effect=[ConnectionError("fail"), proxy_ok])
 
-        result = await manager.register_server("srv1", {"url": "http://localhost:9999"})
+        result = await manager.register_server("srv1", {"url": "http://localhost:9999", "disabled": True})
 
-        assert "srv1" in manager._proxies
-        assert manager._status["srv1"] == "connected"
-        assert result == []
+        assert result["name"] == "srv1"
+        assert result["status"] == "disabled"
+        assert "srv1" not in manager._proxies
+        assert manager._status["srv1"] == "disabled"
