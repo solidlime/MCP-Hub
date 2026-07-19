@@ -2455,7 +2455,7 @@
 
                 // Parse headers
                 const headers = server.config.headers || {};
-                document.getElementById('editHeaders').value = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join('\n');
+                document.getElementById('editHeaders').value = Object.entries(headers).map(([k, v]) => `"${k}": "${v}"`).join('\n');
             }
 
             renderEditTags();
@@ -2954,10 +2954,16 @@
             scheduleNextRefresh();
         });
 
-        // Close modals on overlay click
+        // Close modals on overlay click — only when both mousedown and click
+        // target the overlay background (prevents accidental close from drags
+        // that start inside the modal and end on the overlay).
         document.querySelectorAll('.modal-overlay').forEach(overlay => {
+            let mousedownTarget = null;
+            overlay.addEventListener('mousedown', (e) => {
+                mousedownTarget = e.target;
+            });
             overlay.addEventListener('click', (e) => {
-                if (e.target === overlay) {
+                if (e.target === overlay && mousedownTarget === overlay) {
                     overlay.classList.remove('active');
                 }
             });
