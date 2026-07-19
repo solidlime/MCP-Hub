@@ -165,8 +165,31 @@ FastMCPのResource機構で `hub://servers` が利用可能。接続サーバー
 
 ## meta_mode ベンチマーク
 
-`meta_mode` は Progressive Discovery を有効にする設定。通常モード（15ツールを直接公開）とメタモード（3ツール）の比較に加え、
-v2.0 ではメタツールをスリム化した新メタモードを追加。ツール定義サイズを 31% 削減しつつ、同等の成功率を維持する。
+`meta_mode` は Progressive Discovery を有効にする設定。通常モード（全ツールを直接公開）とメタモード（3ツール: `search_tools`, `execute_tool`, `list_upstream_tools`）を比較。
+
+### プロトコル別パフォーマンス (5反復平均)
+
+| プロトコル | Meta ON (2-hop) | Meta OFF (直接) | オーバーヘッド |
+|-----------|:---:|:---:|:---:|
+| stdio | 0.017s | 0.006s | 3.0x |
+| SSE | 0.040s | 0.026s | 1.6x |
+| Streamable HTTP (202 async) | 2.116s | 2.022s | 1.0x |
+
+- **Meta ON**: `search_tools` → `execute_tool` の2ホップフロー
+- **Meta OFF**: 名前空間付き直接ツール呼び出し
+- Streamable HTTP の遅延は202ポーリング（2往復）に起因。メタモードのオーバーヘッドはほぼゼロ（検索 ~0.01s）。
+- 全プロトコルでツールコールのレイテンシは `execute_tool` → `call_tool` の内部転送が支配的。メタ検索の追加コストは無視可能。
+
+### キャッシュ効果 (filesystem 14ツール + sequential-thinking 1ツール)
+
+| メトリクス | 値 |
+|-----------|-----|
+| `list_upstream_tools` (非キャッシュ) | ~0.1s (サーバーごとに list_tools 再取得) |
+| `list_upstream_tools` (キャッシュ, TTL=60s) | <1ms |
+| 速度向上 | **100x+** |
+
+キャッシュによりサーバー数が増えても `list_upstream_tools` の応答速度は一定。
+再接続・リフレッシュ時にキャッシュは自動無効化される。
 
 ### 比較結果 (tencent/hy3:free, 7ケース×3回)
 
