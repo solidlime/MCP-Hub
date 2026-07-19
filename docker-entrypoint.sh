@@ -40,6 +40,21 @@ if [ -S /var/run/docker.sock ]; then
     echo "Docker socket detected (GID=$DOCKER_GID) — access granted to mcp-hub"
 fi
 
+# Ensure Chromium/Puppeteer system dependencies are installed
+# Required by Puppeteer MCP servers that spawn headless Chrome
+# Runs once per container start; idempotent via apt-get install -y
+if command -v apt-get >/dev/null 2>&1; then
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y --no-install-recommends \
+        libglib2.0-0 \
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
+        libcups2 libdrm2 libdbus-1-3 libxkbcommon0 \
+        libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+        libgbm1 libpango-1.0-0 libcairo2 libasound2 \
+        2>/dev/null || true
+    rm -rf /var/lib/apt/lists/*
+fi
+
 # Bootstrap persistent dependencies (node, uv, fastembed)
 # Runs once on first startup, subsequent startups are no-ops
 gosu mcp-hub python -m mcp_hub.bootstrap
