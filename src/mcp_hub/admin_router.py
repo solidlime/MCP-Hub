@@ -123,7 +123,7 @@ async def metrics():
 
 
 @router.get("/servers")
-async def list_servers(include_tools: bool = True):
+async def list_servers(include_tools: bool = False):
     """List all servers. include_tools=True (default) returns tool names (backward compat).
 
     Set include_tools=false for fast listing without per-server network calls.

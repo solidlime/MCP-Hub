@@ -1722,8 +1722,9 @@
         // API COMMUNICATION
         // ============================================================
         const API = {
-            async getServers() {
-                const response = await fetch('/admin/api/servers');
+            async getServers(includeTools = false) {
+                const url = includeTools ? '/admin/api/servers?include_tools=true' : '/admin/api/servers';
+                const response = await fetch(url);
                 if (!response.ok) throw new Error('サーバー一覧の取得に失敗しました');
                 return response.json();
             },
@@ -2098,7 +2099,7 @@
         // ============================================================
         async function loadServers() {
             try {
-                const data = await API.getServers();
+                const data = await API.getServers(true);
                 servers = data.servers || [];
                 renderServers();
                 updateMetrics();
