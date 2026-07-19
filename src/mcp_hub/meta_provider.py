@@ -244,6 +244,26 @@ class ToolIndex:
                 "inputSchema": doc.get("inputSchema", {}),
                 "score": round(float(scores[idx]), 4),
             })
+        # Small-corpus fallback: when N ≤ 5 and BM25 produces negative IDF
+        # (all terms appear in most docs), use simple TF overlap scoring
+        if not results and len(self._corpus) <= 5:
+            query_set = set(tokens)
+            tf_scores = []
+            for doc_tokens in self._corpus:
+                hits = sum(1 for t in doc_tokens if t in query_set)
+                tf_scores.append(hits / max(1, len(doc_tokens)))
+            tf_ranked = sorted(range(len(tf_scores)), key=lambda i: tf_scores[i], reverse=True)
+            for idx in tf_ranked[:top_k]:
+                if tf_scores[idx] <= 0:
+                    break
+                doc = docs[idx]
+                results.append({
+                    "server": doc["server"],
+                    "name": doc["name"],
+                    "description": doc.get("description", ""),
+                    "inputSchema": doc.get("inputSchema", {}),
+                    "score": round(tf_scores[idx], 4),
+                })
         return results
 
     # ── Schema + Server listing ───────────────────────────────────

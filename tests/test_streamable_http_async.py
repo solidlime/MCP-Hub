@@ -12,7 +12,7 @@ import asyncio
 import threading
 import pytest
 
-from mcp_hub.streamable_http_patch import apply_patch, restore_patch
+from mcp_hub.streamable_http_patch import apply_patch
 
 # Apply patch before any tests run
 apply_patch()
@@ -97,7 +97,7 @@ class TestMCPHubProxy:
         from mcp_hub.proxy_manager import ProxyManager
         from mcp_hub.store import JsonStore
 
-        import tempfile, os
+        import tempfile
         mcp = FastMCP("test-hub")
         tmpdir = tempfile.mkdtemp()
         try:
