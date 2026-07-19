@@ -30,7 +30,7 @@ MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 class ToolIndex:
     """Embedding-based semantic search over proxied tools, with BM25 fallback.
 
-    Primary search uses fastembed (BAAI/bge-small-en-v1.5) for dense retrieval.
+    Primary search uses fastembed (cl-nagoya/ruri-v3-30m) for dense retrieval.
     Falls back to BM25Okapi when fastembed is not available.
     Thread-safe via asyncio.Lock.
 
@@ -38,7 +38,7 @@ class ToolIndex:
     BM25 uses token duplication to simulate BM25F field weights.
     """
 
-    def __init__(self):
+    def __init__(self, embedding_model: str = "cl-nagoya/ruri-v3-30m"):
         self._lock = asyncio.Lock()
         self._documents: list[dict] = []  # [{server, name, description, inputSchema}, ...]
         self._bm25: BM25Okapi | None = None
@@ -46,6 +46,7 @@ class ToolIndex:
         self._embedder: "TextEmbedding | None" = None  # type: ignore[name-defined]
         self._embeddings: "np.ndarray | None" = None  # type: ignore[name-defined]
         self._use_embeddings: bool = _HAS_FASTEMBED
+        self._embedding_model: str = embedding_model
 
     # ── Tokenization ──────────────────────────────────────────────
 
@@ -158,7 +159,7 @@ class ToolIndex:
             if self._use_embeddings and documents:
                 try:
                     if self._embedder is None:  # type: ignore[truthiness-function]
-                        self._embedder = TextEmbedding("BAAI/bge-small-en-v1.5")  # type: ignore[name-defined]
+                        self._embedder = TextEmbedding(self._embedding_model)  # type: ignore[name-defined]
                     doc_texts = [
                         f"{d['server']}/{d['name']}: {d.get('description', '')}"
                         for d in documents
@@ -364,10 +365,11 @@ class MetaApp:
 
 def create_meta_app(
     proxy_manager,  # ProxyManager instance
+    embedding_model: str = "cl-nagoya/ruri-v3-30m",
 ) -> MetaApp:
     """Create a MetaApp with meta-tools."""
     mcp = FastMCP("MCP Hub Meta")
-    index = ToolIndex()
+    index = ToolIndex(embedding_model=embedding_model)
 
     # Build initial index from all connected proxy tools
     async def rebuild_index():

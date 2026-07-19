@@ -90,6 +90,22 @@ async def update_settings(body: dict):
     return {"meta_mode": data.get("meta_mode", False)}
 
 
+@router.get("/settings/embedding-model")
+async def get_embedding_model():
+    registry = _get_registry()
+    data = await registry._read()
+    return {"embedding_model": data.get("embedding_model", "cl-nagoya/ruri-v3-30m")}
+
+
+@router.patch("/settings/embedding-model")
+async def update_embedding_model(body: dict):
+    registry = _get_registry()
+    if "embedding_model" in body:
+        await registry.set_embedding_model(str(body["embedding_model"]))
+    data = await registry._read()
+    return {"embedding_model": data.get("embedding_model", "cl-nagoya/ruri-v3-30m")}
+
+
 @router.get("/health")
 async def health():
     try:

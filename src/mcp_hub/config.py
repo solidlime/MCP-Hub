@@ -18,6 +18,7 @@ class HubConfig:
     servers: dict[str, dict[str, Any]] = field(default_factory=dict)
     version: int = 1
     log_level: str = "info"
+    embedding_model: str = "cl-nagoya/ruri-v3-30m"
 
 
 def _data_dir() -> str:
@@ -56,6 +57,7 @@ def _parse_config(filepath: Path) -> HubConfig:
         raise ValueError(f"Unsupported config version: {version}")
 
     log_level = raw.get("log_level", "info")
+    embedding_model = raw.get("embedding_model", "cl-nagoya/ruri-v3-30m")
     raw_servers = raw.get("mcpServers", raw.get("servers", {}))
 
     if not isinstance(raw_servers, dict):
@@ -74,6 +76,7 @@ def _parse_config(filepath: Path) -> HubConfig:
         servers=servers,
         version=version,
         log_level=log_level,
+        embedding_model=embedding_model,
     )
 
 

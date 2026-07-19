@@ -112,6 +112,17 @@ class JsonStore:
                     logger.info("Seeded meta_mode=%s from bundled config",
                                 bundled_data["meta_mode"])
 
+        # Seed embedding_model from bundled config if not yet stored
+        if "embedding_model" not in self._data:
+            bundled = self._find_bundled_default()
+            if bundled and bundled.exists():
+                bundled_data = json.loads(bundled.read_text(encoding="utf-8"))
+                if "embedding_model" in bundled_data:
+                    self._data["embedding_model"] = bundled_data["embedding_model"]
+                    await self._write(self._data)
+                    logger.info("Seeded embedding_model=%s from bundled config",
+                                bundled_data["embedding_model"])
+
         count = len(self._data.get("mcpServers", {}))
         logger.info("JsonStore initialized: %d servers at %s", count, self._path)
 
@@ -185,3 +196,10 @@ class JsonStore:
         dispatcher = getattr(app_state, 'mcp_dispatcher', None)
         if dispatcher is not None:
             dispatcher.invalidate_cache()
+
+    async def set_embedding_model(self, model_name: str) -> None:
+        """Atomically update embedding_model in the store."""
+        async with self._lock:
+            data = await self._read_locked()
+            data["embedding_model"] = model_name
+            await self._write_internal(data)
