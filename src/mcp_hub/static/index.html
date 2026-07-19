@@ -1664,6 +1664,22 @@
                 </div>
 
                 <div class="setting-group">
+                    <label class="setting-label">🧠 埋め込みモデル</label>
+                    <div class="setting-row">
+                        <select id="settings-embedding-model" class="setting-input"
+                                onchange="saveEmbeddingModel(this.value)"
+                                aria-label="埋め込みモデルの選択">
+                            <option value="cl-nagoya/ruri-v3-30m">Ruri v3 (日本語)</option>
+                            <option value="BAAI/bge-small-en-v1.5">BGE Small (英語)</option>
+                            <option value="intfloat/multilingual-e5-small">E5 Multilingual (多言語)</option>
+                        </select>
+                    </div>
+                    <p class="setting-hint">
+                        ツール検索のセマンティック検索に使用する埋め込みモデル。変更は再起動後に反映されます。
+                    </p>
+                </div>
+
+                <div class="setting-group">
                     <label class="setting-label">🔑 APIキー</label>
                     <div class="setting-row">
                         <input type="password" id="settings-apikey" class="setting-input"
@@ -1697,6 +1713,7 @@
         let activeTagFilters = new Set();
         let periodicRefreshActive = false;
         let metaMode = null; // null = unknown, true/false = loaded
+        let embeddingModel = null; // current embedding model name
 
         // ============================================================
         // THEME
@@ -1835,6 +1852,29 @@
                 });
                 if (!response.ok) {
                     let msg = '設定の更新に失敗しました';
+                    try {
+                        const err = await response.json();
+                        msg = err.detail || msg;
+                    } catch (_) {}
+                    throw new Error(msg);
+                }
+                return response.json();
+            },
+
+            async getEmbeddingModel() {
+                const response = await fetch('/admin/api/settings/embedding-model');
+                if (!response.ok) throw new Error('埋め込みモデルの取得に失敗しました');
+                return response.json();
+            },
+
+            async patchEmbeddingModel(model) {
+                const response = await fetch('/admin/api/settings/embedding-model', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ embedding_model: model })
+                });
+                if (!response.ok) {
+                    let msg = '埋め込みモデルの更新に失敗しました';
                     try {
                         const err = await response.json();
                         msg = err.detail || msg;
@@ -2866,10 +2906,41 @@
             }
         }
 
+        async function loadEmbeddingModel() {
+            const select = document.getElementById('settings-embedding-model');
+            if (!select) return;
+            try {
+                const data = await API.getEmbeddingModel();
+                embeddingModel = data.embedding_model;
+                select.value = embeddingModel;
+            } catch (error) {
+                console.error('Embedding model load error:', error);
+                // Keep default selection on error
+            }
+        }
+
+        async function saveEmbeddingModel(model) {
+            const select = document.getElementById('settings-embedding-model');
+            try {
+                select.disabled = true;
+                const data = await API.patchEmbeddingModel(model);
+                embeddingModel = data.embedding_model;
+                select.value = embeddingModel;
+                showToast(`埋め込みモデルを ${embeddingModel} に変更しました`, 'success');
+            } catch (error) {
+                // Revert on error
+                if (embeddingModel) select.value = embeddingModel;
+                showToast(error.message, 'error');
+            } finally {
+                select.disabled = false;
+            }
+        }
+
         function openSettingsModal() {
             document.getElementById('settingsModal').classList.add('active');
             // Re-fetch latest settings when opening
             loadSettings();
+            loadEmbeddingModel();
         }
 
         function closeSettingsModal() {
