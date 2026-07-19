@@ -113,6 +113,10 @@ class MCPDispatcher:
 async def lifespan(app: FastAPI):
     """FastAPI のライフスパン: 起動時/終了時の処理。"""
     # --- 初期化 ---
+    from .streamable_http_patch import apply_patch
+
+    apply_patch()
+
     app_state.start_time = time.time()
 
     # 設定ファイルをロード
