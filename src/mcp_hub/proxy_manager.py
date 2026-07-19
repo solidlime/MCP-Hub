@@ -109,10 +109,15 @@ class ProxyManager:
 
     async def _connect_and_mount(self, name: str, config: dict) -> None:
         """Single-shot connect + mount (no retry). Used by load_all() for
-        non-blocking startup.  Failed connections are left as 'error' for the
-        health monitor to recover."""
+        non-blocking startup.  Verifies connectivity via list_tools() before
+        registering the proxy — avoids mounting broken proxies that would
+        trigger cascading rebuild_index failures or SSE reconnection loops."""
         try:
             proxy = self._create_proxy(name, config)
+            # Verify the proxy actually works before registering.
+            # A broken server (e.g. URL endpoint returning 405) fails here
+            # and is left for the health monitor to recover at its own pace.
+            await asyncio.wait_for(proxy.list_tools(), timeout=10.0)
             async with self._lock:
                 self.mcp.mount(proxy, namespace=name)
                 self._proxies[name] = proxy
@@ -124,6 +129,10 @@ class ProxyManager:
                     await cb()
                 except Exception:
                     logger.warning("on_change callback failed for %s", name, exc_info=True)
+        except asyncio.TimeoutError:
+            logger.warning("Server %s connection timed out — health monitor will retry", name)
+            async with self._lock:
+                self._status[name] = "error"
         except Exception:
             logger.warning(
                 "Server %s failed initial connection — health monitor will retry",
