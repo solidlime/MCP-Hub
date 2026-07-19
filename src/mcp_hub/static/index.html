@@ -2592,11 +2592,15 @@
                     closeEditModal();
                     showToast(`「${editingServer}」の設定を更新しました`, 'success');
                 } catch (error) {
-                    const msg = error.name === 'AbortError'
-                        ? '接続タイムアウト: サーバーの応答がありませんでした'
-                        : error.message;
-                    errorEl.textContent = msg;
-                    errorEl.style.display = 'block';
+                    if (error.name === 'AbortError') {
+                        // Backend may have completed DB update; close modal gracefully
+                        closeEditModal();
+                        showToast('設定更新の応答がタイムアウトしました。バックグラウンドで再接続を試みています...', 'warning');
+                        await loadServers();
+                    } else {
+                        errorEl.textContent = error.message;
+                        errorEl.style.display = 'block';
+                    }
                 } finally {
                     submitBtn.disabled = false;
                     submitBtn.textContent = '保存';
@@ -2648,11 +2652,15 @@
                     closeEditModal();
                     showToast(`「${name}」を追加しました`, 'success');
                 } catch (error) {
-                    const msg = error.name === 'AbortError'
-                        ? '接続タイムアウト: サーバーの応答がありませんでした'
-                        : error.message;
-                    errorEl.textContent = msg;
-                    errorEl.style.display = 'block';
+                    if (error.name === 'AbortError') {
+                        // Backend may have completed DB save; close modal gracefully
+                        closeEditModal();
+                        showToast('サーバー追加の応答がタイムアウトしました。バックグラウンドで接続を試みています...', 'warning');
+                        await loadServers();
+                    } else {
+                        errorEl.textContent = error.message;
+                        errorEl.style.display = 'block';
+                    }
                 } finally {
                     submitBtn.disabled = false;
                     submitBtn.textContent = '追加';
