@@ -148,7 +148,23 @@ async def _process_response(
 
     if isinstance(message.root, JSONRPCRequest):
         content_type = response.headers.get(CONTENT_TYPE, "").lower()
+        content_encoding = response.headers.get("content-encoding", "")
+        content_length = response.headers.get("content-length", "")
+        logger.debug(
+            "Response from %s: Content-Type=%s Content-Encoding=%s Content-Length=%s",
+            self.url, content_type, content_encoding or "none", content_length or "unknown",
+        )
+
         if content_type.startswith(JSON):
+            # Pre-read body for diagnostics (aread() caches; _handle_json_response reuses cached bytes)
+            body = await response.aread()
+            if body and body[:1] != b"{":
+                logger.warning(
+                    "Non-JSON response body from %s (Content-Type: %s, Content-Encoding: %s, "
+                    "first 128 bytes hex: %s)",
+                    self.url, content_type, content_encoding or "none",
+                    body[:128].hex(),
+                )
             await self._handle_json_response(
                 response, ctx.read_stream_writer, is_initialization,
             )

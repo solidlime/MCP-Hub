@@ -144,12 +144,15 @@ async def list_servers(include_tools: bool = False):
         name = srv["name"]
         config = srv["config"]
         tools = tools_map.get(name, [])
+        # Fall back to cached tool count for servers not in _proxies (e.g. errored/connecting)
+        cached_count = pm._tool_counts.get(name, 0)
+        effective_count = len(tools) if tools else cached_count
         info = {
             "name": name,
             "config": config,
             "disabled": config.get("disabled", False),
             "status": status_map.get(name, "unknown"),
-            "tools_count": len(tools),
+            "tools_count": effective_count,
             "tools": tools,
         }
         result.append(info)
