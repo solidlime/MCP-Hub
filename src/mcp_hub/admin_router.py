@@ -275,7 +275,7 @@ async def test_server(name: str):
         raise HTTPException(status_code=404, detail="Server not found")
 
     try:
-        tools = await proxy.list_tools()
+        tools = await pm.list_tools_for_server(name, proxy)
         return {
             "success": True,
             "tools_count": len(tools),

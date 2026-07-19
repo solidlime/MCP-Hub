@@ -13,6 +13,8 @@ from typing import Any
 from fastmcp import FastMCP
 from rank_bm25 import BM25Okapi
 
+from .proxy_manager import ProxyManager as _ProxyManager
+
 try:
     from fastembed import TextEmbedding
     import numpy as np
@@ -343,7 +345,10 @@ def create_meta_app(
         all_tools = []
         for server_name, proxy in proxy_manager.get_connected_servers().items():
             try:
-                tools = await asyncio.wait_for(proxy.list_tools(), timeout=30.0)
+                if isinstance(proxy_manager, _ProxyManager):
+                    tools = await proxy_manager.list_tools_for_server(server_name, proxy)
+                else:
+                    tools = await asyncio.wait_for(proxy.list_tools(), timeout=30.0)
                 for t in tools:
                     all_tools.append({
                         "server": server_name,

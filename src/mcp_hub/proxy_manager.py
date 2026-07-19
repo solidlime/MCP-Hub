@@ -73,6 +73,7 @@ class ProxyManager:
         # Concurrency cap for tool calls (prevents DoS via unlimited process/connection spawn)
         _max_calls = int(os.environ.get("MCP_HUB_MAX_CONCURRENT_CALLS", "50"))
         self._call_semaphore = asyncio.Semaphore(_max_calls)
+        self._tool_cache: dict[str, tuple[float, list[Any]]] = {}  # server_name -> (timestamp, tools)
 
     @staticmethod
     def _retry_env() -> tuple[int, float]:
@@ -117,7 +118,10 @@ class ProxyManager:
             # Verify the proxy actually works before registering.
             # A broken server (e.g. URL endpoint returning 405) fails here
             # and is left for the health monitor to recover at its own pace.
-            await asyncio.wait_for(proxy.list_tools(), timeout=30.0)
+            import time
+            tools = list(await asyncio.wait_for(proxy.list_tools(), timeout=30.0))
+            self._tool_cache[name] = (time.monotonic(), tools)
+            self._tool_counts[name] = len(tools)
             async with self._lock:
                 self.mcp.mount(proxy, namespace=name)
                 self._proxies[name] = proxy
@@ -205,6 +209,7 @@ class ProxyManager:
             self._server_configs.pop(name, None)
             self._status.pop(name, None)
             self._tool_counts.pop(name, None)
+            self._tool_cache.pop(name, None)
             await self._rebuild_mounts()
 
         for cb in self._on_change_callbacks:
@@ -222,6 +227,7 @@ class ProxyManager:
 
                 # 古い proxy をアンマウント
                 old_proxy = self._proxies.pop(name, None)
+                self._tool_cache.pop(name, None)
                 if old_proxy:
                     await self._rebuild_mounts()
 
@@ -292,8 +298,7 @@ class ProxyManager:
                     continue
 
             try:
-                tools = await self._list_tools_with_retry(proxy, srv_name)
-                self._tool_counts[srv_name] = len(tools)
+                tools = await self.list_tools_for_server(srv_name, proxy)
                 result[srv_name] = [{"name": t.name, "description": t.description or ""} for t in tools]
             except Exception:
                 logger.warning("Failed to list tools for %s", srv_name)
@@ -355,6 +360,19 @@ class ProxyManager:
                     await asyncio.sleep(retry_delay)
         raise last_error  # type: ignore[misc]
 
+    async def list_tools_for_server(self, name: str, proxy: FastMCPProxy, cache_ttl: float = 60.0) -> list[Any]:
+        """List tools with caching. Returns cached result if within TTL."""
+        import time
+        now = time.monotonic()
+        if name in self._tool_cache:
+            ts, tools = self._tool_cache[name]
+            if now - ts < cache_ttl:
+                return tools
+        tools = await self._list_tools_with_retry(proxy, name)
+        self._tool_cache[name] = (now, tools)
+        self._tool_counts[name] = len(tools)
+        return tools
+
     async def _health_check(self) -> None:
         """Check all connected servers, recover failed ones."""
         # Snapshots under lock (prevents dict mutation during iteration)
@@ -372,7 +390,7 @@ class ProxyManager:
                 continue
             try:
                 tools = await asyncio.wait_for(
-                    self._list_tools_with_retry(proxy, name), timeout=timeout
+                    self.list_tools_for_server(name, proxy), timeout=timeout
                 )
                 async with self._lock:
                     self._tool_counts[name] = len(tools)
