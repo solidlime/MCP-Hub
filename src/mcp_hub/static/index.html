@@ -1695,6 +1695,7 @@
         let editTags = [];
         let editMode = 'command'; // 'command' or 'url'
         let activeTagFilters = new Set();
+        let periodicRefreshActive = false;
         let metaMode = null; // null = unknown, true/false = loaded
 
         // ============================================================
@@ -1959,18 +1960,24 @@
             }
 
             emptyState.style.display = 'none';
-            container.innerHTML = servers.map(server => {
-                const status = getServerStatus(server);
-                const disabled = getServerDisabled(server);
-                const tags = getServerTags(server);
-                const statusLabel = status === 'connected' ? '接続済' : status === 'connecting' ? '接続中' : status === 'error' ? 'エラー' : '不明';
-                const cardClasses = [
-                    'server-card', 'fade-in',
-                    disabled ? 'disabled-card' : '',
-                    status === 'error' ? 'error-card' : ''
-                ].filter(Boolean).join(' ');
+            container.innerHTML = servers.map(server => renderServerCard(server)).join('');
 
-                return `
+            renderTagFilterBar();
+            applyTagFilter();
+        }
+
+        function renderServerCard(server) {
+            const status = getServerStatus(server);
+            const disabled = getServerDisabled(server);
+            const tags = getServerTags(server);
+            const statusLabel = status === 'connected' ? '接続済' : status === 'connecting' ? '接続中' : status === 'error' ? 'エラー' : '不明';
+            const cardClasses = [
+                'server-card', 'fade-in',
+                disabled ? 'disabled-card' : '',
+                status === 'error' ? 'error-card' : ''
+            ].filter(Boolean).join(' ');
+
+            return `
                 <div class="${cardClasses}" data-server="${server.name}" role="listitem">
                     <div class="server-status-badge ${status}" aria-label="ステータス: ${statusLabel}">
                         <span class="status-dot" aria-hidden="true"></span>
@@ -2073,9 +2080,21 @@
                     </div>
                 </div>
                 `;
-            }).join('');
+        }
 
-            renderTagFilterBar();
+        function updateServerCard(name) {
+            const server = servers.find(s => s.name === name);
+            if (!server) return;
+
+            const container = document.getElementById('serversList');
+            const existingCard = container.querySelector(`[data-server="${name}"]`);
+            if (!existingCard) return;
+
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = renderServerCard(server);
+            const newCard = tempDiv.firstElementChild;
+
+            existingCard.replaceWith(newCard);
             applyTagFilter();
         }
 
@@ -2256,18 +2275,21 @@
             const tags = getServerTags(server);
             if (tags.includes(tag)) {
                 showToast(`タグ「${tag}」は既に存在します`, 'info');
-                renderServers();
+                updateServerCard(name);
+                renderTagFilterBar();
                 return;
             }
             const newTags = [...tags, tag];
             try {
                 await API.patchServer(name, { tags: newTags });
                 server.config.tags = newTags;
-                renderServers();
+                updateServerCard(name);
+                renderTagFilterBar();
                 showToast(`タグ「${tag}」を追加しました`, 'success');
             } catch (error) {
                 showToast(error.message, 'error');
-                renderServers();
+                updateServerCard(name);
+                renderTagFilterBar();
             }
         }
 
@@ -2279,7 +2301,8 @@
             try {
                 await API.patchServer(name, { tags: newTags });
                 server.config.tags = newTags;
-                renderServers();
+                updateServerCard(name);
+                renderTagFilterBar();
                 showToast(`タグ「${tag}」を削除しました`, 'success');
             } catch (error) {
                 showToast(error.message, 'error');
@@ -2336,6 +2359,18 @@
         // EDIT MODAL (Add/Edit共用)
         // ============================================================
         function setEditMode(mode) {
+            if (editMode === mode) return;
+
+            // Check if current mode has input that would be lost
+            const needsConfirm = (editMode === 'command' && document.getElementById('editCommand').value.trim()) ||
+                                 (editMode === 'url' && document.getElementById('editUrl').value.trim());
+
+            if (needsConfirm && !confirm(`入力中の${editMode === 'command' ? 'コマンド' : 'URL'}設定を破棄してモードを切り替えますか？`)) {
+                // Revert UI toggle
+                document.getElementById(editMode === 'command' ? 'modeCommandBtn' : 'modeUrlBtn').classList.add('active');
+                return;
+            }
+
             editMode = mode;
             const cmdBtn = document.getElementById('modeCommandBtn');
             const urlBtn = document.getElementById('modeUrlBtn');
@@ -2349,9 +2384,6 @@
                 urlBtn.setAttribute('aria-selected', 'false');
                 cmdSection.style.display = '';
                 urlSection.style.display = 'none';
-                // URLモード側の値をクリア
-                document.getElementById('editHeaders').value = '';
-                document.getElementById('editUrl').value = '';
             } else {
                 urlBtn.classList.add('active');
                 urlBtn.setAttribute('aria-selected', 'true');
@@ -2359,10 +2391,6 @@
                 cmdBtn.setAttribute('aria-selected', 'false');
                 urlSection.style.display = '';
                 cmdSection.style.display = 'none';
-                // コマンドモード側の値をクリア
-                document.getElementById('editEnv').value = '';
-                document.getElementById('editCommand').value = '';
-                document.getElementById('editArgs').value = '';
             }
         }
 
@@ -2431,6 +2459,106 @@
             editTags = [];
         }
 
+        // -- Helper functions for form handling --
+
+        function showFormError(msg) {
+            const el = document.getElementById('editFormError');
+            el.textContent = msg;
+            el.style.display = 'block';
+        }
+
+        function setSubmitLoading(btn, text) {
+            btn.disabled = true;
+            btn.innerHTML = `<span class="loading-spinner"></span> ${text}`;
+        }
+
+        function resetSubmitBtn(btn, text) {
+            btn.disabled = false;
+            btn.textContent = text;
+        }
+
+        function handleSubmitError(error, errorEl) {
+            if (error.name === 'AbortError') {
+                closeEditModal();
+                showToast('応答がタイムアウトしました。バックグラウンドで処理を継続します...', 'warning');
+                loadServers();
+            } else {
+                errorEl.textContent = error.message;
+                errorEl.style.display = 'block';
+            }
+        }
+
+        // Parse KEY=value or KEY: value format
+        function parseKeyValue(text, separator) {
+            const result = {};
+            if (!text) return result;
+            text.split('\n').forEach(line => {
+                const idx = line.indexOf(separator);
+                if (idx > 0) {
+                    const key = line.substring(0, idx).trim();
+                    let val = line.substring(idx + 1).trim();
+                    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+                        val = val.slice(1, -1);
+                    }
+                    result[key] = val;
+                }
+            });
+            return result;
+        }
+
+        function buildServerPayload(isEdit) {
+            const command = document.getElementById('editCommand').value.trim();
+            const argsStr = document.getElementById('editArgs').value.trim();
+            const url = document.getElementById('editUrl').value.trim();
+            const disabled = document.getElementById('editDisabled').checked;
+            const newArgs = argsStr ? argsStr.split('\n').map(s => s.trim()).filter(Boolean) : [];
+            const newEnv = parseKeyValue(document.getElementById('editEnv').value.trim(), '=');
+            const newHeaders = parseKeyValue(document.getElementById('editHeaders').value.trim(), ':');
+
+            const payload = {};
+
+            if (editMode === 'command') {
+                if (command) payload.command = command;
+                payload.args = newArgs;
+                if (Object.keys(newEnv).length > 0) payload.env = newEnv;
+            } else {
+                if (url) payload.url = url;
+                if (Object.keys(newHeaders).length > 0) payload.headers = newHeaders;
+            }
+
+            if (!isEdit) {
+                // Add mode: include tags and disabled
+                if (editTags.length > 0) payload.tags = editTags;
+                if (disabled) payload.disabled = disabled;
+                return payload;
+            }
+
+            // Edit mode: diff against existing config
+            const server = servers.find(s => s.name === editingServer);
+            if (!server) return payload;
+
+            const diffed = {};
+            for (const [key, val] of Object.entries(payload)) {
+                const oldVal = server.config[key];
+                if (JSON.stringify(val) !== JSON.stringify(oldVal)) {
+                    diffed[key] = val;
+                }
+            }
+
+            // Mode switch: clear opposite fields
+            if (editMode === 'command' && server.config.url) diffed.url = undefined;
+            if (editMode === 'url' && server.config.command) diffed.command = undefined;
+
+            // Tags
+            const oldTags = getServerTags(server);
+            if (JSON.stringify(editTags) !== JSON.stringify(oldTags)) diffed.tags = editTags;
+
+            // Disabled
+            if (disabled !== getServerDisabled(server)) diffed.disabled = disabled;
+
+            return diffed;
+        }
+
         function renderEditTags() {
             const container = document.getElementById('editTagsContainer');
             const input = document.getElementById('editTagInput');
@@ -2478,116 +2606,28 @@
             const errorEl = document.getElementById('editFormError');
             errorEl.style.display = 'none';
 
-            const command = document.getElementById('editCommand').value.trim();
-            const argsStr = document.getElementById('editArgs').value.trim();
-            const url = document.getElementById('editUrl').value.trim();
-            const disabled = document.getElementById('editDisabled').checked;
-            const envStr = document.getElementById('editEnv').value.trim();
-            const hdrStr = document.getElementById('editHeaders').value.trim();
+            const payload = buildServerPayload(!!editingServer);
 
-            // Parse env
-            const newEnv = {};
-            if (envStr) {
-                envStr.split('\n').forEach(line => {
-                    const idx = line.indexOf('=');
-                    if (idx > 0) {
-                        const key = line.substring(0, idx).trim();
-                        let val = line.substring(idx + 1).trim();
-                        // Strip surrounding quotes for copy-paste convenience
-                        if ((val.startsWith('"') && val.endsWith('"')) ||
-                            (val.startsWith("'") && val.endsWith("'"))) {
-                            val = val.slice(1, -1);
-                        }
-                        newEnv[key] = val;
-                    }
-                });
-            }
-            // Parse headers (KEY: value format)
-            const newHeaders = {};
-            if (hdrStr) {
-                hdrStr.split('\n').forEach(line => {
-                    const idx = line.indexOf(':');
-                    if (idx > 0) {
-                        let key = line.substring(0, idx).trim();
-                        let val = line.substring(idx + 1).trim();
-                        // Strip surrounding quotes for copy-paste convenience
-                        if ((key.startsWith('"') && key.endsWith('"')) ||
-                            (key.startsWith("'") && key.endsWith("'"))) {
-                            key = key.slice(1, -1);
-                        }
-                        if ((val.startsWith('"') && val.endsWith('"')) ||
-                            (val.startsWith("'") && val.endsWith("'"))) {
-                            val = val.slice(1, -1);
-                        }
-                        newHeaders[key] = val;
-                    }
-                });
-            }
+            if (!editingServer) {
+                // === ADD MODE ===
+                const name = document.getElementById('editName').value.trim();
+                if (!name) { showFormError('サーバー名を入力してください（英数字とハイフン）'); return; }
+                if (editMode === 'command' && !payload.command) { showFormError('コマンドを入力してください'); return; }
+                if (editMode === 'url' && !payload.url) { showFormError('URLを入力してください'); return; }
 
-            const newArgs = argsStr ? argsStr.split('\n').map(s => s.trim()).filter(Boolean) : [];
-
-            if (editingServer) {
-                // 編集モード
-                const server = servers.find(s => s.name === editingServer);
-                if (!server) return;
-
-                // Build patch payload with only changed fields
-                const payload = {};
-
-                if (editMode === 'command') {
-                    if (command !== (server.config.command || '')) {
-                        payload.command = command || undefined;
-                    }
-                    const oldArgs = server.config.args || [];
-                    if (JSON.stringify(newArgs) !== JSON.stringify(oldArgs)) {
-                        payload.args = newArgs;
-                    }
-                    // コマンドモード切替時、既存URLをクリア
-                    if (server.config.url) {
-                        payload.url = undefined;
-                    }
-                    // コマンドモード切替時、既存headersをクリア
-                    if (server.config.headers && Object.keys(server.config.headers).length > 0) {
-                        payload.headers = {};
-                    }
-                    // 環境変数
-                    const oldEnv = server.config.env || {};
-                    if (JSON.stringify(newEnv) !== JSON.stringify(oldEnv)) {
-                        payload.env = newEnv;
-                    }
-                } else {
-                    // URLモード
-                    if (url !== (server.config.url || '')) {
-                        payload.url = url || undefined;
-                    }
-                    // URLモード切替時、既存command/argsをクリア
-                    if (server.config.command) {
-                        payload.command = undefined;
-                    }
-                    if (server.config.args && server.config.args.length > 0) {
-                        payload.args = [];
-                    }
-                    // URLモード切替時、既存envをクリア
-                    if (server.config.env && Object.keys(server.config.env).length > 0) {
-                        payload.env = {};
-                    }
-                    // HTTPヘッダー
-                    const oldHeaders = server.config.headers || {};
-                    if (JSON.stringify(newHeaders) !== JSON.stringify(oldHeaders)) {
-                        payload.headers = newHeaders;
-                    }
+                try {
+                    setSubmitLoading(submitBtn, '追加中...');
+                    await API.addServer({ name, config: payload });
+                    await loadServers();
+                    closeEditModal();
+                    showToast(`「${name}」を追加しました`, 'success');
+                } catch (error) {
+                    handleSubmitError(error, errorEl);
+                } finally {
+                    resetSubmitBtn(submitBtn, '追加');
                 }
-
-                if (disabled !== getServerDisabled(server)) {
-                    payload.disabled = disabled;
-                }
-
-                // Tags
-                const oldTags = getServerTags(server);
-                if (JSON.stringify(editTags) !== JSON.stringify(oldTags)) {
-                    payload.tags = editTags;
-                }
-
+            } else {
+                // === EDIT MODE ===
                 if (Object.keys(payload).length === 0) {
                     showToast('変更がありません', 'info');
                     closeEditModal();
@@ -2595,89 +2635,18 @@
                 }
 
                 try {
-                    submitBtn.disabled = true;
-                    submitBtn.innerHTML = '<span class="loading-spinner"></span> 保存中...';
-
+                    setSubmitLoading(submitBtn, '保存中...');
                     await API.patchServer(editingServer, payload);
-
-                    // Update local state
-                    Object.assign(server.config, payload);
-                    renderServers();
+                    const server = servers.find(s => s.name === editingServer);
+                    if (server) Object.assign(server.config, payload);
+                    updateServerCard(editingServer);
+                    renderTagFilterBar();
                     closeEditModal();
                     showToast(`「${editingServer}」の設定を更新しました`, 'success');
                 } catch (error) {
-                    if (error.name === 'AbortError') {
-                        // Backend may have completed DB update; close modal gracefully
-                        closeEditModal();
-                        showToast('設定更新の応答がタイムアウトしました。バックグラウンドで再接続を試みています...', 'warning');
-                        await loadServers();
-                    } else {
-                        errorEl.textContent = error.message;
-                        errorEl.style.display = 'block';
-                    }
+                    handleSubmitError(error, errorEl);
                 } finally {
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = '保存';
-                }
-            } else {
-                // 追加モード
-                const name = document.getElementById('editName').value.trim();
-
-                if (!name) {
-                    errorEl.textContent = 'サーバー名を入力してください（英数字とハイフン）';
-                    errorEl.style.display = 'block';
-                    return;
-                }
-
-                if (editMode === 'command' && !command) {
-                    errorEl.textContent = 'コマンドを入力してください（フルパス、例: npx -y server-package）';
-                    errorEl.style.display = 'block';
-                    return;
-                }
-                if (editMode === 'url' && !url) {
-                    errorEl.textContent = 'URLを入力してください（例: http://localhost:3000/mcp または https://mcp.example.com/mcp）';
-                    errorEl.style.display = 'block';
-                    return;
-                }
-
-                const config = {};
-                if (editMode === 'url') {
-                    config.url = url;
-                    if (Object.keys(newHeaders).length > 0) {
-                        config.headers = newHeaders;
-                    }
-                } else {
-                    config.command = command;
-                    config.args = newArgs;
-                    if (Object.keys(newEnv).length > 0) {
-                        config.env = newEnv;
-                    }
-                }
-                if (editTags.length > 0) {
-                    config.tags = editTags;
-                }
-
-                try {
-                    submitBtn.disabled = true;
-                    submitBtn.innerHTML = '<span class="loading-spinner"></span> 追加中...';
-
-                    await API.addServer({ name, config });
-                    await loadServers();
-                    closeEditModal();
-                    showToast(`「${name}」を追加しました`, 'success');
-                } catch (error) {
-                    if (error.name === 'AbortError') {
-                        // Backend may have completed DB save; close modal gracefully
-                        closeEditModal();
-                        showToast('サーバー追加の応答がタイムアウトしました。バックグラウンドで接続を試みています...', 'warning');
-                        await loadServers();
-                    } else {
-                        errorEl.textContent = error.message;
-                        errorEl.style.display = 'block';
-                    }
-                } finally {
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = '追加';
+                    resetSubmitBtn(submitBtn, '保存');
                 }
             }
         }
@@ -2775,14 +2744,41 @@
 
         // Periodic refresh: reload servers to update status, then refresh metrics
         async function periodicRefresh() {
+            if (periodicRefreshActive) return;
+            periodicRefreshActive = true;
             try {
                 const data = await API.getServers();
-                servers = data.servers || [];
-                renderServers();
+                const newServers = data.servers || [];
+
+                // Detect structural changes (add/remove)
+                const oldNames = new Set(servers.map(s => s.name));
+                const newNames = new Set(newServers.map(s => s.name));
+                const hasStructuralChange =
+                    oldNames.size !== newNames.size ||
+                    [...oldNames].some(n => !newNames.has(n)) ||
+                    [...newNames].some(n => !oldNames.has(n));
+
+                if (hasStructuralChange || servers.length === 0) {
+                    servers = newServers;
+                    renderServers();
+                } else {
+                    // Diff update: only cards with changed status or tool count
+                    for (const newServer of newServers) {
+                        const oldServer = servers.find(s => s.name === newServer.name);
+                        if (oldServer &&
+                            (oldServer.status !== newServer.status ||
+                             oldServer.tools_count !== newServer.tools_count)) {
+                            Object.assign(oldServer, newServer);
+                            updateServerCard(newServer.name);
+                        }
+                    }
+                }
                 updateMetrics();
                 await updateHealthStatus();
             } catch (_) {
                 // Silently ignore during periodic refresh
+            } finally {
+                periodicRefreshActive = false;
             }
         }
 
@@ -2939,8 +2935,14 @@
             await Promise.all([loadServers(), loadSettings()]);
             await updateHealthStatus();
 
-            // Periodic refresh: reload servers + health every 30s
-            setInterval(periodicRefresh, 30000);
+            // Periodic refresh: reload servers + health every 30s (non-stacking)
+            function scheduleNextRefresh() {
+                setTimeout(async () => {
+                    await periodicRefresh();
+                    scheduleNextRefresh();
+                }, 30000);
+            }
+            scheduleNextRefresh();
         });
 
         // Close modals on overlay click
