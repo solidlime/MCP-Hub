@@ -118,6 +118,12 @@ class ProxyManager:
                 self._proxies[name] = proxy
                 self._status[name] = "connected"
             logger.info("Server %s connected (background)", name)
+            # Notify listeners so meta index can rebuild
+            for cb in self._on_change_callbacks:
+                try:
+                    await cb()
+                except Exception:
+                    logger.warning("on_change callback failed for %s", name, exc_info=True)
         except Exception:
             logger.warning(
                 "Server %s failed initial connection — health monitor will retry",
@@ -409,6 +415,7 @@ class ProxyManager:
             if not current_config:
                 continue
             new_proxy = await self._connect_server(name, current_config)
+            recovered = False
             async with self._lock:
                 if name in self._refreshing:
                     # refresh_server took over during our IO — discard
@@ -418,8 +425,15 @@ class ProxyManager:
                     self._proxies[name] = new_proxy
                     self._status[name] = "connected"
                     logger.info("Server %s recovered", name)
+                    recovered = True
                 else:
                     self._status[name] = "error"
+            if recovered:
+                for cb in self._on_change_callbacks:
+                    try:
+                        await cb()
+                    except Exception:
+                        logger.warning("on_change callback failed during recovery of %s", name, exc_info=True)
 
         # Recovery: servers that failed initial connection (status="error", no proxy in _proxies)
         for name, config in configs_snapshot.items():
@@ -435,6 +449,7 @@ class ProxyManager:
             # Attempt initial recovery
             logger.info("Attempting recovery for %s (never connected)", name)
             new_proxy = await self._connect_server(name, config)
+            recovered = False
             async with self._lock:
                 if name in self._refreshing:
                     # refresh_server took over during our IO — discard
@@ -444,7 +459,14 @@ class ProxyManager:
                     self._proxies[name] = new_proxy
                     self._status[name] = "connected"
                     logger.info("Server %s recovered (initial)", name)
+                    recovered = True
                 # else: stays "error", will retry next interval
+            if recovered:
+                for cb in self._on_change_callbacks:
+                    try:
+                        await cb()
+                    except Exception:
+                        logger.warning("on_change callback failed during initial recovery of %s", name, exc_info=True)
 
     async def _health_monitor_loop(self, interval: int) -> None:
         """Background loop. Never dies — exceptions are caught and logged."""

@@ -153,6 +153,14 @@ async def lifespan(app: FastAPI):
     app_state.registry = registry
     app_state.proxy_manager = proxy_manager
 
+    # === meta app (Progressive Discovery, used when meta_mode=True) ===
+    # Create meta_app early and wire on_change BEFORE load_all
+    # so that background connections trigger index rebuilds.
+    from .meta_provider import create_meta_app
+
+    meta_app = create_meta_app(proxy_manager)
+    proxy_manager.on_change(meta_app.rebuild_index)
+
     # DB から全サーバーを復元・マウント
     await proxy_manager.load_all()
     logger.info("Loaded %d proxy servers", len(proxy_manager._proxies))
@@ -195,9 +203,6 @@ async def lifespan(app: FastAPI):
     inner_app.session_manager = sm
 
     # === meta app (Progressive Discovery, used when meta_mode=True) ===
-    from .meta_provider import create_meta_app
-
-    meta_app = create_meta_app(proxy_manager)
     meta_mcp = meta_app.mcp
     meta_http = meta_mcp.http_app(transport="streamable-http", path="/")
 
@@ -215,11 +220,10 @@ async def lifespan(app: FastAPI):
     )
     meta_inner_app.session_manager = meta_sm
 
-    # Rebuild index after initial load
+    # Rebuild index after initial load (safety net — background
+    # connections that completed during setup will have already
+    # triggered rebuilds via on_change callbacks)
     await meta_app.rebuild_index()
-
-    # Wire rebuild_index to proxy changes
-    proxy_manager.on_change(meta_app.rebuild_index)
 
     # /mcp に動的ディスパッチャをマウント
     dispatcher = MCPDispatcher(mcp_http, meta_http, sm, meta_sm)
