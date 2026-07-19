@@ -55,6 +55,18 @@
         "web"
       ],
       "disabled": false
+    },
+    "youtube": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anaisbetts/mcp-youtube"
+      ],
+      "tags": [
+        "media",
+        "video"
+      ],
+      "disabled": false
     }
   }
 }
