@@ -117,7 +117,7 @@ class ProxyManager:
             # Verify the proxy actually works before registering.
             # A broken server (e.g. URL endpoint returning 405) fails here
             # and is left for the health monitor to recover at its own pace.
-            await asyncio.wait_for(proxy.list_tools(), timeout=10.0)
+            await asyncio.wait_for(proxy.list_tools(), timeout=30.0)
             async with self._lock:
                 self.mcp.mount(proxy, namespace=name)
                 self._proxies[name] = proxy
@@ -171,11 +171,11 @@ class ProxyManager:
 
         logger.info("Launched %d server connections in background", launched)
 
-    async def register_server(self, name: str, config: dict) -> list[str]:
-        """サーバー登録 + DB保存 + マウント。
+    async def register_server(self, name: str, config: dict) -> dict:
+        """サーバー登録 + DB保存。接続はバックグラウンドで行う。
 
         Returns:
-            プロキシ経由で利用可能なツール名のリスト。
+            {"name": str, "status": str, "config": dict}
         """
         await self.registry.add_server(name, config)
         async with self._lock:
@@ -184,33 +184,15 @@ class ProxyManager:
         if config.get("disabled"):
             async with self._lock:
                 self._status[name] = "disabled"
-            return []
-
-        proxy = await self._connect_server(name, config)
-        if proxy is None:
-            async with self._lock:
-                self._status[name] = "error"
-            return []
+            return {"name": name, "status": "disabled", "config": config}
 
         async with self._lock:
-            self._proxies[name] = proxy
-            self._status[name] = "connected"
+            self._status[name] = "connecting"
 
-        # list_tools outside lock (fast network call)
-        try:
-            tools = await asyncio.wait_for(proxy.list_tools(), timeout=30.0)
-            async with self._lock:
-                self._tool_counts[name] = len(tools)
-            result = [t.name for t in tools]
-        except Exception:
-            logger.warning("Could not list tools for %s", name)
-            async with self._lock:
-                self._status[name] = "error"
-            result = []
+        # Start background connection (like load_all does)
+        asyncio.create_task(self._connect_and_mount(name, config))
 
-        for cb in self._on_change_callbacks:
-            await cb()
-        return result
+        return {"name": name, "status": "connecting", "config": config}
 
     async def unregister_server(self, name: str) -> bool:
         """サーバー削除 + アンマウント。"""

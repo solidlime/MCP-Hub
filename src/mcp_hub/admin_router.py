@@ -193,7 +193,7 @@ async def register_server(body: RegisterRequest):
         raise HTTPException(status_code=422, detail=str(e)) from e
 
     try:
-        tool_names = await pm.register_server(body.name, config)
+        result = await pm.register_server(body.name, config)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
@@ -203,7 +203,7 @@ async def register_server(body: RegisterRequest):
     return {
         "name": body.name,
         "config": config,
-        "tools": tool_names,
+        "status": result["status"],
     }
 
 
