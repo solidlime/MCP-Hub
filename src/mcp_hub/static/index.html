@@ -473,6 +473,14 @@
             background: var(--accent-red);
             animation: pulse 1.5s infinite;
         }
+        .server-status-badge.connecting {
+            background: var(--accent-blue-bg);
+            color: var(--accent-blue);
+        }
+        .server-status-badge.connecting .status-dot {
+            background: var(--accent-blue);
+            animation: pulse 1.2s infinite;
+        }
         .server-status-badge.unknown {
             background: var(--accent-amber-bg);
             color: var(--accent-amber);
@@ -1520,7 +1528,7 @@
                 <div id="commandModeSection" class="mode-section">
                     <div class="form-group">
                         <label class="form-label" for="editCommand">コマンド</label>
-                        <input type="text" class="form-input" id="editCommand" placeholder="npx">
+                        <input type="text" class="form-input" id="editCommand" placeholder="例: npx @modelcontextprotocol/server-filesystem">
                     </div>
                     <div class="form-group">
                         <label class="form-label" for="editArgs">引数 (1行に1つ)</label>
@@ -1540,7 +1548,7 @@
                 <div id="urlModeSection" class="mode-section" style="display: none;">
                     <div class="form-group">
                         <label class="form-label" for="editUrl">URL</label>
-                        <input type="text" class="form-input" id="editUrl" placeholder="http://localhost:3000">
+                        <input type="text" class="form-input" id="editUrl" placeholder="例: http://localhost:3000/mcp">
                     </div>
 
                     <!-- HTTP ヘッダー -->
@@ -1954,7 +1962,7 @@
                 const status = getServerStatus(server);
                 const disabled = getServerDisabled(server);
                 const tags = getServerTags(server);
-                const statusLabel = status === 'connected' ? '接続済' : status === 'error' ? 'エラー' : '不明';
+                const statusLabel = status === 'connected' ? '接続済' : status === 'connecting' ? '接続中' : status === 'error' ? 'エラー' : '不明';
                 const cardClasses = [
                     'server-card', 'fade-in',
                     disabled ? 'disabled-card' : '',
@@ -2029,7 +2037,7 @@
                                         </button>
                                     </div>
                                 </div>
-                            `).join('') : '<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem;">ツールがありません</div>'}
+                            `).join('') : (server.tools === undefined && status === 'connecting') ? '<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem; display: flex; align-items: center; gap: 6px;"><span class="loading-spinner" style="width:12px;height:12px;"></span> ツールを検出中...</div>' : '<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem;">ツールがありません</div>'}
                         </div>
                         <div class="connection-section" id="conn-${server.name}" style="display: none;">
                             <div class="conn-label">接続情報</div>
@@ -2124,6 +2132,11 @@
 
                 showToast(`接続成功！ ${result.tools_count} ツールを検出しました`, 'success');
             } catch (error) {
+                const serverIndex = servers.findIndex(s => s.name === name);
+                if (serverIndex !== -1) {
+                    servers[serverIndex].status = 'error';
+                    renderServers();
+                }
                 showToast(error.message, 'error');
             } finally {
                 if (btn) {
@@ -2610,18 +2623,18 @@
                 const name = document.getElementById('editName').value.trim();
 
                 if (!name) {
-                    errorEl.textContent = 'サーバー名を入力してください';
+                    errorEl.textContent = 'サーバー名を入力してください（英数字とハイフン）';
                     errorEl.style.display = 'block';
                     return;
                 }
 
                 if (editMode === 'command' && !command) {
-                    errorEl.textContent = 'コマンドを入力してください';
+                    errorEl.textContent = 'コマンドを入力してください（フルパス、例: npx -y server-package）';
                     errorEl.style.display = 'block';
                     return;
                 }
                 if (editMode === 'url' && !url) {
-                    errorEl.textContent = 'URLを入力してください';
+                    errorEl.textContent = 'URLを入力してください（例: http://localhost:3000/mcp または https://mcp.example.com/mcp）';
                     errorEl.style.display = 'block';
                     return;
                 }
