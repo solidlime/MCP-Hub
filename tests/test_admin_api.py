@@ -33,17 +33,17 @@ class TestServerCRUD:
     def test_add_url_server(self, client):
         r = client.post("/admin/api/servers", json={
             "name": "test-http",
-            "config": {"url": "http://localhost:9999", "tags": ["api"]}
+            "config": {"url": "http://localhost:9999", "tags": ["api"], "disabled": True}
         })
         assert r.status_code == 201
         assert r.json()["name"] == "test-http"
 
     def test_add_duplicate_is_409(self, client):
         client.post("/admin/api/servers", json={
-            "name": "dup", "config": {"url": "http://localhost:9999"}
+            "name": "dup", "config": {"url": "http://localhost:9999", "disabled": True}
         })
         r = client.post("/admin/api/servers", json={
-            "name": "dup", "config": {"url": "http://localhost:9999"}
+            "name": "dup", "config": {"url": "http://localhost:9999", "disabled": True}
         })
         assert r.status_code == 409
 
@@ -55,7 +55,7 @@ class TestServerCRUD:
 
     def test_delete_existing(self, client):
         client.post("/admin/api/servers", json={
-            "name": "to-delete", "config": {"url": "http://localhost:9999"}
+            "name": "to-delete", "config": {"url": "http://localhost:9999", "disabled": True}
         })
         r = client.delete("/admin/api/servers/to-delete")
         assert r.status_code == 204
@@ -66,7 +66,7 @@ class TestServerCRUD:
 
     def test_list_includes_status_and_disabled(self, client):
         client.post("/admin/api/servers", json={
-            "name": "s1", "config": {"url": "http://localhost:9999"}
+            "name": "s1", "config": {"url": "http://localhost:9999", "disabled": True}
         })
         r = client.get("/admin/api/servers")
         servers = r.json()["servers"]
@@ -79,7 +79,7 @@ class TestServerCRUD:
 class TestPatchUpdate:
     def test_patch_updates_tags(self, client):
         client.post("/admin/api/servers", json={
-            "name": "patch-me", "config": {"url": "http://localhost:9999"}
+            "name": "patch-me", "config": {"url": "http://localhost:9999", "disabled": True}
         })
         r = client.patch("/admin/api/servers/patch-me", json={
             "tags": ["web", "api"]
@@ -112,7 +112,7 @@ class TestMetrics:
 class TestConnection:
     def test_returns_connection_info(self, client):
         client.post("/admin/api/servers", json={
-            "name": "conn-test", "config": {"url": "http://localhost:9999", "tags": ["web"]}
+            "name": "conn-test", "config": {"url": "http://localhost:9999", "tags": ["web"], "disabled": True}
         })
         r = client.get("/admin/api/servers/conn-test/connection")
         assert r.status_code == 200
@@ -128,7 +128,7 @@ class TestConnection:
     def test_connection_url_uses_urljoin(self, client):
         """URL construction uses proper urljoin, not string concatenation."""
         client.post("/admin/api/servers", json={
-            "name": "url-test", "config": {"url": "http://localhost:9999"}
+            "name": "url-test", "config": {"url": "http://localhost:9999", "disabled": True}
         })
         r = client.get("/admin/api/servers/url-test/connection")
         assert r.status_code == 200
@@ -145,7 +145,7 @@ class TestTagFilter:
         """Server list response includes tag information."""
         client.post("/admin/api/servers", json={
             "name": "tagged-srv",
-            "config": {"url": "http://localhost:9999", "tags": ["web", "api"]}
+            "config": {"url": "http://localhost:9999", "tags": ["web", "api"], "disabled": True}
         })
         r = client.get("/admin/api/servers")
         servers = r.json()["servers"]
@@ -157,7 +157,7 @@ class TestTagFilter:
         """Server with no tags shows empty tags list in response."""
         client.post("/admin/api/servers", json={
             "name": "no-tags",
-            "config": {"url": "http://localhost:9999"}
+            "config": {"url": "http://localhost:9999", "disabled": True}
         })
         r = client.get("/admin/api/servers")
         servers = r.json()["servers"]
@@ -168,7 +168,7 @@ class TestTagFilter:
         """Connection info includes all tags in URL and example header."""
         client.post("/admin/api/servers", json={
             "name": "multi-tag",
-            "config": {"url": "http://localhost:9999", "tags": ["web", "api", "db"]}
+            "config": {"url": "http://localhost:9999", "tags": ["web", "api", "db"], "disabled": True}
         })
         r = client.get("/admin/api/servers/multi-tag/connection")
         data = r.json()
