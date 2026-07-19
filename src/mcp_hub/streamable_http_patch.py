@@ -1,14 +1,16 @@
-"""Monkey-patch MCP SDK's StreamableHTTPTransport to handle 202 Accepted + polling.
+"""Monkey-patch MCP SDK's StreamableHTTPTransport to handle 202 Accepted.
 
-The MCP SDK (as of mcp>=1.8.0) does not handle the 202 Accepted response
-pattern described in the Streamable HTTP spec. When a server returns 202
-with a Location header (e.g. EDINET DB), the SDK's _handle_post_request
-logs the status and returns immediately without sending anything to the
-read stream — causing the client to hang until timeout.
+NOTE: Per the MCP Streamable HTTP spec, 202 Accepted is used ONLY for
+notifications/responses — never for requests. The spec defines no
+Location-header-based polling pattern.
 
-This patch intercepts 202 responses, polls the Location URL until a 200
-is received, then feeds the final response through the normal response
-handling pipeline (JSON or SSE).
+Some non-standard servers (historically EDINET DB) may return 202 with a
+Location header for long-running requests. This patch intercepts such
+responses, polls the Location URL until a final result is received, then
+feeds it through the normal response handling pipeline (JSON or SSE).
+
+The polling sends an empty POST (no re-execution of the original request)
+to the Location URL, matching common async-pattern semantics.
 
 Usage:
     from mcp_hub.streamable_http_patch import apply_patch, restore_patch
@@ -74,9 +76,10 @@ async def _patched_handle_post_request(
             for attempt in range(MAX_POLL_ATTEMPTS):
                 await asyncio.sleep(POLL_DELAY_SECONDS)
                 try:
+                    # Poll with empty POST — never re-send the original request body
+                    # (which would re-execute tools/call, etc.)
                     poll_resp = await ctx.client.post(
                         poll_url,
-                        json=message.model_dump(by_alias=True, mode="json", exclude_none=True),
                         headers=headers,
                     )
                 except Exception:

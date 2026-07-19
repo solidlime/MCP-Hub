@@ -107,15 +107,30 @@ async def handle_mcp(request: Request) -> Response:
 
 @app.post("/mcp/status/tools-list-result")
 async def handle_status(request: Request) -> Response:
-    """Polling endpoint — POST /mcp/status/tools-list-result"""
+    """Polling endpoint — POST /mcp/status/tools-list-result.
+    
+    Accepts empty POST bodies (MCP-Hub patch sends no JSON-RPC payload on poll,
+    to avoid re-executing the original request). When no request ID is found in
+    the body, uses any pending poll request.
+    """
+    rid = None
     try:
         body = await request.json()
+        if isinstance(body, dict):
+            rid = _get_request_id(body)
     except (json.JSONDecodeError, ValueError):
-        return _json_response(_make_error(None, -32700, "Parse error"), status=400)
+        pass
 
-    rid = _get_request_id(body)
+    # If no rid from body, use any pending poll request
     if rid is None:
-        return _json_response(_make_error(None, -32600, "Invalid Request: missing id"), status=400)
+        for key in _poll_state:
+            rid = key
+            break
+
+    if rid is None:
+        return _json_response(
+            _make_error(None, -32600, "Invalid Request: no pending poll"), status=400
+        )
 
     count = _poll_state.get(rid, 0)
     if count == 0:
