@@ -218,36 +218,44 @@ class ProxyManager:
 
     async def refresh_server(self, name: str, config: dict) -> None:
         """プロキシの再生成 + 設定更新。disable 時はアンマウントのみ。"""
+        # --- Phase 1: 状態更新（ロック保護）---
+        needs_remount = False
+        is_disabled = config.get("disabled", False)
         async with self._lock:
             self._refreshing.add(name)
-        try:
-            async with self._lock:
-                self._server_configs[name] = config
-                self._status[name] = "disabled" if config.get("disabled") else "connected"
+            self._server_configs[name] = config
+            self._status[name] = "disabled" if is_disabled else "connected"
+            old_proxy = self._proxies.pop(name, None)
+            self._tool_cache.pop(name, None)
+            if old_proxy:
+                needs_remount = True
 
-                # 古い proxy をアンマウント
-                old_proxy = self._proxies.pop(name, None)
-                self._tool_cache.pop(name, None)
-                if old_proxy:
+        # --- Phase 2: 副作用（ロック外）---
+        try:
+            if needs_remount:
+                async with self._lock:
                     await self._rebuild_mounts()
 
-                # disabled なら再生成しない
-                if config.get("disabled"):
-                    logger.info("Server %s is disabled, not mounting", name)
-                else:
-                    try:
-                        proxy = self._create_proxy(name, config)
+            if not is_disabled:
+                # プロキシ生成（サブプロセス起動を含む可能性があるためロック外）
+                try:
+                    proxy = self._create_proxy(name, config)
+                    async with self._lock:
                         self._proxies[name] = proxy
                         self.mcp.mount(proxy, namespace=name)
                         self._status[name] = "connected"
-                        logger.info("Refreshed server %s", name)
-                    except Exception:
-                        logger.exception("Failed to refresh server %s", name)
+                    logger.info("Refreshed server %s", name)
+                except Exception:
+                    logger.exception("Failed to refresh server %s", name)
+                    async with self._lock:
                         self._status[name] = "error"
 
             # Callbacks outside lock — they may perform IO (rebuild_index calls list_tools)
             for cb in self._on_change_callbacks:
-                await cb()
+                try:
+                    await cb()
+                except Exception:
+                    logger.warning("on_change callback failed for %s", name, exc_info=True)
         finally:
             async with self._lock:
                 self._refreshing.discard(name)
