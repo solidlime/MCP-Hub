@@ -2147,7 +2147,8 @@
                 if (serverIndex !== -1) {
                     servers[serverIndex].tools = result.tools;
                     servers[serverIndex].tools_count = result.tools_count;
-                    renderServers();
+                    updateServerCard(name);
+                    renderTagFilterBar();
                 }
 
                 showToast(`接続成功！ ${result.tools_count} ツールを検出しました`, 'success');
@@ -2155,7 +2156,8 @@
                 const serverIndex = servers.findIndex(s => s.name === name);
                 if (serverIndex !== -1) {
                     servers[serverIndex].status = 'error';
-                    renderServers();
+                    updateServerCard(name);
+                    renderTagFilterBar();
                 }
                 showToast(error.message, 'error');
             } finally {
@@ -2172,12 +2174,14 @@
                 const serverIndex = servers.findIndex(s => s.name === name);
                 if (serverIndex !== -1) {
                     servers[serverIndex].config.disabled = !enabled;
-                    renderServers();
+                    updateServerCard(name);
+                    renderTagFilterBar();
                 }
                 showToast(`「${name}」を${enabled ? '有効' : '無効'}にしました`, 'success');
             } catch (error) {
                 showToast(error.message, 'error');
-                renderServers(); // revert visual
+                updateServerCard(name);
+                renderTagFilterBar();
             }
         }
 
@@ -2232,7 +2236,8 @@
                     const newTags = raw.split(/[,\s、]+/).map(t => t.trim()).filter(Boolean);
                     await batchAddTags(name, newTags);
                 } else {
-                    renderServers();
+                    updateServerCard(name);
+                    renderTagFilterBar();
                 }
             }
 
@@ -2241,7 +2246,8 @@
                     e.preventDefault();
                     commitTag();
                 } else if (e.key === 'Escape') {
-                    renderServers();
+                    updateServerCard(name);
+                    renderTagFilterBar();
                 }
             });
             input.addEventListener('blur', commitTag);
@@ -2254,18 +2260,21 @@
             // 既存タグを除外して重複を除去
             const unique = [...new Set(newTags)].filter(t => !currentTags.includes(t));
             if (unique.length === 0) {
-                renderServers();
+                updateServerCard(name);
+                renderTagFilterBar();
                 return;
             }
             const merged = [...currentTags, ...unique];
             try {
                 await API.patchServer(name, { tags: merged });
                 server.config.tags = merged;
-                renderServers();
+                updateServerCard(name);
+                renderTagFilterBar();
                 showToast(`タグ ${unique.map(t => `「${t}」`).join(', ')} を追加しました`, 'success');
             } catch (error) {
                 showToast(error.message, 'error');
-                renderServers();
+                updateServerCard(name);
+                renderTagFilterBar();
             }
         }
 
