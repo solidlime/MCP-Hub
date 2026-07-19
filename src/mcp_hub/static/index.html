@@ -2955,6 +2955,48 @@
             }
         }
 
+        async function runInstallCommand() {
+            const input = document.getElementById('installCommand');
+            const btn = document.getElementById('installBtn');
+            const output = document.getElementById('installOutput');
+            const command = input.value.trim();
+
+            if (!command) {
+                output.textContent = 'コマンドを入力してください';
+                output.style.display = 'block';
+                output.style.color = '#e74c3c';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '...';
+            output.textContent = '実行中...';
+            output.style.display = 'block';
+            output.style.color = 'inherit';
+
+            try {
+                const resp = await fetch('/admin/api/tools/install', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({command: command})
+                });
+                const data = await resp.json();
+
+                const status = data.success ? '✅ 成功' : '❌ 失敗';
+                const out = [status + ` (exit: ${data.returncode})`];
+                if (data.stdout) out.push(data.stdout);
+                if (data.stderr) out.push(data.stderr);
+                output.textContent = out.join('\n');
+                output.style.color = data.success ? '#27ae60' : '#e74c3c';
+            } catch (e) {
+                output.textContent = 'エラー: ' + e.message;
+                output.style.color = '#e74c3c';
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Install';
+            }
+        }
+
         function openSettingsModal() {
             document.getElementById('settingsModal').classList.add('active');
             // Re-fetch latest settings when opening
