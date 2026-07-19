@@ -1692,6 +1692,25 @@
                         空欄の場合は認証なしで動作します。
                     </p>
                 </div>
+
+                <div class="setting-group">
+                    <label class="setting-label">📦 依存関係のインストール</label>
+                    <div class="setting-row">
+                        <input type="text" id="installCommand" class="setting-input"
+                               placeholder="pip install yt-dlp"
+                               style="flex:1; max-width:none;">
+                        <button id="installBtn" class="btn btn-primary"
+                                style="width:80px; flex-shrink:0; margin-left:8px;"
+                                onclick="runInstallCommand()">Install</button>
+                    </div>
+                    <div id="installOutput" class="setting-hint"
+                         style="display:none; white-space:pre-wrap; font-family:monospace; font-size:11px;
+                                max-height:200px; overflow-y:auto; background:rgba(0,0,0,0.05);
+                                border-radius:6px; padding:8px; margin-top:8px;"></div>
+                    <div class="setting-hint" style="margin-top:4px;">
+                        パッケージは永続ボリュームに保存され、再起動後も利用可能です。
+                    </div>
+                </div>
             </div>
         </div>
     </div>

@@ -31,9 +31,18 @@ def setup_env():
     node_bin = os.path.join(BIN_DIR, "bin")
     if os.path.isdir(node_bin):
         paths.append(node_bin)
+    # Add pip extras bin for console scripts (yt-dlp, etc.)
+    extras_bin = os.path.join(EXTRAS_DIR, "bin")
+    if os.path.isdir(extras_bin):
+        paths.append(extras_bin)
     for p in paths:
         if p not in os.environ.get("PATH", ""):
             os.environ["PATH"] = p + os.pathsep + os.environ.get("PATH", "")
+    # Add pip extras to PYTHONPATH for subprocesses (importable packages)
+    if os.path.isdir(EXTRAS_DIR):
+        py_path = os.environ.get("PYTHONPATH", "")
+        if EXTRAS_DIR not in py_path:
+            os.environ["PYTHONPATH"] = EXTRAS_DIR + os.pathsep + py_path if py_path else EXTRAS_DIR
 
 
 def run():

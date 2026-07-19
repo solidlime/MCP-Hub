@@ -3,6 +3,7 @@
 プレフィックス: /admin/api
 """
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -53,6 +54,10 @@ class RegisterRequest(BaseModel):
 
 class CallToolRequest(BaseModel):
     arguments: dict[str, Any] = {}
+
+
+class InstallRequest(BaseModel):
+    command: str
 
 
 # --- Router ---
@@ -358,6 +363,56 @@ async def list_server_resource_templates(name: str):
         ]}
     except Exception:
         raise HTTPException(502, detail=f"Failed to list resource templates from {name!r}")
+
+
+@router.post("/tools/install")
+async def install_dependency(body: InstallRequest):
+    """Run a dependency install command (pip, npm, etc.).
+
+    Installed packages persist in the Docker mounted volume.
+    pip/uv pip commands are auto-wrapped with --target for persistence.
+    """
+    import os
+    import shlex
+
+    EXTRAS_DIR = "/home/mcp-hub/pip-extras"
+    command = body.command.strip()
+
+    if not command:
+        raise HTTPException(400, detail="Command is required")
+
+    # Auto-wrap pip/uv pip install commands to target the persistent extras dir
+    if command.startswith("pip install") or command.startswith("uv pip install"):
+        parts = command.split(" ", 2)
+        if len(parts) >= 3:
+            command = f"{parts[0]} {parts[1]} --target {EXTRAS_DIR} {parts[2]}"
+
+    # Ensure EXTRAS_DIR exists
+    os.makedirs(EXTRAS_DIR, exist_ok=True)
+
+    logger.info("Running install command: %s", command)
+
+    try:
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(), timeout=120.0
+        )
+
+        return {
+            "success": process.returncode == 0,
+            "returncode": process.returncode,
+            "stdout": stdout.decode("utf-8", errors="replace"),
+            "stderr": stderr.decode("utf-8", errors="replace"),
+        }
+    except asyncio.TimeoutError:
+        raise HTTPException(504, detail="Install command timed out (120s)")
+    except Exception as e:
+        logger.exception("Install command failed")
+        raise HTTPException(500, detail=str(e))
 
 
 @router.post("/servers/{name}/tools/{tool_name}/call")
