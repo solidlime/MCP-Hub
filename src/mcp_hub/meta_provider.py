@@ -180,6 +180,10 @@ class ToolIndex:
         Uses embedding-based semantic search when fastembed is available,
         otherwise falls back to BM25 keyword search.
 
+        When semantic search returns no results (e.g. all scores ≤ 0 due to
+        language mismatch — bge-small-en is English-only), automatically
+        falls back to BM25 which supports multilingual input.
+
         Returns list of {server, name, description, inputSchema, score}.
 
         inputSchema is included so the LLM can proceed directly to execute_tool without
@@ -190,9 +194,12 @@ class ToolIndex:
         if not self._documents:
             return []
         if self._use_embeddings and self._embeddings is not None:
-            return self._semantic_search(query, top_k)
-        else:
-            return self._bm25_search(query, top_k)
+            results = self._semantic_search(query, top_k)
+            if results:
+                return results
+            # All scores ≤ 0 → embeddings are useless for this query → fall back to BM25
+            logger.info("Semantic search returned 0 results, falling back to BM25 for query: %s", query)
+        return self._bm25_search(query, top_k)
 
     def _semantic_search(self, query: str, top_k: int) -> list[dict]:
         """Dense retrieval via embedding cosine similarity."""
@@ -212,6 +219,8 @@ class ToolIndex:
         results = []
         for idx in ranked[:top_k]:
             score = float(scores[idx])
+            if score <= 0.0:
+                break  # Remaining scores are ≤ 0 (sorted descending) — stop
             doc = docs[idx]
             results.append({
                 "server": doc["server"],
