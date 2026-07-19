@@ -159,7 +159,23 @@ async def lifespan(app: FastAPI):
     from .meta_provider import create_meta_app
 
     meta_app = create_meta_app(proxy_manager)
-    proxy_manager.on_change(meta_app.rebuild_index)
+
+    # Debounced rebuild wrapper — coalesces rapid on_change calls (e.g. startup
+    # cascade where multiple servers connect within milliseconds) into a single
+    # rebuild_index() run.  Explicit await meta_app.rebuild_index() calls are
+    # NOT debounced.
+    _rebuild_task: asyncio.Task | None = None
+
+    async def _on_change_rebuild():
+        nonlocal _rebuild_task
+        if _rebuild_task and not _rebuild_task.done():
+            _rebuild_task.cancel()
+        async def _delayed():
+            await asyncio.sleep(0.5)
+            await meta_app.rebuild_index()
+        _rebuild_task = asyncio.create_task(_delayed())
+
+    proxy_manager.on_change(_on_change_rebuild)
 
     # DB から全サーバーを復元・マウント
     await proxy_manager.load_all()
