@@ -1666,13 +1666,9 @@
                 <div class="setting-group">
                     <label class="setting-label">🧠 埋め込みモデル</label>
                     <div class="setting-row">
-                        <select id="settings-embedding-model" class="setting-input"
-                                onchange="saveEmbeddingModel(this.value)"
-                                aria-label="埋め込みモデルの選択">
-                            <option value="cl-nagoya/ruri-v3-30m">Ruri v3 (日本語)</option>
-                            <option value="BAAI/bge-small-en-v1.5">BGE Small (英語)</option>
-                            <option value="intfloat/multilingual-e5-small">E5 Multilingual (多言語)</option>
-                        </select>
+                        <input type="text" id="embeddingModel" class="setting-input"
+                               placeholder="cl-nagoya/ruri-v3-30m"
+                               onchange="saveEmbeddingModel(this.value)">
                     </div>
                     <p class="setting-hint">
                         ツール検索のセマンティック検索に使用する埋め込みモデル。変更は再起動後に反映されます。
@@ -2372,7 +2368,6 @@
         }
 
         async function removeTag(name, tag) {
-            if (!confirm(`タグ「${tag}」を削除しますか？`)) return;
             const server = servers.find(s => s.name === name);
             if (!server) return;
             const newTags = getServerTags(server).filter(t => t !== tag);
@@ -2926,32 +2921,32 @@
         }
 
         async function loadEmbeddingModel() {
-            const select = document.getElementById('settings-embedding-model');
-            if (!select) return;
             try {
-                const data = await API.getEmbeddingModel();
+                const resp = await fetch('/admin/api/settings/embedding-model');
+                if (!resp.ok) throw new Error(resp.statusText);
+                const data = await resp.json();
                 embeddingModel = data.embedding_model;
-                select.value = embeddingModel;
-            } catch (error) {
-                console.error('Embedding model load error:', error);
-                // Keep default selection on error
+                const el = document.getElementById('embeddingModel');
+                if (el) el.value = embeddingModel || '';
+            } catch (e) {
+                console.warn('Failed to load embedding model:', e);
             }
         }
 
         async function saveEmbeddingModel(model) {
-            const select = document.getElementById('settings-embedding-model');
+            const el = document.getElementById('embeddingModel');
             try {
-                select.disabled = true;
+                el.disabled = true;
                 const data = await API.patchEmbeddingModel(model);
                 embeddingModel = data.embedding_model;
-                select.value = embeddingModel;
+                el.value = embeddingModel;
                 showToast(`埋め込みモデルを ${embeddingModel} に変更しました`, 'success');
             } catch (error) {
                 // Revert on error
-                if (embeddingModel) select.value = embeddingModel;
+                if (embeddingModel) el.value = embeddingModel;
                 showToast(error.message, 'error');
             } finally {
-                select.disabled = false;
+                el.disabled = false;
             }
         }
 
