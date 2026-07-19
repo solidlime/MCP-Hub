@@ -2230,14 +2230,23 @@
             btnEl.replaceWith(input);
             input.focus();
 
+            let _committing = false;
+
             async function commitTag() {
-                const raw = input.value.trim();
-                if (raw) {
-                    const newTags = raw.split(/[,\s、]+/).map(t => t.trim()).filter(Boolean);
-                    await batchAddTags(name, newTags);
-                } else {
-                    updateServerCard(name);
-                    renderTagFilterBar();
+                if (_committing) return;
+                _committing = true;
+                input.removeEventListener('blur', commitTag);
+                try {
+                    const raw = input.value.trim();
+                    if (raw) {
+                        const newTags = raw.split(/[,\s、]+/).map(t => t.trim()).filter(Boolean);
+                        await batchAddTags(name, newTags);
+                    } else {
+                        updateServerCard(name);
+                        renderTagFilterBar();
+                    }
+                } finally {
+                    _committing = false;
                 }
             }
 
@@ -2246,6 +2255,7 @@
                     e.preventDefault();
                     commitTag();
                 } else if (e.key === 'Escape') {
+                    input.removeEventListener('blur', commitTag);
                     updateServerCard(name);
                     renderTagFilterBar();
                 }
