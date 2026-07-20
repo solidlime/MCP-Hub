@@ -284,7 +284,7 @@ class ProxyManager:
 
     async def list_tools(self, tags: list[str] | None = None) -> dict[str, list[dict]]:
         """全サーバーのツール一覧。オプションの tags フィルター。"""
-        from .state import request_tags  # no circular dep needed; state is shared
+        from .state import request_tags, tags_match  # no circular dep needed; state is shared
 
         if tags is None:
             tags = request_tags.get(None)
@@ -302,7 +302,7 @@ class ProxyManager:
             if tags:
                 config = configs_snapshot.get(srv_name, {})
                 server_tags = config.get("tags", [])
-                if not any(t in server_tags for t in tags):
+                if not tags_match(tags, server_tags):
                     continue
 
             try:
@@ -339,6 +339,17 @@ class ProxyManager:
     def get_proxy(self, name: str) -> FastMCPProxy | None:
         """プロキシインスタンスを取得。"""
         return self._proxies.get(name)
+
+    def proxy_to_name(self, proxy_id: int) -> str | None:
+        """id(proxy) → server_name の逆引き。TagFilterMiddleware 用。"""
+        for name, proxy in self._proxies.items():
+            if id(proxy) == proxy_id:
+                return name
+        return None
+
+    def server_tags(self, name: str) -> list[str]:
+        """サーバーの設定タグ一覧。TagFilterMiddleware 用。"""
+        return self._server_configs.get(name, {}).get("tags", [])
 
     def get_connected_servers(self) -> dict[str, Any]:
         """Return snapshot of connected proxy instances.

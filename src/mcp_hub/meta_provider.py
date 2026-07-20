@@ -14,6 +14,8 @@ from fastmcp import FastMCP
 from rank_bm25 import BM25Okapi
 
 from .proxy_manager import ProxyManager as _ProxyManager
+from .state import request_tags
+from .state import tags_match as _tags_match
 
 try:
     from fastembed import TextEmbedding
@@ -309,9 +311,27 @@ class MetaTools:
         self,
         tool_index: ToolIndex,
         execute_tool_fn: Callable[[str, str, dict], Any],
+        get_server_tags: Callable[[str], list[str]] | None = None,
     ):
         self._index = tool_index
         self._execute_tool = execute_tool_fn
+        self._get_server_tags = get_server_tags or (lambda _: [])
+
+    def _get_allowed_servers(self) -> set[str] | None:
+        """Return the set of server names allowed by request_tags, or None if no filter."""
+        tags = request_tags.get()
+        if not tags:
+            return None
+        allowed: set[str] = set()
+        for server_name in self._index.list_servers():
+            server_tags = self._get_server_tags(server_name)
+            if _tags_match(tags, server_tags):
+                allowed.add(server_name)
+        return allowed
+
+    def _filter_search_results(self, results: list[dict], allowed: set[str]) -> list[dict]:
+        """Remove results from servers not in *allowed*."""
+        return [r for r in results if r["server"] in allowed]
 
     async def search_tools(self, query: str, top_k: int = 10) -> str:
         """Search upstream tools. Always call FIRST before execute_tool.
@@ -321,6 +341,9 @@ class MetaTools:
             top_k: Max results (default 10)
         """
         results = self._index.search(query, top_k)
+        allowed = self._get_allowed_servers()
+        if allowed is not None:
+            results = self._filter_search_results(results, allowed)
         if not results:
             return json.dumps({"message": "No matching tools found", "hint": "Try broader keywords or check server connections."}, ensure_ascii=False, indent=2)
         return json.dumps({"results": results}, ensure_ascii=False, indent=2)
@@ -333,6 +356,14 @@ class MetaTools:
             tool_name: From search_tools results
             arguments: Use inputSchema from search_tools results
         """
+        # Tag check: block execution if server's tags don't match request_tags
+        allowed = self._get_allowed_servers()
+        if allowed is not None and server not in allowed:
+            return json.dumps({
+                "error": f"Server '{server}' is not available with current tag filter.",
+                "hint": "Check your X-MCP-Hub-Tags header or connect without tag filtering."
+            }, ensure_ascii=False, indent=2)
+
         # Verify tool exists in index before dispatching
         if self._index.get_schema(server, tool_name) is None:
             return json.dumps({
@@ -344,6 +375,10 @@ class MetaTools:
     async def list_upstream_tools(self) -> str:
         """List all upstream tools grouped by server. Use for orientation, then search_tools."""
         by_server = self._index.get_tools_by_server()
+        # Apply tag filtering if request_tags is set
+        allowed = self._get_allowed_servers()
+        if allowed is not None:
+            by_server = {srv: tools for srv, tools in by_server.items() if srv in allowed}
         if not by_server:
             return json.dumps({"message": "No upstream tools available. Add servers via admin API."}, ensure_ascii=False, indent=2)
         total = sum(len(tools) for tools in by_server.values())
@@ -394,6 +429,7 @@ def create_meta_app(
     meta = MetaTools(
         tool_index=index,
         execute_tool_fn=lambda s, t, a: proxy_manager.call_tool(s, t, a),
+        get_server_tags=proxy_manager.server_tags,
     )
 
     # Register meta tools via FastMCP tool decorator

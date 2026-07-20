@@ -35,6 +35,7 @@ from .config import load_config
 from .proxy_manager import ProxyManager
 from .store import JsonStore
 from .state import app_state, request_tags
+from .tag_filter import TagFilterMiddleware
 
 _bootstrap.setup_path()
 _bootstrap.setup_env()
@@ -184,6 +185,11 @@ async def lifespan(app: FastAPI):
     # DB から全サーバーを復元・マウント
     await proxy_manager.load_all()
     logger.info("Loaded %d proxy servers", len(proxy_manager._proxies))
+
+    # タグフィルタリングミドルウェアを登録
+    # tools/list, prompts/list, resources/list の応答を
+    # X-MCP-Hub-Tags ヘッダーに基づいてフィルタする
+    mcp_server.add_middleware(TagFilterMiddleware(proxy_manager))
 
     # 内部リソース: hub://servers — 接続サーバーのJSONスナップショット
     @mcp_server.resource("hub://servers")

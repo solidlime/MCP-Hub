@@ -13,6 +13,20 @@ if TYPE_CHECKING:
 request_tags: ContextVar[list[str] | None] = ContextVar("request_tags", default=None)
 
 
+def tags_match(requested: list[str] | None, server_tags: list[str]) -> bool:
+    """Check whether *requested* tags intersect with *server_tags* (OR logic).
+
+    Returns True when:
+    - *requested* is None or empty (no filter → pass)
+    - Any requested tag is present in server_tags
+
+    This is the single source of truth for tag-matching logic.
+    """
+    if not requested:
+        return True
+    return any(t in server_tags for t in requested)
+
+
 class _AppState:
     registry: JsonStore | None = None
     proxy_manager: ProxyManager | None = None
