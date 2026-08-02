@@ -1531,9 +1531,9 @@
                         <input type="text" class="form-input" id="editCommand" placeholder="例: npx @modelcontextprotocol/server-filesystem">
                     </div>
                     <div class="form-group">
-                        <label class="form-label" for="editArgs">引数 (1行に1つ)</label>
+                        <label class="form-label" for="editArgs">引数</label>
                         <textarea class="form-input" id="editArgs" rows="3" placeholder="-y&#10;@modelcontextprotocol/server-filesystem"></textarea>
-                        <div class="form-hint">1行に1つの引数を入力してください</div>
+                        <div class="form-hint">1行に1つ、または引用符付きカンマ区切りリスト（例: "--with", "mcp&lt;2.0.0", "mcp-server-fetch"）で入力できます</div>
                     </div>
 
                     <!-- 環境変数 -->
@@ -2561,6 +2561,58 @@
             }
         }
 
+        // 引数テキストのパース。
+        // 従来の「1行に1つ」形式に加え、引用符付きカンマ区切りリストにも対応:
+        //   --with "mcp<2.0.0" mcp-server-fetch
+        //   "--with", "mcp<2.0.0", "mcp-server-fetch"
+        function parseArgs(text) {
+            if (!text) return [];
+            const args = [];
+            text.split('\n').forEach(line => {
+                line = line.trim();
+                if (!line) return;
+                if (line.includes('"') || line.includes("'")) {
+                    args.push(...tokenizeArgLine(line));
+                } else {
+                    args.push(line);
+                }
+            });
+            return args;
+        }
+
+        // 引用符（" または '）を尊重しつつ、空白・カンマでトークン分割する
+        function tokenizeArgLine(line) {
+            const tokens = [];
+            let cur = '';
+            let quote = null;
+            let hasToken = false;
+            for (let i = 0; i < line.length; i++) {
+                const ch = line[i];
+                if (quote) {
+                    if (ch === quote) {
+                        quote = null;
+                        hasToken = true;
+                    } else {
+                        cur += ch;
+                    }
+                } else if (ch === '"' || ch === "'") {
+                    quote = ch;
+                    hasToken = true;
+                } else if (ch === ',' || ch === ' ' || ch === '\t') {
+                    if (hasToken) {
+                        tokens.push(cur);
+                        cur = '';
+                        hasToken = false;
+                    }
+                } else {
+                    cur += ch;
+                    hasToken = true;
+                }
+            }
+            if (hasToken) tokens.push(cur);
+            return tokens;
+        }
+
         // Parse KEY=value or KEY: value format
         function parseKeyValue(text, separator) {
             const result = {};
@@ -2584,7 +2636,7 @@
             const argsStr = document.getElementById('editArgs').value.trim();
             const url = document.getElementById('editUrl').value.trim();
             const disabled = document.getElementById('editDisabled').checked;
-            const newArgs = argsStr ? argsStr.split('\n').map(s => s.trim()).filter(Boolean) : [];
+            const newArgs = parseArgs(argsStr);
             const newEnv = parseKeyValue(document.getElementById('editEnv').value.trim(), '=');
             const newHeaders = parseKeyValue(document.getElementById('editHeaders').value.trim(), ':');
 
