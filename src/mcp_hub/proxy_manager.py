@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import re
+import traceback
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import urlparse
@@ -128,15 +129,12 @@ class ProxyManager:
                 self._status[name] = "connected"
             logger.info("Server %s connected (background)", name)
             # Notify listeners so meta index can rebuild
-            for cb in self._on_change_callbacks:
-                try:
-                    await cb()
-                except Exception:
-                    logger.warning("on_change callback failed for %s", name, exc_info=True)
+            await self._notify_change(name, "connected", {"tool_count": len(tools)})
         except asyncio.TimeoutError:
             logger.warning("Server %s connection timed out — health monitor will retry", name)
             async with self._lock:
                 self._status[name] = "error"
+            await self._notify_change(name, "spawn_failed", {"error": "Connection timed out"})
         except Exception:
             logger.warning(
                 "Server %s failed initial connection — health monitor will retry",
@@ -144,6 +142,10 @@ class ProxyManager:
             )
             async with self._lock:
                 self._status[name] = "error"
+            await self._notify_change(name, "spawn_failed", {
+                "error": "Connection failed",
+                "detail": traceback.format_exc()[:500],
+            })
 
     async def load_all(self) -> None:
         """DB から全サーバーをバックグラウンドで読み込んでマウント。
@@ -212,14 +214,14 @@ class ProxyManager:
             self._tool_cache.pop(name, None)
             await self._rebuild_mounts()
 
-        for cb in self._on_change_callbacks:
-            await cb()
+        await self._notify_change(name, "removed", None)
         return True
 
     async def refresh_server(self, name: str, config: dict) -> None:
         """プロキシの再生成 + 設定更新。disable 時はアンマウントのみ。"""
         # --- Phase 1: 状態更新（ロック保護）---
         needs_remount = False
+        refreshed = False
         is_disabled = config.get("disabled", False)
         async with self._lock:
             self._refreshing.add(name)
@@ -245,17 +247,18 @@ class ProxyManager:
                         self.mcp.mount(proxy, namespace=name)
                         self._status[name] = "connected"
                     logger.info("Refreshed server %s", name)
+                    refreshed = True
                 except Exception:
                     logger.exception("Failed to refresh server %s", name)
                     async with self._lock:
                         self._status[name] = "error"
 
             # Callbacks outside lock — they may perform IO (rebuild_index calls list_tools)
-            for cb in self._on_change_callbacks:
-                try:
-                    await cb()
-                except Exception:
-                    logger.warning("on_change callback failed for %s", name, exc_info=True)
+            # "updated" fires only when the proxy was actually regenerated (refreshed).
+            # A tags-only PATCH or a pure disable remount does NOT regenerate the
+            # proxy, so no misleading "updated" event is emitted for it.
+            if refreshed:
+                await self._notify_change(name, "updated", {"disabled": bool(is_disabled)})
         finally:
             async with self._lock:
                 self._refreshing.discard(name)
@@ -333,8 +336,24 @@ class ProxyManager:
             return await proxy.call_tool(tool_name, arguments)
 
     def on_change(self, callback: Callable) -> None:
-        """Register a callback invoked after server add/remove/refresh."""
+        """Register a callback invoked after server lifecycle events.
+
+        New signature: callback(name: str, event: str, detail: dict | None)
+        where event is one of:
+          "connected" | "disconnected" | "spawn_failed" | "recovered"
+          | "removed" | "updated"
+        """
         self._on_change_callbacks.append(callback)
+
+    async def _notify_change(self, name: str, event: str, detail: dict | None = None) -> None:
+        """Fire all on_change callbacks with the new signature, protected."""
+        for cb in self._on_change_callbacks:
+            try:
+                await cb(name, event, detail)
+            except Exception:
+                logger.warning(
+                    "on_change callback failed for %s (%s)", name, event, exc_info=True
+                )
 
     def get_proxy(self, name: str) -> FastMCPProxy | None:
         """プロキシインスタンスを取得。"""
@@ -423,6 +442,7 @@ class ProxyManager:
                 logger.warning("Health check timeout for %s", name)
                 async with self._lock:
                     self._status[name] = "error"
+                await self._notify_change(name, "disconnected", {"error": "Health check timeout"})
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -430,6 +450,7 @@ class ProxyManager:
                     logger.warning("Server %s health check failed", name)
                 async with self._lock:
                     self._status[name] = "error"
+                await self._notify_change(name, "disconnected", {"error": "Health check failed"})
 
         # Recovery: reconnect failed servers that HAVE a proxy (outside lock for IO)
         for name in to_recover:
@@ -456,12 +477,9 @@ class ProxyManager:
                     recovered = True
                 else:
                     self._status[name] = "error"
+                    await self._notify_change(name, "spawn_failed", {"error": "Recovery failed"})
             if recovered:
-                for cb in self._on_change_callbacks:
-                    try:
-                        await cb()
-                    except Exception:
-                        logger.warning("on_change callback failed during recovery of %s", name, exc_info=True)
+                await self._notify_change(name, "recovered", None)
 
         # Recovery: servers that failed initial connection (status="error", no proxy in _proxies)
         for name, config in configs_snapshot.items():
@@ -488,13 +506,11 @@ class ProxyManager:
                     self._status[name] = "connected"
                     logger.info("Server %s recovered (initial)", name)
                     recovered = True
-                # else: stays "error", will retry next interval
+                else:
+                    # stays "error", will retry next interval
+                    await self._notify_change(name, "spawn_failed", {"error": "Recovery failed"})
             if recovered:
-                for cb in self._on_change_callbacks:
-                    try:
-                        await cb()
-                    except Exception:
-                        logger.warning("on_change callback failed during initial recovery of %s", name, exc_info=True)
+                await self._notify_change(name, "recovered", None)
 
     async def _health_monitor_loop(self, interval: int) -> None:
         """Background loop. Never dies — exceptions are caught and logged."""
