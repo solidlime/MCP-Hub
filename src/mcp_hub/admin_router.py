@@ -143,6 +143,33 @@ async def metrics():
     }
 
 
+@router.get("/logs")
+async def get_logs(
+    type: str | None = None,
+    server: str | None = None,
+    status: str | None = None,
+    q: str | None = None,
+    limit: int = 100,
+):
+    """ツールログ一覧（新しい順）。サーバー側フィルタ付き。"""
+    limit = max(1, min(limit, 500))
+    entries = app_state.snapshot_logs()
+    filtered = [
+        e for e in entries
+        if (type is None or e.type == type)
+        and (server is None or e.server == server)
+        and (status is None or e.status == status)
+        and (q is None or q in (e.tool or "") or (e.args and q in e.args) or (e.error and q in e.error))
+    ]
+    total = len(filtered)
+    # 新しい順（id 降順）
+    filtered.sort(key=lambda e: e.id, reverse=True)
+    return {
+        "entries": [e.to_dict() for e in filtered[:limit]],
+        "total": total,
+    }
+
+
 @router.get("/servers")
 async def list_servers(include_tools: bool = False):
     """List all servers. include_tools=True (default) returns tool names (backward compat).
