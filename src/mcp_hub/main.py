@@ -32,9 +32,11 @@ from . import bootstrap as _bootstrap
 from .admin_router import router as admin_router
 from .auth import ApiKeyMiddleware
 from .config import load_config
+from .masking import mask_text
+from .middleware import ToolLogMiddleware
 from .proxy_manager import ProxyManager
 from .store import JsonStore
-from .state import app_state, request_tags
+from .state import LogEntry, app_state, request_tags
 from .tag_filter import TagFilterMiddleware
 
 _bootstrap.setup_path()
@@ -165,13 +167,17 @@ async def lifespan(app: FastAPI):
 
     meta_app = create_meta_app(proxy_manager, embedding_model=config.embedding_model)
 
+    # ツールログ記録ミドルウェア（meta 側）— meta モード時はリクエスト全体が
+    # meta_app に回るため、こちらにも登録しないとログが欠落する
+    meta_app.mcp.add_middleware(ToolLogMiddleware(proxy_manager))
+
     # Debounced rebuild wrapper — coalesces rapid on_change calls (e.g. startup
     # cascade where multiple servers connect within milliseconds) into a single
     # rebuild_index() run.  Explicit await meta_app.rebuild_index() calls are
     # NOT debounced.
     _rebuild_task: asyncio.Task | None = None
 
-    async def _on_change_rebuild():
+    async def _on_change_rebuild(name: str | None = None, event: str | None = None, detail: dict | None = None):
         nonlocal _rebuild_task
         if _rebuild_task and not _rebuild_task.done():
             _rebuild_task.cancel()
@@ -180,7 +186,23 @@ async def lifespan(app: FastAPI):
             await meta_app.rebuild_index()
         _rebuild_task = asyncio.create_task(_delayed())
 
+    async def _on_log_event(name: str, event: str, detail: dict | None = None):
+        """サーバー接続イベントをログバッファに記録する。"""
+        status = event
+        error = None
+        if detail and detail.get("error"):
+            error = mask_text(str(detail["error"])[:500])
+        app_state.append_log(LogEntry(
+            ts=time.time(),
+            type="server_event",
+            server=name,
+            tool="-",
+            status=status,
+            error=error,
+        ))
+
     proxy_manager.on_change(_on_change_rebuild)
+    proxy_manager.on_change(_on_log_event)
 
     # DB から全サーバーを復元・マウント
     await proxy_manager.load_all()
@@ -190,6 +212,9 @@ async def lifespan(app: FastAPI):
     # tools/list, prompts/list, resources/list の応答を
     # X-MCP-Hub-Tags ヘッダーに基づいてフィルタする
     mcp_server.add_middleware(TagFilterMiddleware(proxy_manager))
+
+    # ツールログ記録ミドルウェア（normal 側）
+    mcp_server.add_middleware(ToolLogMiddleware(proxy_manager))
 
     # 内部リソース: hub://servers — 接続サーバーのJSONスナップショット
     @mcp_server.resource("hub://servers")

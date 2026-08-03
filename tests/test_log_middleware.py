@@ -112,3 +112,33 @@ class TestToolLogMiddleware:
         logs = app_state.snapshot_logs()
         assert logs[0].status == "error"
         assert "Tool not found" in logs[0].error
+
+
+class TestIntegration:
+    def test_server_event_recorded_via_on_change(self, tmp_path, monkeypatch):
+        """on_change 経由でサーバーイベントがログに記録される（統合）。"""
+        from fastapi.testclient import TestClient
+        from mcp_hub.main import create_app
+
+        monkeypatch.setenv("MCP_HUB_DATA_DIR", str(tmp_path))
+        app = create_app()
+        with TestClient(app) as client:
+            # create_app の lifespan で on_change が登録済み。
+            # サーバーを追加（失敗するコマンド）→ spawn_failed が記録されるはず
+            r = client.post("/admin/api/servers", json={
+                "name": "broken",
+                "config": {"command": "definitely-not-a-real-command-xyz", "args": []},
+            })
+            assert r.status_code == 201
+
+            import time as _time
+            _time.sleep(1.0)  # background connect 完了待ち
+
+            logs = app_state.snapshot_logs()
+            server_events = [e for e in logs if e.type == "server_event" and e.server == "broken"]
+            # 接続は background task。spawn 失敗の場合は spawn_failed だが、
+            # 環境によっては create_proxy が proxy を生成し list_tools の
+            # 接続エラーが握りつぶされて connected (tool_count=0) になる。
+            # ステータスは環境依存のため、on_change → _on_log_event の配線が
+            # 働いて server_event が記録されたことのみを検証する。
+            assert len(server_events) >= 1
