@@ -890,6 +890,66 @@
         }
 
         /* ============================================================
+           LOG TAB
+           ============================================================ */
+        .log-filter-bar {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 14px;
+            align-items: center;
+        }
+        .log-filter-bar select,
+        .log-filter-bar input[type="text"] {
+            padding: 7px 10px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-sm);
+            background: var(--bg-surface);
+            color: var(--text-primary);
+            font-size: 0.82rem;
+            font-family: var(--font-sans);
+        }
+        .log-filter-bar input[type="text"] { flex: 1; min-width: 180px; }
+        .log-table-wrap { overflow-x: auto; }
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+        }
+        .log-table th, .log-table td {
+            padding: 8px 10px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-subtle);
+            vertical-align: top;
+        }
+        .log-table th {
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: 0.74rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .log-status {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: var(--radius-sm);
+            font-size: 0.72rem;
+            font-weight: 600;
+        }
+        .log-status.success, .log-status.connected, .log-status.recovered { background: rgba(46, 160, 67, 0.15); color: #2ea043; }
+        .log-status.error, .log-status.spawn_failed, .log-status.disconnected, .log-status.timeout { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+        .log-status.updated, .log-status.removed { background: rgba(139, 148, 158, 0.2); color: var(--text-muted); }
+        .log-detail-btn {
+            background: none; border: none; cursor: pointer;
+            color: var(--accent-primary); font-size: 0.8rem;
+        }
+        .log-detail-row td { background: var(--bg-elevated); }
+        .log-detail-row pre {
+            white-space: pre-wrap; word-break: break-all;
+            margin: 0; font-size: 0.76rem; color: var(--text-secondary);
+        }
+
+        /* ============================================================
            SEGMENT TOGGLE (Command / URL)
            ============================================================ */
         .segment-toggle {
@@ -1452,6 +1512,17 @@
             </div>
         </header>
 
+        <!-- Main Tabs -->
+        <div class="tabs" role="tablist" aria-label="ダッシュボード切り替え">
+            <button class="tab active" id="tabServersBtn" role="tab" aria-selected="true"
+                    onclick="switchMainTab('servers')">サーバー</button>
+            <button class="tab" id="tabLogsBtn" role="tab" aria-selected="false"
+                    onclick="switchMainTab('logs')">ログ</button>
+        </div>
+
+        <!-- Server Tab -->
+        <section id="serverTab" role="tabpanel" aria-label="サーバー一覧">
+
         <!-- Metrics Bar -->
         <div id="metricsBar" class="metrics-bar" style="display: none;" role="status" aria-label="Hub 統計">
             <div class="metric">
@@ -1496,6 +1567,54 @@
                 最初のサーバーを追加
             </button>
         </div>
+        </section>
+
+        <!-- Log Tab -->
+        <section id="logTab" style="display: none;" role="tabpanel" aria-label="ツールログ">
+            <div class="log-filter-bar">
+                <select id="logTypeFilter" aria-label="種類">
+                    <option value="">すべての種類</option>
+                    <option value="tool_call">ツール呼び出し</option>
+                    <option value="server_event">サーバーイベント</option>
+                </select>
+                <select id="logServerFilter" aria-label="サーバー">
+                    <option value="">すべてのサーバー</option>
+                </select>
+                <select id="logStatusFilter" aria-label="ステータス">
+                    <option value="">すべてのステータス</option>
+                    <option value="success">success</option>
+                    <option value="error">error</option>
+                    <option value="timeout">timeout</option>
+                    <option value="connected">connected</option>
+                    <option value="disconnected">disconnected</option>
+                    <option value="spawn_failed">spawn_failed</option>
+                    <option value="recovered">recovered</option>
+                </select>
+                <input type="text" id="logSearchInput" placeholder="検索 (ツール名 / 引数 / エラー)" aria-label="検索">
+                <button class="btn" onclick="loadLogs()">更新</button>
+            </div>
+            <div class="log-table-wrap">
+                <table class="log-table">
+                    <thead>
+                        <tr>
+                            <th>時刻</th>
+                            <th>種別</th>
+                            <th>サーバー</th>
+                            <th>ツール</th>
+                            <th>ステータス</th>
+                            <th>所要時間</th>
+                            <th>引数</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="logTableBody"></tbody>
+                </table>
+                <div id="logEmpty" class="empty-state" style="display: none;">
+                    <div class="empty-state-title">ログはまだありません</div>
+                    <div class="empty-state-description">ツールを呼び出すと、ここに記録が表示されます。</div>
+                </div>
+            </div>
+        </section>
     </div>
 
     <!-- Server Settings Modal (Add/Edit共用) -->
@@ -1720,6 +1839,9 @@
         // ============================================================
         let servers = [];
         let currentTab = 'url';
+        let currentMainTab = 'servers';
+        let logPollingActive = false;
+        let logPollingTimer = null;
         let currentTool = null;
         let currentServer = null;
         let editingServer = null;
@@ -1844,6 +1966,17 @@
             async getMetrics() {
                 const response = await fetch('/admin/api/metrics');
                 if (!response.ok) throw new Error('メトリクスの取得に失敗しました');
+                return response.json();
+            },
+
+            async getLogs(params = {}) {
+                const query = new URLSearchParams();
+                for (const [k, v] of Object.entries(params)) {
+                    if (v !== undefined && v !== null && v !== '') query.set(k, v);
+                }
+                const qs = query.toString();
+                const response = await fetch(`/admin/api/logs${qs ? '?' + qs : ''}`);
+                if (!response.ok) throw new Error('ログの取得に失敗しました');
                 return response.json();
             },
 
@@ -2176,6 +2309,7 @@
                 const data = await API.getServers(true);
                 servers = data.servers || [];
                 renderServers();
+                populateLogServerFilter(servers);
                 updateMetrics();
 
                 // Show warning for error servers
@@ -2186,6 +2320,107 @@
             } catch (error) {
                 showToast(error.message, 'error');
             }
+        }
+
+        // ============================================================
+        // LOG TAB
+        // ============================================================
+        function switchMainTab(tab) {
+            currentMainTab = tab;
+            document.getElementById('tabServersBtn').classList.toggle('active', tab === 'servers');
+            document.getElementById('tabLogsBtn').classList.toggle('active', tab === 'logs');
+            document.getElementById('serverTab').style.display = tab === 'servers' ? '' : 'none';
+            document.getElementById('logTab').style.display = tab === 'logs' ? '' : 'none';
+            if (tab === 'logs') {
+                loadLogs();
+                startLogPolling();
+            } else {
+                stopLogPolling();
+            }
+        }
+
+        function startLogPolling() {
+            if (logPollingActive) return;
+            logPollingActive = true;
+            const tick = () => {
+                if (!logPollingActive) return;
+                loadLogs().catch(() => {});
+                logPollingTimer = setTimeout(tick, 5000);
+            };
+            tick();
+        }
+
+        function stopLogPolling() {
+            logPollingActive = false;
+            if (logPollingTimer) { clearTimeout(logPollingTimer); logPollingTimer = null; }
+        }
+
+        async function loadLogs() {
+            const type = document.getElementById('logTypeFilter').value;
+            const server = document.getElementById('logServerFilter').value;
+            const status = document.getElementById('logStatusFilter').value;
+            const q = document.getElementById('logSearchInput').value.trim();
+            const data = await API.getLogs({ type, server, status, q, limit: 100 });
+            renderLogs(data.entries || []);
+        }
+
+        function fmtLogTime(ts) {
+            const d = new Date(ts * 1000);
+            return d.toLocaleTimeString('ja-JP', { hour12: false }) +
+                   '.' + String(d.getMilliseconds()).padStart(3, '0');
+        }
+
+        function renderLogs(entries) {
+            const tbody = document.getElementById('logTableBody');
+            const empty = document.getElementById('logEmpty');
+            tbody.innerHTML = '';
+            if (!entries.length) {
+                empty.style.display = '';
+                return;
+            }
+            empty.style.display = 'none';
+            for (const entry of entries) {
+                const tr = document.createElement('tr');
+                const hasDetail = entry.error || entry.traceback;
+                tr.innerHTML = `
+                    <td>${escapeHtml(fmtLogTime(entry.ts))}</td>
+                    <td>${entry.type === 'server_event' ? 'イベント' : 'ツール'}</td>
+                    <td>${escapeHtml(entry.server)}</td>
+                    <td>${escapeHtml(entry.tool)}</td>
+                    <td><span class="log-status ${escapeHtml(entry.status)}">${escapeHtml(entry.status)}</span></td>
+                    <td>${entry.duration_ms != null ? escapeHtml(entry.duration_ms + ' ms') : '—'}</td>
+                    <td class="log-args">${entry.args ? escapeHtml(entry.args.slice(0, 80)) + (entry.args.length > 80 ? '…' : '') : '—'}</td>
+                    <td>${hasDetail ? '<button class="log-detail-btn" onclick="toggleLogDetail(this)">詳細</button>' : ''}</td>
+                `;
+                if (hasDetail) {
+                    const detail = document.createElement('tr');
+                    detail.className = 'log-detail-row';
+                    detail.style.display = 'none';
+                    detail.innerHTML = `<td colspan="8"><pre>${escapeHtml([entry.error, entry.traceback].filter(Boolean).join('\n\n'))}</pre></td>`;
+                    tbody.appendChild(tr);
+                    tbody.appendChild(detail);
+                } else {
+                    tbody.appendChild(tr);
+                }
+            }
+        }
+
+        function toggleLogDetail(btn) {
+            const detailRow = btn.closest('tr').nextElementSibling;
+            if (detailRow && detailRow.classList.contains('log-detail-row')) {
+                const visible = detailRow.style.display !== 'none';
+                detailRow.style.display = visible ? 'none' : '';
+                btn.textContent = visible ? '詳細' : '閉じる';
+            }
+        }
+
+        function populateLogServerFilter(serverList) {
+            const sel = document.getElementById('logServerFilter');
+            const current = sel.value;
+            const names = [...new Set(serverList.map(s => s.name))].sort();
+            sel.innerHTML = '<option value="">すべてのサーバー</option>' +
+                names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+            sel.value = current;
         }
 
         async function testServerConnection(name) {
@@ -3132,6 +3367,15 @@
             loadApiKey();
             await Promise.all([loadServers(), loadSettings()]);
             await updateHealthStatus();
+
+            // Log tab: server filter + filter event bindings
+            populateLogServerFilter(servers);
+            ['logTypeFilter', 'logServerFilter', 'logStatusFilter'].forEach(id => {
+                document.getElementById(id).addEventListener('change', loadLogs);
+            });
+            document.getElementById('logSearchInput').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') loadLogs();
+            });
 
             // Periodic refresh: reload servers + health every 30s (non-stacking)
             function scheduleNextRefresh() {
