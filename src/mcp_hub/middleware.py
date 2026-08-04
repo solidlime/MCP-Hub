@@ -53,6 +53,24 @@ def resolve_server(tool_name: str, arguments: dict, connected: dict[str, Any]) -
     return "-", tool_name
 
 
+def split_qualified_name(name: str, connected: dict[str, Any]) -> tuple[str, str]:
+    """'{server}_{tool}' 形式の名前を (server, tool) に分解する。
+
+    connected のサーバー名のうち、name が f"{server}_" で始まる接頭辞の
+    最長一致で server を特定し、残りを tool として返す。
+    マッチしなければ ("-", name) を返す。
+    full_info_tools のエントリ照合と on_call_tool の名前分解で共用する。
+    """
+    best: str | None = None
+    for server in connected:
+        if name.startswith(f"{server}_"):
+            if best is None or len(server) > len(best):
+                best = server
+    if best is None:
+        return "-", name
+    return best, name[len(best) + 1:]
+
+
 class ToolLogMiddleware(Middleware):
     """tools/call を包んでツール呼び出しを記録する。"""
 
