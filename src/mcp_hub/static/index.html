@@ -752,7 +752,8 @@
             transition: max-height var(--transition-slow);
         }
         .server-card.expanded .tools-container {
-            max-height: 2000px;
+            max-height: min(2000px, 60vh);
+            overflow-y: auto;
         }
         .tools-list {
             margin-top: 12px;
