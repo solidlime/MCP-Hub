@@ -595,6 +595,29 @@
             outline-offset: 2px;
         }
 
+        /* Server-level full-info toggle (meta mode) */
+        .server-full-info-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: auto;
+            flex-shrink: 0;
+        }
+        .server-full-info-wrapper .toggle-label {
+            font-size: 0.7rem;
+            white-space: nowrap;
+        }
+        /* Indeterminate state: middle color track, thumb stays center */
+        .toggle-switch.indeterminate .toggle-track {
+            background: color-mix(in srgb, var(--toggle-off) 50%, var(--toggle-on) 50%);
+        }
+        .toggle-switch.indeterminate .toggle-thumb {
+            transform: translateX(9px);
+        }
+        .toggle-switch-sm.indeterminate .toggle-thumb {
+            transform: translateX(6px);
+        }
+
         /* Compact toggle for full-info (meta OFF) tool rows */
         .full-info-toggle {
             display: inline-flex;
@@ -2216,6 +2239,25 @@
                         <span class="toggle-label">${disabled ? '無効' : '有効'}</span>
                     </div>
 
+                    ${metaMode === true ? (() => {
+                        const toolNames = (server.tools || []).map(t => server.name + '_' + t.name);
+                        const total = toolNames.length;
+                        const matched = toolNames.filter(e => fullInfoTools.includes(e)).length;
+                        const state = total > 0 && matched === total ? 'all' : matched === 0 ? 'none' : 'partial';
+                        return `
+                    <div class="server-full-info-wrapper">
+                        <label class="toggle-switch toggle-switch-sm ${state === 'partial' ? 'indeterminate' : ''}"
+                               title="${state === 'all' ? 'フル公開を解除' : '全ツールをフル公開'}">
+                            <input type="checkbox" ${state === 'all' ? 'checked' : ''}
+                                   onchange="toggleFullInfoServer('${escapeHtml(server.name)}', this.checked)"
+                                   aria-label="サーバー ${escapeHtml(server.name)} の全ツールフル公開切替">
+                            <span class="toggle-track"></span>
+                            <span class="toggle-thumb"></span>
+                        </label>
+                        <span class="toggle-label">全フル公開</span>
+                    </div>`;
+                    })() : ''}
+
                     ${tags.length > 0 ? `
                     <div class="server-tags">
                         ${tags.map(tag => `
@@ -2517,6 +2559,27 @@
             } catch (e) {
                 showToast('フル公開設定の更新に失敗しました', 'error');
                 if (servers && servers.length) renderServers(); // 失敗時は再描画で元に戻す
+            }
+        }
+
+        async function toggleFullInfoServer(serverName, checked) {
+            const server = servers.find(s => s.name === serverName);
+            if (!server || !server.tools) return;
+            const prefix = serverName + '_';
+            const toolEntries = server.tools.map(t => prefix + t.name);
+            const next = new Set(fullInfoTools);
+            if (checked) {
+                toolEntries.forEach(e => next.add(e));
+            } else {
+                toolEntries.forEach(e => next.delete(e));
+            }
+            fullInfoTools = [...next];
+            try {
+                await API.patchSettings({ full_info_tools: fullInfoTools });
+                renderServers(); // ツール単位トグルの表示も同期
+            } catch (e) {
+                showToast('フル公開設定の更新に失敗しました', 'error');
+                if (servers && servers.length) renderServers();
             }
         }
 
