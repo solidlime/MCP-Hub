@@ -595,6 +595,26 @@
             outline-offset: 2px;
         }
 
+        /* Compact toggle for full-info (meta OFF) tool rows */
+        .full-info-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: 12px;
+            flex-shrink: 0;
+        }
+        .toggle-switch-sm {
+            width: 30px;
+            height: 18px;
+        }
+        .toggle-switch-sm .toggle-thumb {
+            width: 14px;
+            height: 14px;
+        }
+        .toggle-switch-sm input:checked ~ .toggle-thumb {
+            transform: translateX(12px);
+        }
+
         /* Tags on card */
         .server-tags {
             display: flex;
@@ -1851,6 +1871,7 @@
         let periodicRefreshActive = false;
         let metaMode = null; // null = unknown, true/false = loaded
         let embeddingModel = null; // current embedding model name
+        let fullInfoTools = []; // full_info_tools エントリ（"{server}_{tool}" 形式）
 
         // ============================================================
         // THEME
@@ -2232,6 +2253,16 @@
                                             実行
                                         </button>
                                     </div>
+                                    <span class="full-info-toggle" ${metaMode === true ? '' : 'style="display:none"'}>
+                                        <label class="toggle-switch toggle-switch-sm" title="ツールをフル公開（メタOFF）">
+                                            <input type="checkbox" ${fullInfoTools.includes(tool.name) ? 'checked' : ''}
+                                                   onchange="toggleFullInfoTool('${escapeHtml(server.name)}', '${escapeHtml(tool.name)}', this.checked)"
+                                                   aria-label="ツール ${escapeHtml(tool.name)} のフル公開切替">
+                                            <span class="toggle-track"></span>
+                                            <span class="toggle-thumb"></span>
+                                        </label>
+                                        <span class="toggle-label">フル公開</span>
+                                    </span>
                                 </div>
                             `).join('') : (server.tools === undefined && status === 'connecting') ? '<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem; display: flex; align-items: center; gap: 6px;"><span class="loading-spinner" style="width:12px;height:12px;"></span> ツールを検出中...</div>' : '<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem;">ツールがありません</div>'}
                         </div>
@@ -2472,6 +2503,19 @@
                 showToast(error.message, 'error');
                 updateServerCard(name);
                 renderTagFilterBar();
+            }
+        }
+
+        async function toggleFullInfoTool(serverName, toolName, checked) {
+            const entry = toolName; // tool.name は既に "{server}_{tool}" 形式
+            const next = new Set(fullInfoTools);
+            if (checked) { next.add(entry); } else { next.delete(entry); }
+            fullInfoTools = [...next];
+            try {
+                await API.patchSettings({ full_info_tools: fullInfoTools });
+            } catch (e) {
+                showToast('フル公開設定の更新に失敗しました', 'error');
+                if (servers && servers.length) renderServers(); // 失敗時は再描画で元に戻す
             }
         }
 
@@ -3195,10 +3239,14 @@
             try {
                 const settings = await API.getSettings();
                 metaMode = settings.meta_mode;
+                fullInfoTools = settings.full_info_tools || [];
                 document.getElementById('metaModeToggle').checked = metaMode;
                 updateMetaModeDescription(metaMode);
                 statusDot.style.background = 'var(--accent-green)';
                 statusText.textContent = '接続済';
+                // 設定読込は loadServers と並行で走るため、後から読めた場合は
+                // 再描画してフル公開トグルの表示/チェック状態を反映する
+                if (servers && servers.length) renderServers();
             } catch (error) {
                 metaMode = null;
                 statusDot.style.background = 'var(--accent-red)';
