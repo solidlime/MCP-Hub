@@ -2255,7 +2255,7 @@
                                     </div>
                                     <span class="full-info-toggle" ${metaMode === true ? '' : 'style="display:none"'}>
                                         <label class="toggle-switch toggle-switch-sm" title="ツールをフル公開（メタOFF）">
-                                            <input type="checkbox" ${fullInfoTools.includes(tool.name) ? 'checked' : ''}
+                                            <input type="checkbox" ${fullInfoTools.includes(server.name + '_' + tool.name) ? 'checked' : ''}
                                                    onchange="toggleFullInfoTool('${escapeHtml(server.name)}', '${escapeHtml(tool.name)}', this.checked)"
                                                    aria-label="ツール ${escapeHtml(tool.name)} のフル公開切替">
                                             <span class="toggle-track"></span>
@@ -2507,7 +2507,7 @@
         }
 
         async function toggleFullInfoTool(serverName, toolName, checked) {
-            const entry = toolName; // tool.name は既に "{server}_{tool}" 形式
+            const entry = serverName + '_' + toolName; // "{server}_{tool}" 形式（API は生ツール名を返すため連結が必要）
             const next = new Set(fullInfoTools);
             if (checked) { next.add(entry); } else { next.delete(entry); }
             fullInfoTools = [...next];
@@ -3352,6 +3352,7 @@
                 metaMode = result.meta_mode;
                 updateMetaModeDescription(metaMode);
                 toggle.checked = metaMode;
+                if (servers && servers.length) renderServers(); // フル公開トグルの表示/非表示を反映
 
                 statusDot.style.background = 'var(--accent-green)';
                 statusText.textContent = '保存済';
