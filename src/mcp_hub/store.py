@@ -203,3 +203,10 @@ class JsonStore:
             data = await self._read_locked()
             data["embedding_model"] = model_name
             await self._write_internal(data)
+
+    async def set_full_info_tools(self, tools: list[str]) -> None:
+        """フル公開ツール一覧（"{server}_{tool}" 形式）を保存する。"""
+        async with self._lock:
+            data = await self._read_locked()
+            data["full_info_tools"] = list(tools)
+            await self._write_internal(data)

@@ -266,16 +266,16 @@ class TestSettings:
         """GET /admin/api/settings returns meta_mode=true by default."""
         r = client.get("/admin/api/settings")
         assert r.status_code == 200
-        assert r.json() == {"meta_mode": True}
+        assert r.json()["meta_mode"] is True
 
     def test_patch_settings_enable(self, client):
         """PATCH meta_mode=true persists and reflects in subsequent GET."""
         r = client.patch("/admin/api/settings", json={"meta_mode": True})
         assert r.status_code == 200
-        assert r.json() == {"meta_mode": True}
+        assert r.json()["meta_mode"] is True
 
         r2 = client.get("/admin/api/settings")
-        assert r2.json() == {"meta_mode": True}
+        assert r2.json()["meta_mode"] is True
 
     def test_patch_settings_disable(self, client):
         """PATCH meta_mode=false persists."""
@@ -284,17 +284,17 @@ class TestSettings:
         # Then disable
         r = client.patch("/admin/api/settings", json={"meta_mode": False})
         assert r.status_code == 200
-        assert r.json() == {"meta_mode": False}
+        assert r.json()["meta_mode"] is False
 
         r2 = client.get("/admin/api/settings")
-        assert r2.json() == {"meta_mode": False}
+        assert r2.json()["meta_mode"] is False
 
     def test_patch_settings_invalid_value(self, client):
         """PATCH with non-bool value like int 1 converts via bool()."""
         r = client.patch("/admin/api/settings", json={"meta_mode": 1})
         assert r.status_code == 200
         # bool(1) is True
-        assert r.json() == {"meta_mode": True}
+        assert r.json()["meta_mode"] is True
 
     def test_patch_settings_empty_body(self, client):
         """PATCH with empty body doesn't crash, returns current settings."""

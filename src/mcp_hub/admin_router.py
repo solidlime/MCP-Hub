@@ -83,6 +83,7 @@ async def get_settings():
     data = await registry._read()
     return {
         "meta_mode": data.get("meta_mode", False),
+        "full_info_tools": data.get("full_info_tools", []),
     }
 
 
@@ -91,8 +92,21 @@ async def update_settings(body: dict):
     registry = _get_registry()
     if "meta_mode" in body:
         await registry.set_meta_mode(bool(body["meta_mode"]))
+    if "full_info_tools" in body:
+        tools = body["full_info_tools"]
+        if not isinstance(tools, list) or not all(
+            isinstance(t, str) and "_" in t for t in tools
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="full_info_tools は '{server}_{tool}' 形式の文字列リストである必要があります",
+            )
+        await registry.set_full_info_tools(tools)
     data = await registry._read()
-    return {"meta_mode": data.get("meta_mode", False)}
+    return {
+        "meta_mode": data.get("meta_mode", False),
+        "full_info_tools": data.get("full_info_tools", []),
+    }
 
 
 @router.get("/settings/embedding-model")
