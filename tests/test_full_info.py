@@ -139,3 +139,48 @@ class TestFullInfoMiddlewareCall:
 
         assert result.is_error is True
         assert "not found" in result.content[0].text
+
+
+class TestIntegration:
+    def test_middleware_registration_order(self, tmp_path, monkeypatch):
+        """meta_app の middleware チェーンで ToolLog が FullInfo より外側（先に実行）
+        であること。FullInfo が on_call_tool で直接転送（call_next スキップ）しても
+        ToolLog が必ず実行され、ログ・metrics が保証される。
+
+        NOTE: FastMCP.__init__ が DereferenceRefsMiddleware を先頭に追加するため、
+        絶対インデックス（chain[0]/chain[1]）ではなく相対順序で検証する。
+        """
+        from fastapi.testclient import TestClient
+
+        from mcp_hub.full_info import FullInfoMiddleware
+        from mcp_hub.main import create_app
+        from mcp_hub.middleware import ToolLogMiddleware
+        from mcp_hub.state import app_state
+
+        monkeypatch.setenv("MCP_HUB_DATA_DIR", str(tmp_path))
+        app = create_app()
+        with TestClient(app):
+            meta_app = app_state.meta_app
+            assert meta_app is not None
+            chain = meta_app.mcp.middleware
+            tool_log_idx = next(
+                i for i, mw in enumerate(chain) if isinstance(mw, ToolLogMiddleware)
+            )
+            full_info_idx = next(
+                i for i, mw in enumerate(chain) if isinstance(mw, FullInfoMiddleware)
+            )
+            assert tool_log_idx < full_info_idx  # ToolLog が外側 = 先に実行される
+
+    def test_patch_updates_registry_data(self, tmp_path, monkeypatch):
+        """PATCH /settings 後、middleware が参照する registry._data に反映される。"""
+        from fastapi.testclient import TestClient
+
+        from mcp_hub.main import create_app
+        from mcp_hub.state import app_state
+
+        monkeypatch.setenv("MCP_HUB_DATA_DIR", str(tmp_path))
+        app = create_app()
+        with TestClient(app) as client:
+            r = client.patch("/admin/api/settings", json={"full_info_tools": ["fetch_fetch"]})
+            assert r.status_code == 200
+            assert app_state.registry._data["full_info_tools"] == ["fetch_fetch"]

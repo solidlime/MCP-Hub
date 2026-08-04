@@ -32,6 +32,7 @@ from . import bootstrap as _bootstrap
 from .admin_router import router as admin_router
 from .auth import ApiKeyMiddleware
 from .config import load_config
+from .full_info import FullInfoMiddleware
 from .masking import mask_text
 from .middleware import ToolLogMiddleware
 from .proxy_manager import ProxyManager
@@ -167,9 +168,18 @@ async def lifespan(app: FastAPI):
 
     meta_app = create_meta_app(proxy_manager, embedding_model=config.embedding_model)
 
+    app_state.meta_app = meta_app
+
     # ツールログ記録ミドルウェア（meta 側）— meta モード時はリクエスト全体が
     # meta_app に回るため、こちらにも登録しないとログが欠落する
     meta_app.mcp.add_middleware(ToolLogMiddleware(proxy_manager))
+
+    # フル公開（メタOFF）ミドルウェア。ToolLog の直後に登録する（先に add した
+    # 方が外側で先に実行される）。FullInfo が on_call_tool で直接転送
+    # （call_next スキップ）しても ToolLog が必ず実行され、ログ・metrics が保証される。
+    meta_app.mcp.add_middleware(
+        FullInfoMiddleware(proxy_manager, get_schema_fn=meta_app.index.get_schema)
+    )
 
     # Debounced rebuild wrapper — coalesces rapid on_change calls (e.g. startup
     # cascade where multiple servers connect within milliseconds) into a single

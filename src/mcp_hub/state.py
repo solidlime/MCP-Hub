@@ -57,6 +57,7 @@ class _AppState:
     _tool_calls_total: int = 0
     _tool_call_errors: int = 0
     mcp_dispatcher: object | None = None
+    meta_app: object | None = None
     _stats_lock: asyncio.Lock | None = None
 
     _log_buffer: deque | None = None
