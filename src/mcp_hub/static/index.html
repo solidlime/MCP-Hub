@@ -595,17 +595,13 @@
             outline-offset: 2px;
         }
 
-        /* Server-level full-info toggle (meta mode) */
-        .server-full-info-wrapper {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            margin-left: auto;
+        /* Server-level full-info toggle (meta mode) — same row as enable toggle */
+        .toggle-wrapper .toggle-separator {
+            width: 1px;
+            height: 16px;
+            background: var(--border-subtle);
+            margin: 0 4px;
             flex-shrink: 0;
-        }
-        .server-full-info-wrapper .toggle-label {
-            font-size: 0.7rem;
-            white-space: nowrap;
         }
         /* Indeterminate state: middle color track, thumb stays center */
         .toggle-switch.indeterminate .toggle-track {
@@ -1896,6 +1892,7 @@
         let metaMode = null; // null = unknown, true/false = loaded
         let embeddingModel = null; // current embedding model name
         let fullInfoTools = []; // full_info_tools エントリ（"{server}_{tool}" 形式）
+        let expandedServers = new Set(); // アコーディオン開閉状態の保持
 
         // ============================================================
         // THEME
@@ -2207,7 +2204,8 @@
             const cardClasses = [
                 'server-card', 'fade-in',
                 disabled ? 'disabled-card' : '',
-                status === 'error' ? 'error-card' : ''
+                status === 'error' ? 'error-card' : '',
+                expandedServers.has(server.name) ? 'expanded' : ''
             ].filter(Boolean).join(' ');
 
             return `
@@ -2218,7 +2216,7 @@
                     </div>
 
                     <div class="server-header" onclick="toggleServer('${server.name}')"
-                         role="button" tabindex="0" aria-expanded="false"
+                         role="button" tabindex="0" aria-expanded="${expandedServers.has(server.name)}"
                          aria-label="サーバー ${escapeHtml(server.name)} の詳細を表示">
                         <div>
                             <div class="server-name">${escapeHtml(server.name)}</div>
@@ -2237,16 +2235,14 @@
                             <span class="toggle-thumb"></span>
                         </label>
                         <span class="toggle-label">${disabled ? '無効' : '有効'}</span>
-                    </div>
-
-                    ${metaMode === true ? (() => {
-                        const toolNames = (server.tools || []).map(t => server.name + '_' + t.name);
-                        const total = toolNames.length;
-                        const matched = toolNames.filter(e => fullInfoTools.includes(e)).length;
-                        const state = total > 0 && matched === total ? 'all' : matched === 0 ? 'none' : 'partial';
-                        return `
-                    <div class="server-full-info-wrapper">
-                        <label class="toggle-switch toggle-switch-sm ${state === 'partial' ? 'indeterminate' : ''}"
+                        ${metaMode === true ? (() => {
+                            const toolNames = (server.tools || []).map(t => server.name + '_' + t.name);
+                            const total = toolNames.length;
+                            const matched = toolNames.filter(e => fullInfoTools.includes(e)).length;
+                            const state = total > 0 && matched === total ? 'all' : matched === 0 ? 'none' : 'partial';
+                            return `
+                        <span class="toggle-separator" aria-hidden="true"></span>
+                        <label class="toggle-switch ${state === 'partial' ? 'indeterminate' : ''}"
                                title="${state === 'all' ? 'フル公開を解除' : '全ツールをフル公開'}">
                             <input type="checkbox" ${state === 'all' ? 'checked' : ''}
                                    onchange="toggleFullInfoServer('${escapeHtml(server.name)}', this.checked)"
@@ -2254,9 +2250,9 @@
                             <span class="toggle-track"></span>
                             <span class="toggle-thumb"></span>
                         </label>
-                        <span class="toggle-label">全フル公開</span>
-                    </div>`;
-                    })() : ''}
+                        <span class="toggle-label">全フル公開</span>`;
+                        })() : ''}
+                    </div>
 
                     ${tags.length > 0 ? `
                     <div class="server-tags">
@@ -2612,6 +2608,7 @@
             const header = card.querySelector('.server-header');
             const isExpanded = card.classList.toggle('expanded');
             header.setAttribute('aria-expanded', isExpanded.toString());
+            if (isExpanded) { expandedServers.add(name); } else { expandedServers.delete(name); }
         }
 
         // ============================================================
