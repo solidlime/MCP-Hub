@@ -1,213 +1,151 @@
 # MCP Hub
 
-MCPサーバーのプロキシ・レジストリ。複数のMCPサーバーを統合管理し、単一エンドポイントでLLMに公開する。
+複数の MCP サーバーをまとめて、ひとつのエンドポイントで AI アシスタントに提供するプロキシツールです。
 
-## 機能
+## 何ができるの？
 
-- **サーバー管理**: 複数MCPサーバーの登録・接続・ヘルスチェック
-- **ツールプロキシ**: 全サーバーのツールを透過的に集約
-- **管理UI**: Webブラウザからサーバー管理 (`/admin/`)
-  - コマンド/URL モード切替: コマンド版・URL版を1つのフォームで管理
-  - HTTPヘッダー設定: URLモードで `Authorization` 等のカスタムヘッダーを設定可能
-  - クォート付き値の自動除去: `"value"` や `'value'` をそのままコピペ可能
-- **Streamable HTTP**: FastMCP の streamable-http トランスポート
+MCP Hub を使うと、`filesystem`、`brave-search`、`github` などの MCP サーバーを一箇所に登録し、AI アシスタント（Claude Desktop や VS Code Copilot など）から **ひとつの接続先** でまとめて使えるようになります。
 
-## 起動
+- 🔌 **サーバーを束ねる**: stdio 起動のサーバーも、HTTP で動くリモートサーバーも、まとめて管理
+- 🏷️ **タグでフィルタ**: 用途別にタグ付けして、必要なツールだけを公開
+- 🖥️ **管理画面付き**: ブラウザからサーバーの追加・編集・状態確認ができる
+- 📦 **モジュール後付けインストール**: WebUI から `pip install` せずに Python モジュールを追加可能
+- 🔍 **Progressive Discovery**: ツールが増えすぎても賢く検索（デフォルト有効）
+- ⭐ **フル公開ツール**: Meta モードでも特定ツールだけ通常公開（`full_info_tools`、WebUI のトグルで切替）
+- 📋 **ツールログ**: ツール呼び出し・サーバー接続イベントを WebUI のログタブで確認（機密情報はマスク）
+
+## クイックスタート
 
 ```bash
 pip install mcp-hub
 python -m mcp_hub.main
 ```
 
-## 設定
+起動したら http://localhost:26263/admin/ にアクセスして管理画面を開きます。
 
-`hub.config.json` にサーバー設定を記述する。
+## サーバーを追加する
+
+`data/hub.config.json`（自動生成されます）に使いたい MCP サーバーを書くだけです。
 
 ```json
 {
-  "servers": [
-    {
-      "name": "filesystem",
+  "mcpServers": {
+    "filesystem": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
-      "env": {
-        "HOME": "/home/user"
-      }
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
     },
-    {
-      "name": "brave-search",
+    "brave-search": {
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-brave-search"],
       "env": {
-        "BRAVE_API_KEY": "your-key"
-      },
-      "disabled": false
-    },
-    {
-      "name": "remote-server",
-      "url": "http://nas:8080/mcp",
-      "headers": {
-        "Authorization": "Bearer my-token",
-        "X-API-Key": "sk-xxx..."
-      },
-      "tags": ["remote", "api"]
+        "BRAVE_API_KEY": "あなたのAPIキー"
+      }
     }
-  ],
-  "log_level": "INFO"
+  }
 }
 ```
 
-### サーバー設定フィールド
+リモートの MCP サーバーにつなぐ場合：
 
-| フィールド | 型 | 必須 | 説明 |
-|-----------|-----|------|------|
-| `name` | string | ✅ | サーバー識別名 |
-| `url` | string | ⚠️ | MCPサーバーのHTTP URL（`command` と排他） |
-| `command` | string | ⚠️ | 実行コマンド（`url` と排他） |
-| `args` | string[] | - | コマンドライン引数（1行1引数） |
-| `env` | object | - | 環境変数（`KEY: value` 形式） |
-| `headers` | object | - | HTTPリクエストヘッダー（URLモードのみ有効） |
-| `tags` | string[] | - | 分類用タグ |
-| `disabled` | bool | - | `true` で接続を無効化 |
-
-設定ファイル + DB は `MCP_HUB_DATA_DIR` で指定したディレクトリ（デフォルト: `data`）に保存される。
-`MCP_HUB_RESEED=1` で起動時にDBをクリアし、設定ファイルから再シードする。
-
-環境変数:
-| 変数 | デフォルト | 説明 |
-|------|-----------|------|
-| `MCP_HUB_PORT` | `26263` | リスンポート |
-| `MCP_HUB_HOST` | `0.0.0.0` | バインドホスト |
-| `MCP_HUB_DATA_DIR` | `data` | 設定 + DB の保存ディレクトリ |
-| `MCP_HUB_LOG` | `text` | `json` でJSON構造化ログ |
-| `MCP_HUB_RESEED` | — | `1` でDBクリア+設定から再シード |
-| `MCP_HUB_API_KEY` | — | 管理APIの認証キー（未設定時は認証無効） |
-
-### 管理API認証
-
-`MCP_HUB_API_KEY` を設定すると、`/admin/api/*` へのリクエストに `X-API-Key` ヘッダーが必須になる。ヘルスチェックエンドポイント (`/admin/api/health`) は認証免除。
-
-```bash
-# 認証なし — 401
-curl http://localhost:26263/admin/api/servers
-
-# 認証あり — 200
-curl http://localhost:26263/admin/api/servers -H "X-API-Key: your-secret"
+```json
+{
+  "mcpServers": {
+    "remote-tools": {
+      "url": "http://nas:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer my-token"
+      }
+    }
+  }
+}
 ```
 
-## タグフィルタリング
+設定を変更したら Hub を再起動すれば反映されます。管理画面からも追加・編集できます。
 
-MCPエンドポイントはクエリパラメータまたはHTTPヘッダーでタグフィルタリングに対応している。
+## AI アシスタントから使う
 
-**クエリパラメータ:**
+AI アシスタントの設定に Hub のエンドポイントを指定します。
+
+**Claude Desktop** (`claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "mcp-hub": {
+      "url": "http://localhost:26263/mcp"
+    }
+  }
+}
 ```
-/mcp?tags=web,local
+
+特定のタグが付いたサーバーのツールだけ使いたい場合は：
+
+```json
+{
+  "mcpServers": {
+    "mcp-hub": {
+      "url": "http://localhost:26263/mcp?tags=web,local"
+    }
+  }
+}
 ```
 
-**HTTPヘッダー:**
-```
-X-MCP-Hub-Tags: web,local
-```
-
-指定されたタグを持つサーバーのツールのみが透過的に公開される。タグ未指定の場合は全サーバーのツールが利用可能。管理UIの接続情報パネルからコピーして使用できる。|
-
-## Docker
+## Docker で動かす
 
 ```bash
 docker build -t mcp-hub .
-docker run -p 26263:26263 mcp-hub
+docker run -p 26263:26263 -v $(pwd)/data:/app/data mcp-hub
 ```
 
-## API
+## パフォーマンス
 
-- `/mcp` — MCPエンドポイント (streamable-http)
-- `/admin/` — 管理UI
-- `/admin/api/health` — ヘルスチェック
-- `/admin/api/servers` — サーバー一覧・管理API
-- `/admin/api/servers/{name}/connection` — サーバー接続情報
-- `/admin/api/metrics` — Hubメトリクス
+MCP Hub の Progressive Discovery（メタモード）は、全プロトコルで **100% のツール呼び出し成功率** を達成しながら、AI に送るツール定義を大幅に削減します。
 
-### `GET /admin/api/servers` パラメータ
-
-| パラメータ | 型 | デフォルト | 説明 |
-|-----------|-----|-----------|------|
-| `include_tools` | bool | `true` | ツール一覧を含めるか。`false` でレスポンスサイズ ~90%削減 |
-
-## Metrics
-
-`GET /admin/api/metrics` でHubの運用メトリクスを取得できる。
-
-```json
-{
-  "uptime_seconds": 3600.0,
-  "servers_registered": 5,
-  "servers_active": 3,
-  "total_tools": 42,
-  "tool_calls_total": 128,
-  "tool_call_errors": 2
-}
-```
-
-## 内部リソース
-
-FastMCPのResource機構で `hub://servers` が利用可能。接続サーバーのJSONスナップショットを返す。
-
-```json
-// MCPクライアントからのアクセス例
-{
-  "name": "fetch",
-  "disabled": false,
-  "tags": ["web"],
-  "status": "connected",
-  "tool_count": 5
-}
-```
-
-## meta_mode ベンチマーク
-
-`meta_mode` は Progressive Discovery を有効にする設定。通常モード（全ツールを直接公開）とメタモード（3ツール: `search_tools`, `execute_tool`, `list_upstream_tools`）を比較。
-
-### ツール選択成功率
-
-各プロトコルの実サーバーで全ツールを `search_tools` → `execute_tool` の2ホップ（Meta ON）と
-直接名前空間呼び出し（Meta OFF）の両方で呼び出し、3イテレーションの成功数を計測。
+### ツール呼び出し成功率（プロトコル別）
 
 | プロトコル | サーバー | ツール数 | Meta ON | Meta OFF |
-|-----------|--------|:-----:|:---:|:---:|
-| stdio | filesystem | 14 | 9/9 (100%) | 9/9 (100%) |
-| stdio | sequential-thinking | 1 | 3/3 (100%) | 3/3 (100%) |
-| Streamable HTTP | exa (web_search, web_fetch) | 2 | 3/3 (100%) | 3/3 (100%) |
-| SSE | sse-echo (テストサーバー) | 1 | 3/3 (100%) | 3/3 (100%) |
-| Streamable HTTP (202 async) | async-mcp (テストサーバー) | 1 | 3/3 (100%) | 3/3 (100%) |
-| **合計** | | **19** | **21/21 (100%)** | **21/21 (100%)** |
+|-----------|--------|:---:|:---:|:---:|
+| stdio | filesystem | 14 | 100% (9/9) | 100% (9/9) |
+| stdio | sequential-thinking | 1 | 100% (3/3) | 100% (3/3) |
+| Streamable HTTP | exa (web_search, web_fetch) | 2 | 100% (3/3) | 100% (3/3) |
+| SSE | sse-echo | 1 | 100% (3/3) | 100% (3/3) |
+| Streamable HTTP (202 async) | async-mcp | 1 | 100% (3/3) | 100% (3/3) |
+| **合計** | | **19** | **100% (21/21)** | **100% (21/21)** |
 
-> **全プロトコル (stdio/SSE/Streamable HTTP) × 全サーバーで Meta ON/OFF 両方とも 100% 成功。**
-> Meta ON と Meta OFF は内部で同じ `pm.call_tool()` を使用している。
+> stdio / SSE / Streamable HTTP の全プロトコルで Meta ON/OFF 両方とも 100% 成功。
 
-### ツール定義サイズ比較
+### ツール定義サイズ
 
-| モード | メタツール数 | tools/list サイズ | 成功率 |
-|--------|:---------:|:-----------------:|:------:|
-| 通常モード (N=19) | — | 19ツール分の全スキーマ | 100% |
-| メタモード | 3 | 3ツールのみ | 100% |
+| モード | 公開ツール数 | ツール定義サイズ | 
+|--------|:---------:|:-------------:|
+| 通常モード（全ツール直接公開） | 19 | 19ツール分の全スキーマ |
+| メタモード | 3 | 3ツールのみ |
 
-**結論**: どちらのモードも全プロトコルで 100% 成功。メタモードはツール定義サイズを大幅に削減しつつ同等の成功率を達成。**デフォルトでON**。
+**5台のサーバー・84ツールの場合、約15,500トークン → 約500トークンに削減。** AI のコンテキストウィンドウ消費を約97%カットします。
 
-## セキュリティ
+## 環境変数
 
-### 入力検証
+| 変数 | デフォルト | 説明 |
+|------|-----------|------|
+| `MCP_HUB_PORT` | `26263` | 待ち受けポート |
+| `MCP_HUB_HOST` | `0.0.0.0` | バインドアドレス |
+| `MCP_HUB_DATA_DIR` | `data` | 設定・DBの保存先 |
+| `MCP_HUB_API_KEY` | （なし） | 設定すると管理APIに認証がかかる |
+| `MCP_HUB_RESEED` | （なし） | `1` でDBクリア＋設定から再シード |
+| `MCP_HUB_LOG` | `text` | `json` で構造化ログ出力 |
 
-管理者API経由で登録されるサーバー設定は自動検証される:
+## ドキュメント
 
-- **コマンド**: `$()`（サブシェル実行）、`;`, `|`, `` ` ``（シェルメタ文字）をブロック。`${VAR}` テンプレートは許可
-- **URL**: `http`/`https` スキームのみ許可（file://, gopher:// 等は拒否）
-- **環境変数**: `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH` 等の危険な変数上書きをブロック
-- **HTTPヘッダー**: CRLF/制御文字をブロック。キーは最大256文字、値は最大8192文字
+詳しい設定や開発者向け情報は `docs/` ディレクトリを参照してください。
 
-### バージョンガード
+| ドキュメント | 内容 |
+|-------------|------|
+| [設定リファレンス](docs/configuration.md) | 全設定項目・環境変数・タグフィルタの詳細 |
+| [API リファレンス](docs/api-reference.md) | MCP エンドポイント・管理 REST API 一覧 |
+| [アーキテクチャ](docs/architecture.md) | 内部設計・Progressive Discovery・制限事項 |
+| [セキュリティ](docs/security.md) | 入力検証・認証・セキュリティモデル |
+| [開発ガイド](docs/development.md) | 開発環境構築・テスト・貢献方法 |
 
-非互換な FastMCP >=3.5.0 での起動を `sys.exit(1)` で拒否する。
+## ライセンス
 
-## 制限事項
-
-- **Progress通知の転送未対応**: FastMCPの`ProxyProvider`が`onprogress`コールバックを露出していないため、子MCPサーバーの進捗通知（`notifications/progress`）はクライアントに転送されない。詳細は [`docs/progress-forwarding.md`](docs/progress-forwarding.md) 参照。
+MIT
