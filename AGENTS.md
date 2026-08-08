@@ -9,7 +9,7 @@
 - 単一ファイルのみ実行する場合も同様に `TEST_FILE=tests/test_xxx.py ./scripts/run-tests.sh`。
 
 ## WebUI変更時のブラウザ確認（必須）
-`src/mcp_hub/static/index.html` またはCSS/JSの変更後は、`browser-testing-with-devtools` スキルを使って実ブラウザで以下を確認すること：
+`src/mcp_hub/static/index.html` またはCSS/JSの変更後は、`webapp-testing` スキル（Python Playwright ツールキット）を使って実ブラウザで以下を確認すること：
 - コンソールにエラーがないこと
 - サーバーカードが正しくレンダリングされていること
 - モーダル・トグル・タグ操作が正常に動作すること
