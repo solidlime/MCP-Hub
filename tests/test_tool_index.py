@@ -3,7 +3,8 @@ ToolIndex unit tests — embedding-based search with BM25 fallback.
 """
 
 import pytest
-from mcp_hub.meta_provider import ToolIndex
+from mcp_hub.config import DEFAULT_EMBEDDING_MODEL
+from mcp_hub.meta_provider import ToolIndex, resolve_embedding_model
 
 
 @pytest.fixture
@@ -218,3 +219,38 @@ class TestSchemaAwareSearch:
         results = schema_index.search("create_issue")
         assert len(results) >= 1
         assert results[0]["name"] == "create_issue"
+
+
+class TestResolveEmbeddingModel:
+    """resolve_embedding_model の純粋関数テスト（fastembed 不要）。"""
+
+    def test_unsupported_model_falls_back(self):
+        """非対応モデルは DEFAULT_EMBEDDING_MODEL にフォールバックする。"""
+        supported = {"sentence-transformers/paraphrase-multilingual-minilm-l12-v2"}
+        result = resolve_embedding_model("cl-nagoya/ruri-v3-30m", supported)
+        assert result == DEFAULT_EMBEDDING_MODEL
+
+    def test_supported_model_kept(self):
+        """対応モデルはそのまま返される。"""
+        supported = {"sentence-transformers/paraphrase-multilingual-minilm-l12-v2"}
+        model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        assert resolve_embedding_model(model, supported) == model
+
+    def test_support_unknown_returns_as_is(self):
+        """fastembed 不在などでサポート状況が不明 (None) ならそのまま返す。"""
+        model = "any/model-name"
+        assert resolve_embedding_model(model, None) == model
+
+    def test_supported_matching_is_case_insensitive(self):
+        """対応判定は大文字小文字を無視する。"""
+        supported = {"sentence-transformers/paraphrase-multilingual-minilm-l12-v2"}
+        model = "SENTENCE-TRANSFORMERS/PARAPHRASE-MULTILINGUAL-MINILM-L12-V2"
+        assert resolve_embedding_model(model, supported) == model
+
+
+def test_default_embedding_model_is_supported_multilingual():
+    """デフォルト埋め込みモデルは sentence-transformers の多言語対応モデル。"""
+    assert (
+        DEFAULT_EMBEDDING_MODEL
+        == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )

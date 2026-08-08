@@ -12,13 +12,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+
 
 @dataclass
 class HubConfig:
     servers: dict[str, dict[str, Any]] = field(default_factory=dict)
     version: int = 1
     log_level: str = "info"
-    embedding_model: str = "cl-nagoya/ruri-v3-30m"
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
 
 
 def _data_dir() -> str:
@@ -57,7 +59,7 @@ def _parse_config(filepath: Path) -> HubConfig:
         raise ValueError(f"Unsupported config version: {version}")
 
     log_level = raw.get("log_level", "info")
-    embedding_model = raw.get("embedding_model", "cl-nagoya/ruri-v3-30m")
+    embedding_model = raw.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
     raw_servers = raw.get("mcpServers", raw.get("servers", {}))
 
     if not isinstance(raw_servers, dict):

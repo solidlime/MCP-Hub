@@ -13,6 +13,7 @@ from typing import Any
 from fastmcp import FastMCP
 from rank_bm25 import BM25Okapi
 
+from .config import DEFAULT_EMBEDDING_MODEL
 from .proxy_manager import ProxyManager as _ProxyManager
 from .state import request_tags
 from .state import tags_match as _tags_match
@@ -28,11 +29,40 @@ logger = logging.getLogger(__name__)
 
 MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 
+_SUPPORTED_MODELS_CACHE: set[str] | None = None
+
+
+def _supported_embedding_models() -> set[str] | None:
+    """Lowercased set of model names supported by installed fastembed, or None if fastembed is unavailable/broken."""
+    global _SUPPORTED_MODELS_CACHE
+    if _SUPPORTED_MODELS_CACHE is None:
+        try:
+            if _HAS_FASTEMBED:
+                # list_supported_models() は dict のリストを返す（各要素に "model" キー）
+                _SUPPORTED_MODELS_CACHE = {m["model"].lower() for m in TextEmbedding.list_supported_models()}  # type: ignore[name-defined]
+            else:
+                _SUPPORTED_MODELS_CACHE = None
+        except Exception:
+            logger.debug("Could not query fastembed supported models", exc_info=True)
+            _SUPPORTED_MODELS_CACHE = None
+    return _SUPPORTED_MODELS_CACHE
+
+
+def resolve_embedding_model(model: str, supported: set[str] | None) -> str:
+    """Return *model* if it is supported (or support is unknown); otherwise fall back to DEFAULT_EMBEDDING_MODEL with a warning."""
+    if supported is not None and model.lower() not in supported:
+        logger.warning(
+            "Embedding model '%s' is not supported by fastembed; falling back to '%s'",
+            model, DEFAULT_EMBEDDING_MODEL,
+        )
+        return DEFAULT_EMBEDDING_MODEL
+    return model
+
 
 class ToolIndex:
     """Embedding-based semantic search over proxied tools, with BM25 fallback.
 
-    Primary search uses fastembed (cl-nagoya/ruri-v3-30m) for dense retrieval.
+    Primary search uses fastembed (default: DEFAULT_EMBEDDING_MODEL) for dense retrieval.
     Falls back to BM25Okapi when fastembed is not available.
     Thread-safe via asyncio.Lock.
 
@@ -40,7 +70,7 @@ class ToolIndex:
     BM25 uses token duplication to simulate BM25F field weights.
     """
 
-    def __init__(self, embedding_model: str = "cl-nagoya/ruri-v3-30m"):
+    def __init__(self, embedding_model: str = DEFAULT_EMBEDDING_MODEL):
         self._lock = asyncio.Lock()
         self._documents: list[dict] = []  # [{server, name, description, inputSchema}, ...]
         self._bm25: BM25Okapi | None = None
@@ -48,7 +78,7 @@ class ToolIndex:
         self._embedder: "TextEmbedding | None" = None  # type: ignore[name-defined]
         self._embeddings: "np.ndarray | None" = None  # type: ignore[name-defined]
         self._use_embeddings: bool = _HAS_FASTEMBED
-        self._embedding_model: str = embedding_model
+        self._embedding_model: str = resolve_embedding_model(embedding_model, _supported_embedding_models())
 
     # ── Tokenization ──────────────────────────────────────────────
 
@@ -400,7 +430,7 @@ class MetaApp:
 
 def create_meta_app(
     proxy_manager,  # ProxyManager instance
-    embedding_model: str = "cl-nagoya/ruri-v3-30m",
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
 ) -> MetaApp:
     """Create a MetaApp with meta-tools."""
     mcp = FastMCP("MCP Hub Meta")
