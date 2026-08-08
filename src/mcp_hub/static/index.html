@@ -1728,15 +1728,6 @@
                     <div class="form-hint">Enter で追加、✕ で削除</div>
                 </div>
 
-                <div class="form-group" id="editDisabledGroup">
-                    <label class="form-label">無効化</label>
-                    <label class="toggle-switch" style="margin-top: 4px;">
-                        <input type="checkbox" id="editDisabled">
-                        <span class="toggle-track"></span>
-                        <span class="toggle-thumb"></span>
-                    </label>
-                    <span class="toggle-label" style="margin-left: 10px;">オンにするとサーバーが無効化されます</span>
-                </div>
                 <div id="editFormError" class="form-error" style="display: none;" role="alert"></div>
             </div>
             <div class="modal-footer">
@@ -2815,13 +2806,11 @@
         function openEditModal(name) {
             const isAddMode = !name;
             const nameGroup = document.getElementById('editNameGroup');
-            const disabledGroup = document.getElementById('editDisabledGroup');
             const titleEl = document.getElementById('editServerModalTitle');
             const submitBtn = document.getElementById('editSubmitBtn');
 
             // モードに応じた表示切り替え
             nameGroup.style.display = isAddMode ? 'block' : 'none';
-            disabledGroup.style.display = isAddMode ? 'none' : 'block';
             titleEl.textContent = isAddMode ? 'MCP サーバーを追加' : 'サーバー設定を編集';
             submitBtn.textContent = isAddMode ? '追加' : '保存';
 
@@ -2835,7 +2824,6 @@
                 document.getElementById('editUrl').value = '';
                 document.getElementById('editEnv').value = '';
                 document.getElementById('editHeaders').value = '';
-                document.getElementById('editDisabled').checked = false;
                 document.getElementById('editFormError').style.display = 'none';
                 setEditMode('command');
             } else {
@@ -2852,7 +2840,6 @@
                 document.getElementById('editCommand').value = server.config.command || '';
                 document.getElementById('editArgs').value = (server.config.args || []).join('\n');
                 document.getElementById('editUrl').value = server.config.url || '';
-                document.getElementById('editDisabled').checked = getServerDisabled(server);
                 document.getElementById('editFormError').style.display = 'none';
 
                 // URLがあればURLモード、なければコマンドモード
@@ -2984,7 +2971,6 @@
             const command = document.getElementById('editCommand').value.trim();
             const argsStr = document.getElementById('editArgs').value.trim();
             const url = document.getElementById('editUrl').value.trim();
-            const disabled = document.getElementById('editDisabled').checked;
             const newArgs = parseArgs(argsStr);
             const newEnv = parseKeyValue(document.getElementById('editEnv').value.trim(), '=');
             const newHeaders = parseKeyValue(document.getElementById('editHeaders').value.trim(), ':');
@@ -3002,9 +2988,8 @@
             }
 
             if (!isEdit) {
-                // Add mode: include tags and disabled
+                // Add mode: include tags
                 if (editTags.length > 0) payload.tags = editTags;
-                if (disabled) payload.disabled = disabled;
                 return payload;
             }
 
@@ -3027,9 +3012,6 @@
             // Tags
             const oldTags = getServerTags(server);
             if (JSON.stringify(editTags) !== JSON.stringify(oldTags)) diffed.tags = editTags;
-
-            // Disabled
-            if (disabled !== getServerDisabled(server)) diffed.disabled = disabled;
 
             return diffed;
         }

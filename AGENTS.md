@@ -14,6 +14,14 @@
 - サーバーカードが正しくレンダリングされていること
 - モーダル・トグル・タグ操作が正常に動作すること
 
+### 検証ホスト（重要）
+ブラウザの `localhost` は「ブラウザが動いているマシン」を指す。使用するブラウザで接続先が変わる：
+- **ローカル Playwright**（`webapp-testing` スキル、実行マシン上でブラウザ起動）→ `http://localhost:26263` でOK
+- **リモート puppeteer MCP**（NAS 上で動くブラウザ）→ `localhost` は **NAS 自身**を指すため、
+  開発サーバーへは **必ず `http://ubuntu.tail1e4bd.ts.net:26263/`** を使うこと。
+  ⛔ `http://localhost:26263` は NAS 上の本番インスタンス（古いコード）を指すため、開発検証での使用禁止。
+- 本番インスタンス（NAS）の確認だけが目的なら、リモートブラウザで `http://localhost:26263` を使ってもよい。
+
 ## Docker確認（必須）
 `Dockerfile` / `docker-compose.yml` / `docker-entrypoint.sh` 変更時は `docker compose up --build` して以下を確認：
 - HEALTHCHECKが通ること
