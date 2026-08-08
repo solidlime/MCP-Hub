@@ -295,10 +295,14 @@ class ProxyManager:
 
         logger.debug("list_tools called with tags=%s", tags)
 
+        import time
+        timeout = float(os.environ.get("MCP_HUB_LIST_TOOLS_TIMEOUT", "10.0"))
+
         # Snapshot under lock to prevent dict-mutation-during-iteration races
         async with self._lock:
             proxies_snapshot = dict(self._proxies)
             configs_snapshot = dict(self._server_configs)
+            status_snapshot = dict(self._status)
 
         result: dict[str, list[dict]] = {}
         for srv_name, proxy in proxies_snapshot.items():
@@ -309,9 +313,27 @@ class ProxyManager:
                 if not tags_match(tags, server_tags):
                     continue
 
+            # Error-state servers: skip proxy.list_tools() — an unresponsive
+            # upstream would block this call indefinitely. Serve cached tools
+            # if still fresh, otherwise [].
+            if status_snapshot.get(srv_name) == "error":
+                cached = self._tool_cache.get(srv_name)
+                if cached and time.monotonic() - cached[0] < 60.0:
+                    result[srv_name] = [
+                        {"name": t.name, "description": t.description or ""} for t in cached[1]
+                    ]
+                else:
+                    result[srv_name] = []
+                continue
+
             try:
-                tools = await self.list_tools_for_server(srv_name, proxy)
+                tools = await asyncio.wait_for(
+                    self.list_tools_for_server(srv_name, proxy), timeout=timeout
+                )
                 result[srv_name] = [{"name": t.name, "description": t.description or ""} for t in tools]
+            except asyncio.TimeoutError:
+                logger.warning("list_tools timed out for %s after %.1fs", srv_name, timeout)
+                result[srv_name] = []
             except Exception:
                 logger.warning("Failed to list tools for %s", srv_name)
                 result[srv_name] = []

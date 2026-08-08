@@ -1912,11 +1912,17 @@
         // API COMMUNICATION
         // ============================================================
         const API = {
-            async getServers(includeTools = false) {
+            async getServers(includeTools = false, timeoutMs = 10000) {
                 const url = includeTools ? '/admin/api/servers?include_tools=true' : '/admin/api/servers';
-                const response = await fetch(url);
-                if (!response.ok) throw new Error('サーバー一覧の取得に失敗しました');
-                return response.json();
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), timeoutMs);
+                try {
+                    const response = await fetch(url, { signal: controller.signal });
+                    if (!response.ok) throw new Error('サーバー一覧の取得に失敗しました');
+                    return response.json();
+                } finally {
+                    clearTimeout(timeout);
+                }
             },
 
             async addServer(config) {
@@ -3467,8 +3473,7 @@
         // ============================================================
         document.addEventListener('DOMContentLoaded', async () => {
             loadApiKey();
-            await Promise.all([loadServers(), loadSettings()]);
-            await updateHealthStatus();
+            await Promise.all([loadServers(), loadSettings(), updateHealthStatus()]);
 
             // Log tab: server filter + filter event bindings
             populateLogServerFilter(servers);
