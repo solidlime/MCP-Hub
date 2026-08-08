@@ -4,6 +4,7 @@ from src.mcp_hub.validators import (
     bearer_headers_from_env,
     validate_command, validate_url, validate_env, validate_headers,
     validate_server_config,
+    validate_server_name,
 )
 
 
@@ -143,6 +144,34 @@ class TestValidateHeaders:
     def test_quote_only_key_blocked(self):
         with pytest.raises(ValidationError, match="Header key must not be empty"):
             validate_headers({'"': "value"})
+
+
+class TestValidateServerName:
+    def test_valid_name_passes(self):
+        assert validate_server_name("my-server_1.foo") == "my-server_1.foo"
+
+    def test_max_length_passes(self):
+        assert validate_server_name("x" * 128) == "x" * 128
+
+    def test_empty_blocked(self):
+        with pytest.raises(ValidationError):
+            validate_server_name("")
+
+    def test_none_blocked(self):
+        with pytest.raises(ValidationError):
+            validate_server_name(None)
+
+    def test_too_long_blocked(self):
+        with pytest.raises(ValidationError):
+            validate_server_name("x" * 129)
+
+    def test_special_chars_blocked(self):
+        with pytest.raises(ValidationError):
+            validate_server_name("bad/name")
+
+    def test_space_blocked(self):
+        with pytest.raises(ValidationError):
+            validate_server_name("bad name")
 
 
 class TestValidateServerConfig:

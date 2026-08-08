@@ -159,14 +159,20 @@ def bearer_headers_from_env(env: dict) -> dict | None:
     return {"Authorization": f"Bearer {env[matches[0]]}"}
 
 
-def validate_server_config(name: str, config: dict) -> dict:
-    """Validate a complete server config (both register and patch)."""
+def validate_server_name(name: str) -> str:
+    """Validate a server name. Returns the name unchanged on success."""
     if not name or not isinstance(name, str):
         raise ValidationError("Server name must be a non-empty string")
     if len(name) > 128:
         raise ValidationError("Server name too long (max 128 chars)")
     if not re.match(r'^[a-zA-Z0-9_.-]+$', name):
         raise ValidationError("Server name contains invalid characters")
+    return name
+
+
+def validate_server_config(name: str, config: dict) -> dict:
+    """Validate a complete server config (both register and patch)."""
+    validate_server_name(name)
     if not isinstance(config, dict):
         raise ValidationError("Config must be a dict")
 
