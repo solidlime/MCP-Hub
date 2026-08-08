@@ -22,6 +22,7 @@ from .validators import (
     validate_env,
     validate_headers,
     validate_server_config,
+    validate_server_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,10 @@ class ServerConfig(BaseModel):
 class RegisterRequest(BaseModel):
     name: str
     config: ServerConfig
+
+
+class PatchServerRequest(ServerConfig):
+    name: str | None = None  # 新サーバー名。None なら従来の config PATCH
 
 
 class CallToolRequest(BaseModel):
@@ -274,8 +279,11 @@ async def register_server(body: RegisterRequest):
 
 
 @router.patch("/servers/{name}")
-async def patch_server(name: str, body: ServerConfig):
-    """サーバー設定の部分更新（PATCH）。exclude_unset で送信フィールドのみ適用。"""
+async def patch_server(name: str, body: PatchServerRequest):
+    """サーバー設定の部分更新（PATCH）。exclude_unset で送信フィールドのみ適用。
+
+    body.name が指定され旧名と異なる場合はサーバー名のリネームも行う。
+    """
     registry = _get_registry()
     pm = _get_proxy_manager()
 
@@ -283,8 +291,20 @@ async def patch_server(name: str, body: ServerConfig):
     if not existing:
         raise HTTPException(status_code=404, detail="Server not found")
 
+    new_name = body.name
+    rename = new_name is not None and new_name != name
+    target_name: str | None = None
+
+    if rename:
+        assert new_name is not None  # rename 条件より非 None
+        try:
+            target_name = validate_server_name(new_name)
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
     # 部分更新: 送信されたフィールドのみ既存 config にマージ
     updates = body.model_dump(exclude_unset=True)
+    updates.pop("name", None)  # config への name 混入防止
     merged_config = existing["config"] | updates
 
     # Partial validation for PATCH (may not have both url/command)
@@ -315,7 +335,31 @@ async def patch_server(name: str, body: ServerConfig):
             if not isinstance(tag, str) or len(tag) > 64:
                 raise HTTPException(status_code=422, detail=f"Invalid tag: {tag}")
 
-    # 恒久化
+    if rename:
+        assert target_name is not None
+        ok = await registry.rename_server(name, target_name)
+        if not ok:
+            raise HTTPException(status_code=409, detail="Server already exists")
+        try:
+            await pm.rename_server(name, target_name, merged_config)
+        except Exception as e:
+            try:
+                await registry.rename_server(target_name, name)
+            except Exception:
+                logger.critical(
+                    "rename rollback failed for %s -> %s: store is authoritative; "
+                    "will self-heal on restart",
+                    name, target_name,
+                )
+            raise HTTPException(status_code=500, detail="Failed to rename server") from e
+        if updates:
+            await pm.refresh_server(target_name, merged_config)
+        return {
+            "name": target_name,
+            "config": merged_config,
+        }
+
+    # 恒久化（リネームなしの従来 PATCH）
     await registry.update_server(name, merged_config)
     await pm.refresh_server(name, merged_config)
 
