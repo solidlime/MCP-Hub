@@ -174,6 +174,26 @@ class JsonStore:
             await self._write_internal(data)
         return True
 
+    async def rename_server(self, old_name: str, new_name: str) -> bool:
+        """サーバー名を変更する。full_info_tools の "{server}_{tool}" プレフィックスも追従。
+
+        旧名が存在しない or 新名が既に存在する場合は False（変更なし）。
+        """
+        async with self._lock:
+            data = await self._read_locked()
+            servers = data.get("mcpServers", {})
+            if old_name not in servers or new_name in servers:
+                return False
+            servers[new_name] = servers.pop(old_name)
+            prefix = f"{old_name}_"
+            if "full_info_tools" in data:
+                data["full_info_tools"] = [
+                    new_name + e[len(old_name):] if e.startswith(prefix) else e
+                    for e in data["full_info_tools"]
+                ]
+            await self._write_internal(data)
+        return True
+
     async def remove_server(self, name: str) -> bool:
         async with self._lock:
             data = await self._read_locked()
