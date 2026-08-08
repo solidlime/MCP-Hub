@@ -1716,6 +1716,7 @@
                         <textarea class="form-input" id="editHeaders" rows="3" placeholder="Authorization: Bearer YOUR_TOKEN&#10;X-API-Key: sk-xxx..."></textarea>
                         <div class="form-hint">1行に1つの KEY: value 形式で入力してください</div>
                     </div>
+                    <div class="form-hint" id="urlEnvHint" style="display: none;">URL サーバーでは TOKEN / API_KEY / SECRET 系の環境変数が Authorization: Bearer ヘッダーに自動変換されます</div>
                 </div>
 
                 <div class="form-group">
@@ -2789,6 +2790,7 @@
             const urlBtn = document.getElementById('modeUrlBtn');
             const cmdSection = document.getElementById('commandModeSection');
             const urlSection = document.getElementById('urlModeSection');
+            const urlEnvHint = document.getElementById('urlEnvHint');
 
             if (mode === 'command') {
                 cmdBtn.classList.add('active');
@@ -2797,6 +2799,7 @@
                 urlBtn.setAttribute('aria-selected', 'false');
                 cmdSection.style.display = '';
                 urlSection.style.display = 'none';
+                if (urlEnvHint) urlEnvHint.style.display = 'none';
             } else {
                 urlBtn.classList.add('active');
                 urlBtn.setAttribute('aria-selected', 'true');
@@ -2804,6 +2807,7 @@
                 cmdBtn.setAttribute('aria-selected', 'false');
                 urlSection.style.display = '';
                 cmdSection.style.display = 'none';
+                if (urlEnvHint) urlEnvHint.style.display = 'block';
             }
         }
 
@@ -2989,6 +2993,7 @@
             } else {
                 if (url) payload.url = url;
                 if (Object.keys(newHeaders).length > 0) payload.headers = newHeaders;
+                if (Object.keys(newEnv).length > 0) payload.env = newEnv;
             }
 
             if (!isEdit) {
