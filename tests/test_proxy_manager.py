@@ -5,6 +5,8 @@ import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from mcp_hub.proxy_manager import ProxyManager
 
 
@@ -56,7 +58,134 @@ class TestCreateProxyUrlEnv:
         client_cls.assert_not_called()
 
 
-class TestListTools:
+class TestRenameServer:
+    def _manager_with_server(self):
+        pm = _make_manager()
+        proxy = _MockProxy("old")
+        pm._proxies = {"old": proxy}
+        pm._server_configs = {"old": {"url": "http://x"}}
+        pm._status = {"old": "connected"}
+        pm._tool_counts = {"old": 3}
+        pm._tool_cache = {"old": (1.0, ["t"])}
+        return pm, proxy
+
+    def test_rename_rekeys_state_and_reuses_proxy(self):
+        pm, proxy = self._manager_with_server()
+        rebuild_called = []
+
+        async def fake_rebuild():
+            rebuild_called.append(True)
+
+        pm._rebuild_mounts = fake_rebuild
+        notified = []
+
+        async def fake_notify(name, event, detail):
+            notified.append((name, event, detail))
+
+        pm._notify_change = fake_notify
+
+        async def run():
+            await pm.rename_server("old", "new", {"url": "http://x"})
+
+        asyncio.run(run())
+
+        # 同一プロキシインスタンスを再利用（接続維持）
+        assert "old" not in pm._proxies
+        assert pm._proxies["new"] is proxy
+        assert "old" not in pm._server_configs
+        assert pm._server_configs["new"] == {"url": "http://x"}
+        assert pm._status["new"] == "connected"
+        assert pm._tool_counts["new"] == 3
+        assert pm._tool_cache["new"] == (1.0, ["t"])
+        assert rebuild_called == [True]
+        assert notified == [("new", "renamed", {"old_name": "old"})]
+        assert "old" not in pm._refreshing
+        assert "new" not in pm._refreshing
+
+    def test_rename_collision_raises_value_error(self):
+        pm, proxy = self._manager_with_server()
+        pm._server_configs["new"] = {"url": "http://other"}
+
+        async def run():
+            with pytest.raises(ValueError):
+                await pm.rename_server("old", "new", {"url": "http://x"})
+
+        asyncio.run(run())
+
+        # 状態は変わらず、_refreshing の後始末も完了している
+        assert pm._proxies["old"] is proxy
+        assert "old" not in pm._refreshing
+        assert "new" not in pm._refreshing
+
+    def test_rename_server_without_proxy_skips_rebuild(self):
+        pm = _make_manager()
+        pm._server_configs = {"old": {"disabled": True}}
+        pm._status = {"old": "disabled"}
+        rebuild_called = []
+
+        async def fake_rebuild():
+            rebuild_called.append(True)
+
+        pm._rebuild_mounts = fake_rebuild
+
+        async def run():
+            await pm.rename_server("old", "new", {"disabled": True})
+
+        asyncio.run(run())
+
+        assert "old" not in pm._server_configs
+        assert pm._server_configs["new"] == {"disabled": True}
+        assert pm._status["new"] == "disabled"
+        assert rebuild_called == []
+
+
+class TestConnectMountRaceGuard:
+    """リネーム/削除後の接続完了がゾンビ旧名を復活させないこと。"""
+
+    def test_connect_and_mount_skips_when_name_gone(self):
+        pm = _make_manager()
+        pm._server_configs = {}  # リネーム/削除済み
+
+        mounted = []
+
+        async def fake_mount(p, namespace=None):
+            mounted.append(namespace)
+
+        pm.mcp.mount = fake_mount
+
+        async def run():
+            await pm._connect_and_mount("old", {"url": "http://x"})
+
+        asyncio.run(run())
+
+        assert mounted == []
+        assert "old" not in pm._proxies
+        assert pm._status.get("old") != "error"  # エラー扱いにしない
+
+    def test_refresh_server_skips_mount_when_name_gone(self):
+        pm = _make_manager()
+        mounted = []
+
+        async def fake_mount(p, namespace=None):
+            mounted.append(namespace)
+
+        pm.mcp.mount = fake_mount
+
+        def fake_create_proxy(*args, name=None, **kwargs):
+            # Phase 1 と Phase 2 の間にリネーム/削除された状態を再現
+            pm._server_configs.pop(name, None)
+            return _MockProxy("m")
+
+        with patch("mcp_hub.proxy_manager.create_proxy", side_effect=fake_create_proxy):
+            async def run():
+                await pm.refresh_server("old", {"url": "http://x"})
+
+            asyncio.run(run())
+
+        assert mounted == []
+        assert "old" not in pm._proxies
+        assert "old" not in pm._server_configs
+        assert "old" not in pm._refreshing
     """list_tools() must not hang the whole /admin/api/servers response.
 
     Error-state servers are skipped (no proxy.list_tools() call), and a

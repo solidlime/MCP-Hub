@@ -125,6 +125,8 @@ class ProxyManager:
             self._tool_cache[name] = (time.monotonic(), tools)
             self._tool_counts[name] = len(tools)
             async with self._lock:
+                if name not in self._server_configs:
+                    return  # リネーム/削除済み — ゾンビ復活を防ぐ
                 self.mcp.mount(proxy, namespace=name)
                 self._proxies[name] = proxy
                 self._status[name] = "connected"
@@ -244,6 +246,8 @@ class ProxyManager:
                 try:
                     proxy = self._create_proxy(name, config)
                     async with self._lock:
+                        if name not in self._server_configs:
+                            return  # リネーム/削除済み — ゾンビ復活を防ぐ
                         self._proxies[name] = proxy
                         self.mcp.mount(proxy, namespace=name)
                         self._status[name] = "connected"
@@ -263,6 +267,34 @@ class ProxyManager:
         finally:
             async with self._lock:
                 self._refreshing.discard(name)
+
+    async def rename_server(self, old_name: str, new_name: str, config: dict) -> None:
+        """サーバー名変更。プロキシインスタンスは再利用（接続維持）。"""
+        async with self._lock:
+            self._refreshing.add(old_name)
+            self._refreshing.add(new_name)
+            if new_name in self._proxies or new_name in self._server_configs:
+                self._refreshing.discard(old_name)
+                self._refreshing.discard(new_name)
+                raise ValueError(f"Server '{new_name}' already exists")
+            proxy = self._proxies.pop(old_name, None)
+            status = self._status.pop(old_name, "unknown")
+            tc = self._tool_counts.pop(old_name, None)
+            cache = self._tool_cache.pop(old_name, None)
+            self._server_configs.pop(old_name, None)
+            if proxy is not None:
+                self._proxies[new_name] = proxy  # 接続維持
+                await self._rebuild_mounts()
+            self._server_configs[new_name] = config
+            self._status[new_name] = status
+            if tc is not None:
+                self._tool_counts[new_name] = tc
+            if cache is not None:
+                self._tool_cache[new_name] = cache  # キャッシュ移動で再列挙回避
+        await self._notify_change(new_name, "renamed", {"old_name": old_name})
+        async with self._lock:
+            self._refreshing.discard(old_name)
+            self._refreshing.discard(new_name)
 
     def get_all_status(self) -> dict[str, str]:
         """全サーバーのステータス一覧。"""
