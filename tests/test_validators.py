@@ -1,6 +1,7 @@
 import pytest
 from src.mcp_hub.validators import (
     ValidationError,
+    bearer_headers_from_env,
     validate_command, validate_url, validate_env, validate_headers,
     validate_server_config,
 )
@@ -149,3 +150,37 @@ class TestValidateServerConfig:
             "headers": {"Authorization": "Bearer token123"},
         }
         validate_server_config("test", cfg)
+
+    def test_valid_url_with_env(self):
+        """URL-only configs must accept env — used for bearer header derivation."""
+        cfg = {
+            "url": "https://example.com/mcp",
+            "env": {"MAPBOX_ACCESS_TOKEN": "x"},
+        }
+        assert validate_server_config("test", cfg) == cfg
+
+
+class TestBearerHeadersFromEnv:
+    def test_single_token(self):
+        assert bearer_headers_from_env({"MAPBOX_ACCESS_TOKEN": "abc"}) == {
+            "Authorization": "Bearer abc"
+        }
+
+    def test_api_key(self):
+        assert bearer_headers_from_env({"API_KEY": "x"}) == {
+            "Authorization": "Bearer x"
+        }
+
+    def test_ambiguous_returns_none(self):
+        assert bearer_headers_from_env({"TOKEN": "t", "SECRET": "s"}) is None
+
+    def test_no_credential_var_returns_none(self):
+        assert bearer_headers_from_env({"FOO": "bar"}) is None
+
+    def test_one_credential_among_others(self):
+        assert bearer_headers_from_env({"FOO": "bar", "BRAVE_API_KEY": "k"}) == {
+            "Authorization": "Bearer k"
+        }
+
+    def test_non_str_value_returns_none(self):
+        assert bearer_headers_from_env({"TOKEN": 123}) is None

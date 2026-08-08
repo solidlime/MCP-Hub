@@ -21,6 +21,9 @@ _DOLLAR_TEMPLATE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?::-.*?)?\}")
 # Forbidden characters in command: shell metacharacters
 _FORBIDDEN_COMMAND_CHARS = frozenset(";&|`<>")
 
+# Env var names that look like credentials (matched against upper-cased keys)
+_CREDENTIAL_ENV_RE = re.compile(r"(TOKEN|API[_-]?KEY|SECRET|PASSWORD|AUTH)")
+
 MAX_COMMAND_LENGTH = 512
 MAX_URL_LENGTH = 2048
 MAX_ARGS_COUNT = 50
@@ -127,6 +130,20 @@ def validate_headers(headers: dict) -> dict[str, str]:
     return result
 
 
+def bearer_headers_from_env(env: dict) -> dict | None:
+    """If env contains exactly one credential-ish variable (name matching
+    TOKEN / API_KEY / SECRET / PASSWORD / AUTH), return {"Authorization": "Bearer <value>"}.
+    Returns None when there is no such var or more than one (ambiguous)."""
+    matches = [
+        key for key, value in env.items()
+        if isinstance(key, str) and isinstance(value, str)
+        and _CREDENTIAL_ENV_RE.search(key.upper())
+    ]
+    if len(matches) != 1:
+        return None
+    return {"Authorization": f"Bearer {env[matches[0]]}"}
+
+
 def validate_server_config(name: str, config: dict) -> dict:
     """Validate a complete server config (both register and patch)."""
     if not name or not isinstance(name, str):
@@ -149,8 +166,9 @@ def validate_server_config(name: str, config: dict) -> dict:
         config["command"] = validate_command(config["command"])
         if "args" in config:
             config["args"] = validate_args(config["args"])
-        if "env" in config:
-            config["env"] = validate_env(config["env"])
+    # env is valid for both command and URL servers (URL: bearer derivation)
+    if "env" in config:
+        config["env"] = validate_env(config["env"])
     if "tags" in config:
         tags = config["tags"]
         if not isinstance(tags, list):
