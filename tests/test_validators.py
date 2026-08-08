@@ -126,6 +126,24 @@ class TestValidateHeaders:
         with pytest.raises(ValidationError):
             validate_headers({"X-\x00-Malicious": "value"})
 
+    def test_quoted_key_is_unquoted(self):
+        # WebUI edit box renders "key": "value" — quotes must not be persisted
+        assert validate_headers({'"Authorization"': "Bearer herta"}) == {
+            "Authorization": "Bearer herta"
+        }
+
+    def test_quoted_value_is_unquoted(self):
+        assert validate_headers({"Authorization": '"Bearer herta"'}) == {
+            "Authorization": "Bearer herta"
+        }
+
+    def test_single_quoted_key_is_unquoted(self):
+        assert validate_headers({"'X-Key'": "value"}) == {"X-Key": "value"}
+
+    def test_quote_only_key_blocked(self):
+        with pytest.raises(ValidationError, match="Header key must not be empty"):
+            validate_headers({'"': "value"})
+
 
 class TestValidateServerConfig:
     def test_valid_command(self):

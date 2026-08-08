@@ -2965,8 +2965,12 @@
             text.split('\n').forEach(line => {
                 const idx = line.indexOf(separator);
                 if (idx > 0) {
-                    const key = line.substring(0, idx).trim();
+                    let key = line.substring(0, idx).trim();
                     let val = line.substring(idx + 1).trim();
+                    // key/value 両方の引用符を剥がす（編集ボックスは "key": "value" 形式で表示するため）
+                    if ((key.startsWith('"') && key.endsWith('"')) || (key.startsWith("'") && key.endsWith("'"))) {
+                        key = key.slice(1, -1);
+                    }
                     if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
                         val = val.slice(1, -1);
                     }

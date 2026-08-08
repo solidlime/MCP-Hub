@@ -111,6 +111,8 @@ def validate_headers(headers: dict) -> dict[str, str]:
     """Validate custom HTTP headers for remote server connections.
 
     Allows only dict[str, str] with reasonable size limits.
+    Quoted keys/values (e.g. ``"Authorization"`` / ``"Bearer x"``) are
+    unquoted to prevent broken header names being sent upstream.
     """
     if not isinstance(headers, dict):
         raise ValidationError("Headers must be a dict")
@@ -120,6 +122,12 @@ def validate_headers(headers: dict) -> dict[str, str]:
             raise ValidationError(f"Header key must be a string: {key}")
         if not isinstance(value, str):
             raise ValidationError(f"Header value must be a string for key: {key}")
+        # Strip surrounding quotes (from key and value) — the WebUI edit box
+        # renders headers as "key": "value" and older clients saved the quotes.
+        key = _strip_surrounding_quotes(key)
+        value = _strip_surrounding_quotes(value)
+        if not key:
+            raise ValidationError("Header key must not be empty")
         if re.search(r'[\r\n\x00-\x1f]', key):
             raise ValidationError(f"Header key contains control characters: {key[:50]}")
         if len(key) > MAX_HEADER_KEY_LENGTH:
@@ -128,6 +136,13 @@ def validate_headers(headers: dict) -> dict[str, str]:
             raise ValidationError(f"Header value too long for key '{key}' (max {MAX_HEADER_VALUE_LENGTH} chars)")
         result[key] = value
     return result
+
+
+def _strip_surrounding_quotes(s: str) -> str:
+    """Remove a pair of matching surrounding quotes (single or double) if present."""
+    if len(s) >= 1 and ((s[0] == '"' and s[-1] == '"') or (s[0] == "'" and s[-1] == "'")):
+        return s[1:-1]
+    return s
 
 
 def bearer_headers_from_env(env: dict) -> dict | None:
