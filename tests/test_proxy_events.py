@@ -52,6 +52,8 @@ class TestEventFiring:
         events = []
         pm.on_change(lambda name, event, detail=None: events.append((name, event)))
 
+        # 実フロー（load_all/register_server）では呼び出し前に必ず設定される
+        pm._server_configs["fetch"] = {"command": "uvx", "args": []}
         fake_proxy = AsyncMock()
         fake_proxy.list_tools = AsyncMock(return_value=[type("T", (), {"name": "fetch", "description": ""})()])
         with patch.object(pm, "_create_proxy", return_value=fake_proxy):
