@@ -100,6 +100,67 @@ class TestPatchUpdate:
         assert r.status_code == 404
 
 
+
+class TestPatchRename:
+    """サーバー名リネーム（PATCH body.name）。"""
+
+    def test_rename_success_name_not_in_config(self, client):
+        client.post("/admin/api/servers", json={
+            "name": "old-name", "config": {"url": "http://localhost:9999", "disabled": True}
+        })
+        r = client.patch("/admin/api/servers/old-name", json={"name": "new-name"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["name"] == "new-name"
+        assert "name" not in body["config"]  # config に混入しない
+        # store 側: 旧名は消え、新名で存在
+        names = [s["name"] for s in client.get("/admin/api/servers").json()["servers"]]
+        assert "old-name" not in names
+        assert "new-name" in names
+
+    def test_rename_with_config_change(self, client):
+        client.post("/admin/api/servers", json={
+            "name": "r1", "config": {"url": "http://localhost:9999", "disabled": True}
+        })
+        r = client.patch("/admin/api/servers/r1", json={"name": "r2", "tags": ["web"]})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["name"] == "r2"
+        assert body["config"]["tags"] == ["web"]
+        assert "name" not in body["config"]
+
+    def test_rename_conflict_is_409(self, client):
+        client.post("/admin/api/servers", json={
+            "name": "s1", "config": {"url": "http://localhost:9999", "disabled": True}
+        })
+        client.post("/admin/api/servers", json={
+            "name": "s2", "config": {"url": "http://localhost:9999", "disabled": True}
+        })
+        r = client.patch("/admin/api/servers/s1", json={"name": "s2"})
+        assert r.status_code == 409
+        # store は不変（s1 のまま）
+        names = [s["name"] for s in client.get("/admin/api/servers").json()["servers"]]
+        assert "s1" in names
+        assert "s2" in names
+
+    def test_rename_invalid_name_is_422(self, client):
+        client.post("/admin/api/servers", json={
+            "name": "ok-name", "config": {"url": "http://localhost:9999", "disabled": True}
+        })
+        r = client.patch("/admin/api/servers/ok-name", json={"name": "bad name!"})
+        assert r.status_code == 422
+
+    def test_rename_same_name_is_regular_patch(self, client):
+        client.post("/admin/api/servers", json={
+            "name": "same", "config": {"url": "http://localhost:9999", "disabled": True}
+        })
+        r = client.patch("/admin/api/servers/same", json={"name": "same", "tags": ["web"]})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["name"] == "same"
+        assert body["config"]["tags"] == ["web"]
+        assert "name" not in body["config"]
+
 class TestMetrics:
     def test_returns_metrics(self, client):
         r = client.get("/admin/api/metrics")
