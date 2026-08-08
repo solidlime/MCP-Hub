@@ -1665,7 +1665,7 @@
                 <button class="modal-close" onclick="closeEditModal()" aria-label="閉じる">✕</button>
             </div>
             <div class="modal-body">
-                <!-- サーバー名 (追加モード時のみ表示) -->
+                <!-- サーバー名 (追加・編集モードで表示。編集モードではリネーム用) -->
                 <div class="form-group" id="editNameGroup" style="display: none;">
                     <label class="form-label" for="editName">サーバー名 *</label>
                     <input type="text" class="form-input" id="editName" placeholder="例: my-mcp-server">
@@ -2815,8 +2815,8 @@
             const titleEl = document.getElementById('editServerModalTitle');
             const submitBtn = document.getElementById('editSubmitBtn');
 
-            // モードに応じた表示切り替え
-            nameGroup.style.display = isAddMode ? 'block' : 'none';
+            // サーバー名は両モードで表示（編集モードではリネーム用）
+            nameGroup.style.display = 'block';
             titleEl.textContent = isAddMode ? 'MCP サーバーを追加' : 'サーバー設定を編集';
             submitBtn.textContent = isAddMode ? '追加' : '保存';
 
@@ -2843,6 +2843,7 @@
                 editingServer = name;
                 editTags = [...getServerTags(server)];
 
+                document.getElementById('editName').value = server.name;
                 document.getElementById('editCommand').value = server.config.command || '';
                 document.getElementById('editArgs').value = (server.config.args || []).join('\n');
                 document.getElementById('editUrl').value = server.config.url || '';
@@ -3019,6 +3020,10 @@
             const oldTags = getServerTags(server);
             if (JSON.stringify(editTags) !== JSON.stringify(oldTags)) diffed.tags = editTags;
 
+            // サーバー名のリネーム（config 外フィールドとして別扱い）
+            const newName = document.getElementById('editName').value.trim();
+            if (newName && newName !== editingServer) diffed.name = newName;
+
             return diffed;
         }
 
@@ -3091,6 +3096,8 @@
                 }
             } else {
                 // === EDIT MODE ===
+                const newName = document.getElementById('editName').value.trim();
+                if (!newName) { showFormError('サーバー名を入力してください（英数字とハイフン）'); return; }
                 if (Object.keys(payload).length === 0) {
                     showToast('変更がありません', 'info');
                     closeEditModal();
@@ -3099,13 +3106,17 @@
 
                 try {
                     setSubmitLoading(submitBtn, '保存中...');
-                    await API.patchServer(editingServer, payload);
+                    const result = await API.patchServer(editingServer, payload);
+                    // name は config 外フィールドなので config への反映から除外する
+                    const { name, ...configOnly } = payload;
                     const server = servers.find(s => s.name === editingServer);
-                    if (server) Object.assign(server.config, payload);
-                    updateServerCard(editingServer);
+                    if (server) Object.assign(server.config, configOnly);
+                    // リネーム時は旧キーではカードが消えるため、一覧を再取得する
+                    await loadServers();
                     renderTagFilterBar();
                     closeEditModal();
-                    showToast(`「${editingServer}」の設定を更新しました`, 'success');
+                    const updatedName = (result && result.name) || payload.name || editingServer;
+                    showToast(`「${updatedName}」の設定を更新しました`, 'success');
                 } catch (error) {
                     handleSubmitError(error, errorEl);
                 } finally {
