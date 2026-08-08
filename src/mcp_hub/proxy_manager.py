@@ -23,6 +23,7 @@ from fastmcp.server.providers.proxy import FastMCPProxy
 
 from .env_expand import expand_env_vars
 from .store import JsonStore
+from .validators import bearer_headers_from_env
 
 logger = logging.getLogger(__name__)
 
@@ -552,6 +553,16 @@ class ProxyManager:
         command = config.get("command")
         if url:
             headers = config.get("headers")
+            env = config.get("env")
+            if not headers and env:
+                derived = bearer_headers_from_env(env)
+                if derived:
+                    headers = derived
+                    logger.info("Derived 'Authorization: Bearer' header for %s from env", name)
+                else:
+                    logger.warning(
+                        "env for URL server '%s' ignored: no unique TOKEN/API_KEY/SECRET "
+                        "variable found; use 'headers' for custom authentication", name)
             if headers:
                 path = urlparse(url).path
                 if re.search(r"/sse(/|\?|&|$)", path):
