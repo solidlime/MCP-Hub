@@ -3113,6 +3113,15 @@
                     if (server) Object.assign(server.config, configOnly);
                     // リネーム時は旧キーではカードが消えるため、一覧を再取得する
                     await loadServers();
+                    // プロキシ再生成直後はツール列挙が未完了で空になることがあるため、表示されるまでリトライする
+                    const targetName = (result && result.name) || payload.name || editingServer;
+                    for (let attempt = 0; attempt < 5; attempt++) {
+                        const s = servers.find(x => x.name === targetName);
+                        if (s && s.tools && s.tools.length > 0) break;
+                        if (!s || s.status !== 'connected') break;
+                        await new Promise(r => setTimeout(r, 2000));
+                        await loadServers();
+                    }
                     renderTagFilterBar();
                     closeEditModal();
                     const updatedName = (result && result.name) || payload.name || editingServer;
@@ -3242,6 +3251,21 @@
                         if (oldServer &&
                             (oldServer.status !== newServer.status ||
                              oldServer.tools_count !== newServer.tools_count)) {
+                            // include_tools=false では tools は常に [] のため、空で上書きしない
+                            Object.assign(oldServer, { ...newServer, tools: (newServer.tools && newServer.tools.length) ? newServer.tools : oldServer.tools });
+                            updateServerCard(newServer.name);
+                        }
+                    }
+                }
+
+                // ツール一覧が空の connected サーバーはツールを再取得してカードを更新する（プロキシ再生成後の回復）
+                const emptyConnected = servers.filter(s => s.status === 'connected' && (!s.tools || s.tools.length === 0));
+                if (emptyConnected.length > 0) {
+                    const fullData = await API.getServers(true);
+                    const fullServers = fullData.servers || [];
+                    for (const newServer of fullServers) {
+                        const oldServer = servers.find(s => s.name === newServer.name);
+                        if (oldServer && emptyConnected.some(s => s.name === newServer.name) && newServer.tools && newServer.tools.length > 0) {
                             Object.assign(oldServer, newServer);
                             updateServerCard(newServer.name);
                         }
