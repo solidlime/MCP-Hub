@@ -214,7 +214,7 @@ class ToolIndex:
         otherwise falls back to BM25 keyword search.
 
         When semantic search returns no results (e.g. all scores ≤ 0 due to
-        language mismatch — bge-small-en is English-only), automatically
+        language mismatch), automatically
         falls back to BM25 which supports multilingual input.
 
         Returns list of {server, name, description, inputSchema, score}.

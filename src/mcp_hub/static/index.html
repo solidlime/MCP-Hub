@@ -1695,12 +1695,6 @@
                         <div class="form-hint">1行に1つ、または引用符付きカンマ区切りリスト（例: "--with", "mcp&lt;2.0.0", "mcp-server-fetch"）で入力できます</div>
                     </div>
 
-                    <!-- 環境変数 -->
-                    <div class="form-group">
-                        <label class="form-label">環境変数</label>
-                        <textarea class="form-input" id="editEnv" rows="3" placeholder="KEY=value&#10;ANOTHER_KEY=value2"></textarea>
-                        <div class="form-hint">1行に1つの KEY=value 形式で入力してください</div>
-                    </div>
                 </div>
 
                 <!-- URLモード -->
@@ -1717,6 +1711,13 @@
                         <div class="form-hint">1行に1つの KEY: value 形式で入力してください</div>
                     </div>
                     <div class="form-hint" id="urlEnvHint" style="display: none;">URL サーバーでは TOKEN / API_KEY / SECRET 系の環境変数が Authorization: Bearer ヘッダーに自動変換されます</div>
+                </div>
+
+                <!-- 環境変数（コマンド・URL両モード共通） -->
+                <div class="form-group">
+                    <label class="form-label">環境変数</label>
+                    <textarea class="form-input" id="editEnv" rows="3" placeholder="KEY=value&#10;ANOTHER_KEY=value2"></textarea>
+                    <div class="form-hint">1行に1つの KEY=value 形式で入力してください</div>
                 </div>
 
                 <div class="form-group">
@@ -1827,7 +1828,7 @@
                     <label class="setting-label">🧠 埋め込みモデル</label>
                     <div class="setting-row">
                         <input type="text" id="embeddingModel" class="setting-input"
-                               placeholder="cl-nagoya/ruri-v3-30m"
+                               placeholder="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
                                onchange="saveEmbeddingModel(this.value)">
                     </div>
                     <p class="setting-hint">

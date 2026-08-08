@@ -224,7 +224,7 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 **Response:**
 ```json
 {
-  "embedding_model": "cl-nagoya/ruri-v3-30m"
+  "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 }
 ```
 
@@ -308,7 +308,7 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 | `command` | 空でない文字列。`$()`（サブシェル）、`;`、`&`、`|`、`` ` ``、`<`、`>` 禁止。`${VAR}` テンプレートは許可。最大 512 文字。 |
 | `url` | `http://` または `https://` のみ。最大 2048 文字。 |
 | `args` | 最大 50 要素。各要素最大 1024 文字。 |
-| `env` | キー最大 256 文字、値最大 4096 文字。`PATH`、`LD_PRELOAD` 等の危険変数はブロック。 |
+| `env` | キー最大 256 文字、値最大 4096 文字。`PATH`、`LD_PRELOAD` 等の危険変数はブロック。`command` / `url` どちらのサーバーにも指定可。`url` サーバーでは `TOKEN` / `API_KEY` / `SECRET` / `PASSWORD` / `AUTH` を含む変数が 1 つだけの場合 `Authorization: Bearer` ヘッダーに自動変換。 |
 | `tags` | 各タグ最大 64 文字の文字列。 |
 | `headers` | キー最大 256 文字、値最大 8192 文字。制御文字禁止。 |
 | `disabled` | ブール値。`true` で登録のみ行い接続しない。 |

@@ -22,7 +22,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 {
   "version": 1,
   "log_level": "info",
-  "embedding_model": "cl-nagoya/ruri-v3-30m",
+  "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "meta_mode": true,
   "full_info_tools": ["fetch_fetch"],
   "mcpServers": {
@@ -49,7 +49,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 |---|---|---|---|
 | `version` | int | `1` | 設定ファイルバージョン。現在は `1` のみ。 |
 | `log_level` | string | `"info"` | ログレベル (`debug`, `info`, `warning`, `error`)。大文字小文字を区別しない。 |
-| `embedding_model` | string | `"cl-nagoya/ruri-v3-30m"` | セマンティック検索に使用する埋め込みモデル。fastembed がインストールされている場合に有効。 |
+| `embedding_model` | string | `"sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"` | セマンティック検索に使用する埋め込みモデル。fastembed がインストールされている場合に有効。fastembed がサポートしないモデルを指定した場合は警告ログを出してデフォルトにフォールバック。 |
 | `meta_mode` | bool | `true`（バンドル設定からシード） | Meta モード（Progressive Discovery）の有効/無効。`true` のとき `search_tools` / `execute_tool` / `list_upstream_tools` の 3 ツールのみ公開。設定未保存時はバンドルされた `hub.config.json` の値が初回起動時にシードされます。 |
 | `full_info_tools` | array\<string\> | `[]` | フル公開するツールのリスト。要素は `"{server}_{tool}"` 形式（例: `"fetch_fetch"`）。Meta モード時、ここに指定したツールのみ `tools/list` に通常ツールとしてフル公開され、`tools/call` で直接呼び出せる。未指定（空配列）なら現行の挙動と互換。 |
 | `mcpServers` | object | `{}` | MCP サーバー定義のマップ。キーがサーバー名。 |
@@ -63,7 +63,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `command` | string | `url` と排他 | 子サーバーを起動するコマンド。`${VAR}` / `${VAR:-default}` テンプレート使用可。 |
 | `url` | string | `command` と排他 | Streamable HTTP / SSE エンドポイントのURL。https:// または http:// のみ許可。 |
 | `args` | string[] | 任意 | コマンドに渡す引数リスト。 |
-| `env` | object (string→string) | 任意 | 子サーバーに設定する環境変数。`${VAR}` テンプレート使用可。 |
+| `env` | object (string→string) | 任意 | 子サーバーに設定する環境変数。`${VAR}` テンプレート使用可。`url` サーバーの場合、`TOKEN` / `API_KEY` / `SECRET` / `PASSWORD` / `AUTH` を含む変数がちょうど 1 つだけなら `Authorization: Bearer <値>` ヘッダーに自動変換（2 つ以上ある場合は曖昧なため無視）。 |
 | `headers` | object (string→string) | 任意 | HTTP 接続時に送信するカスタムヘッダー。 |
 | `tags` | string[] | 任意 | サーバーに付与するタグ。タグフィルタリングに使用。 |
 | `disabled` | boolean | `false` | `true` でサーバーをスキップ。 |
@@ -78,6 +78,8 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 #### 環境変数テンプレート
 
 `command`、`args`、`env` の値では `${VAR}` および `${VAR:-default}` 形式のテンプレートが使用できます。展開は `proxy_manager._create_proxy()` で行われ、設定ファイルにはテンプレートのまま保存されます。
+
+`url` サーバーで `headers` を指定せず、`env` に認証情報系の変数（`TOKEN` / `API_KEY` / `SECRET` / `PASSWORD` / `AUTH` を含む名前）がちょうど 1 つだけある場合、`Authorization: Bearer <値>` ヘッダーが自動生成されます。複数ある場合は曖昧なため自動変換されません（`headers` で明示指定してください）。例: Mapbox MCP サーバーの場合、`env` に `MAPBOX_ACCESS_TOKEN` を設定するだけで認証が通ります。
 
 ```json
 {

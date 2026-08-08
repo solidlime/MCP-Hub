@@ -227,7 +227,7 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
 `ToolIndex` クラスがツールの検索インデックスを管理します。
 
 - **プライマリ検索**: fastembed による dense retrieval（コサイン類似度）
-  - モデル: `cl-nagoya/ruri-v3-30m`（設定で変更可能）
+  - モデル: `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`（設定で変更可能。fastembed 非対応モデル指定時はデフォルトにフォールバック）
   - ドキュメント: `"{server}/{name}: {description}"` 形式で埋め込み
 - **フォールバック**: BM25Okapi によるキーワード検索
   - fastembed 未インストール時、またはセマンティック検索が 0 件の場合に使用
