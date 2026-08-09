@@ -76,6 +76,7 @@ class ProxyManager:
         _max_calls = int(os.environ.get("MCP_HUB_MAX_CONCURRENT_CALLS", "50"))
         self._call_semaphore = asyncio.Semaphore(_max_calls)
         self._tool_cache: dict[str, tuple[float, list[Any]]] = {}  # server_name -> (timestamp, tools)
+        self._health_failures: dict[str, int] = {}  # server_name -> consecutive health-check failures
 
     @staticmethod
     def _retry_env() -> tuple[int, float]:
@@ -476,6 +477,26 @@ class ProxyManager:
         self._tool_counts[name] = len(tools)
         return tools
 
+    def _record_health_failure(self, name: str, reason: str, max_failures: int) -> bool:
+        """Count a health-check failure; return True when the server should be marked error.
+
+        Transient failures (slow external APIs like Mapbox) must not flip a
+        server to error on the first timeout. After max_failures consecutive
+        failures the server is marked error, and the counter resets so it takes
+        max_failures failures again before re-marking (prevents event spam).
+        """
+        failures = self._health_failures.get(name, 0) + 1
+        self._health_failures[name] = failures
+        if failures < max_failures:
+            logger.warning(
+                "Health check failure for %s (%d/%d): %s — keeping connected",
+                name, failures, max_failures, reason,
+            )
+            return False
+        logger.warning("Health check failure for %s (%d consecutive): %s — marking error", name, failures, reason)
+        self._health_failures[name] = 0
+        return True
+
     async def _health_check(self) -> None:
         """Check all connected servers, recover failed ones."""
         # Snapshots under lock (prevents dict mutation during iteration)
@@ -485,6 +506,7 @@ class ProxyManager:
             status_snapshot = dict(self._status)
 
         timeout = int(os.environ.get("MCP_HUB_HEALTH_TIMEOUT", "10"))
+        max_failures = int(os.environ.get("MCP_HUB_HEALTH_MAX_FAILURES", "3"))
         to_recover: list[str] = []
 
         for name, proxy in proxies_snapshot.items():
@@ -497,6 +519,7 @@ class ProxyManager:
                 )
                 async with self._lock:
                     self._tool_counts[name] = len(tools)
+                self._health_failures.pop(name, None)  # success resets counter
                 # Was in error → mark recovering
                 if status_snapshot.get(name) == "error":
                     logger.info("Server %s appears reachable — attempting recovery", name)
@@ -504,18 +527,19 @@ class ProxyManager:
                         self._status[name] = "recovering"
                     to_recover.append(name)
             except asyncio.TimeoutError:
-                logger.warning("Health check timeout for %s", name)
-                async with self._lock:
-                    self._status[name] = "error"
-                await self._notify_change(name, "disconnected", {"error": "Health check timeout"})
+                if self._record_health_failure(name, "timeout", max_failures):
+                    async with self._lock:
+                        self._status[name] = "error"
+                    await self._notify_change(name, "disconnected", {"error": "Health check timeout"})
             except asyncio.CancelledError:
                 raise
             except Exception:
                 if status_snapshot.get(name) == "connected":
                     logger.warning("Server %s health check failed", name)
-                async with self._lock:
-                    self._status[name] = "error"
-                await self._notify_change(name, "disconnected", {"error": "Health check failed"})
+                if self._record_health_failure(name, "exception", max_failures):
+                    async with self._lock:
+                        self._status[name] = "error"
+                    await self._notify_change(name, "disconnected", {"error": "Health check failed"})
 
         # Recovery: reconnect failed servers that HAVE a proxy (outside lock for IO)
         for name in to_recover:
@@ -544,6 +568,7 @@ class ProxyManager:
                     self._status[name] = "error"
                     await self._notify_change(name, "spawn_failed", {"error": "Recovery failed"})
             if recovered:
+                self._health_failures.pop(name, None)
                 await self._notify_change(name, "recovered", None)
 
         # Recovery: servers that failed initial connection (status="error", no proxy in _proxies)
@@ -575,6 +600,7 @@ class ProxyManager:
                     # stays "error", will retry next interval
                     await self._notify_change(name, "spawn_failed", {"error": "Recovery failed"})
             if recovered:
+                self._health_failures.pop(name, None)
                 await self._notify_change(name, "recovered", None)
 
     async def _health_monitor_loop(self, interval: int) -> None:

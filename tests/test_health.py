@@ -50,8 +50,9 @@ def manager():
 
 class TestHealthCheck:
     @pytest.mark.asyncio
-    async def test_health_check_detects_failure(self, manager):
-        """Error status on list_tools failure."""
+    async def test_health_check_detects_failure(self, manager, monkeypatch):
+        """Error status on list_tools failure (after max_failures reached)."""
+        monkeypatch.setenv("MCP_HUB_HEALTH_MAX_FAILURES", "1")
         proxy = _MockProxy("srv1")
         proxy.list_tools = AsyncMock(side_effect=ConnectionError("fail"))
         manager._proxies["srv1"] = proxy
@@ -96,6 +97,7 @@ class TestHealthCheck:
     async def test_health_check_timeout(self, manager, monkeypatch):
         """asyncio.wait_for timeout marks status error."""
         monkeypatch.setenv("MCP_HUB_HEALTH_TIMEOUT", "1")
+        monkeypatch.setenv("MCP_HUB_HEALTH_MAX_FAILURES", "1")
 
         async def never_return():
             await asyncio.sleep(3600)
@@ -109,6 +111,70 @@ class TestHealthCheck:
         await manager._health_check()
 
         assert manager._status["srv1"] == "error"
+
+
+class TestHealthFailureTolerance:
+    """Transient failures must not flip a server to error immediately."""
+
+    def _fail_proxy(self, manager, name="srv1"):
+        proxy = _MockProxy(name)
+        proxy.list_tools = AsyncMock(side_effect=ConnectionError("fail"))
+        manager._proxies[name] = proxy
+        manager._server_configs[name] = {"url": "http://localhost:9999"}
+        manager._status[name] = "connected"
+        manager._tool_cache.pop(name, None)  # bypass list_tools_for_server cache
+        return proxy
+
+    def _set_proxy_tools(self, manager, proxy, tools=None, name="srv1"):
+        """Replace list_tools result and bypass the 60s tool cache."""
+        if tools is None:
+            proxy.list_tools = AsyncMock(side_effect=ConnectionError("fail"))
+        else:
+            proxy.list_tools = AsyncMock(return_value=tools)
+        manager._tool_cache.pop(name, None)
+        return proxy
+
+    @pytest.mark.asyncio
+    async def test_single_failure_keeps_connected(self, manager):
+        """One failure (below max_failures=3) does not mark the server error."""
+        self._fail_proxy(manager)
+
+        await manager._health_check()
+
+        assert manager._status["srv1"] == "connected"
+        assert manager._health_failures["srv1"] == 1
+
+    @pytest.mark.asyncio
+    async def test_threshold_reached_marks_error(self, manager, monkeypatch):
+        """max_failures=2: two consecutive failures mark the server error."""
+        monkeypatch.setenv("MCP_HUB_HEALTH_MAX_FAILURES", "2")
+        self._fail_proxy(manager)
+
+        await manager._health_check()
+        assert manager._status["srv1"] == "connected"
+
+        await manager._health_check()
+        assert manager._status["srv1"] == "error"
+        # counter reset after marking error — next failure needs 2 again
+        assert manager._health_failures["srv1"] == 0
+
+    @pytest.mark.asyncio
+    async def test_success_resets_failure_count(self, manager):
+        """A success between failures resets the counter (no error on next fail)."""
+        proxy = self._fail_proxy(manager)
+
+        await manager._health_check()
+        assert manager._health_failures["srv1"] == 1
+
+        self._set_proxy_tools(manager, proxy, tools=[])  # now succeeds
+        await manager._health_check()
+        assert "srv1" not in manager._health_failures
+
+        self._set_proxy_tools(manager, proxy, tools=None)  # fails again
+        await manager._health_check()
+        # failure 1 of 3 again — still connected
+        assert manager._status["srv1"] == "connected"
+        assert manager._health_failures["srv1"] == 1
 
 
 class TestHealthMonitorLifecycle:
