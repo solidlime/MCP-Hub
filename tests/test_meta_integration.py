@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from mcp_hub.meta_provider import create_meta_app
+from mcp_hub.state import request_tags
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ async def meta_app():
 
     app.state.meta_app = meta_app
     app.state.meta_http = meta_http
+    app.state.proxy_manager = pm
     return app
 
 
@@ -229,3 +231,51 @@ class TestMetaIntegration:
         data = json.loads(text)
         assert "results" in data
         assert len(data["results"]) == 1
+
+
+class TestMetaTagFiltering:
+    """Regression tests for issue #1: servers carrying multiple tags (e.g.
+    [librarian, search]) must NOT be excluded when the client requests a
+    single matching tag (librarian). Tag matching is plain OR."""
+
+    TAGS = {
+        "filesystem": ["dev"],
+        "fetch": ["librarian", "search"],  # multi-tag server (issue #1 case)
+        "brave-search": ["search"],
+        "puppeteer": ["librarian"],
+    }
+
+    def _set_server_tags(self, client):
+        pm = client.app.state.proxy_manager
+        pm.server_tags.side_effect = lambda name: self.TAGS.get(name, [])
+
+    def _call_list_upstream(self, client, tags):
+        """Set request_tags, call list_upstream_tools, return parsed JSON dict."""
+        request_tags.set(tags)
+        try:
+            parsed = _call_tool(client, "list_upstream_tools", {}, "t1")
+        finally:
+            request_tags.set(None)
+        return json.loads(_get_text_content(parsed))
+
+    def test_librarian_tag_keeps_multi_tag_servers(self, client):
+        """Issue #1: requesting 'librarian' alone must include servers tagged
+        ['librarian', 'search'] — they were wrongly excluded in the reporter's
+        environment (stale container build)."""
+        self._set_server_tags(client)
+        data = self._call_list_upstream(client, ["librarian"])
+        servers = set(data["tools_by_server"].keys())
+        assert "fetch" in servers        # [librarian, search] matches 'librarian'
+        assert "puppeteer" in servers    # [librarian] matches 'librarian'
+        assert "brave-search" not in servers  # [search] only
+        assert "filesystem" not in servers    # [dev] only
+
+    def test_search_tag_matches_search_servers(self, client):
+        """Requesting 'search' includes all servers with the search tag."""
+        self._set_server_tags(client)
+        data = self._call_list_upstream(client, ["search"])
+        servers = set(data["tools_by_server"].keys())
+        assert "fetch" in servers        # [librarian, search] matches 'search'
+        assert "brave-search" in servers
+        assert "puppeteer" not in servers
+        assert "filesystem" not in servers
