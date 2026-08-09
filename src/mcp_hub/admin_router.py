@@ -361,7 +361,11 @@ async def patch_server(name: str, body: PatchServerRequest):
 
     # 恒久化（リネームなしの従来 PATCH）
     await registry.update_server(name, merged_config)
-    await pm.refresh_server(name, merged_config)
+    # tags のみの更新はプロキシ再生成が不要（サブプロセス再起動を防ぐ）
+    if set(updates) <= {"tags"}:
+        await pm.update_config_only(name, merged_config)
+    else:
+        await pm.refresh_server(name, merged_config)
 
     return {
         "name": name,

@@ -268,6 +268,16 @@ class ProxyManager:
             async with self._lock:
                 self._refreshing.discard(name)
 
+    async def update_config_only(self, name: str, config: dict) -> None:
+        """プロキシに影響しない設定（tags 等）のみの更新。
+
+        プロキシ再生成・サブプロセス再起動を伴わない。tags は
+        server_tags() 経由で動的に参照されるため、ここでの更新で
+        タグフィルタ・meta index に即時反映される。
+        """
+        async with self._lock:
+            self._server_configs[name] = config
+
     async def rename_server(self, old_name: str, new_name: str, config: dict) -> None:
         """サーバー名変更。プロキシインスタンスは再利用（接続維持）。"""
         async with self._lock:

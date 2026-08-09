@@ -99,6 +99,38 @@ class TestPatchUpdate:
         r = client.patch("/admin/api/servers/ghost", json={"tags": ["web"]})
         assert r.status_code == 404
 
+    def test_patch_tags_only_skips_refresh(self, client, monkeypatch):
+        client.post("/admin/api/servers", json={
+            "name": "patch-me", "config": {"url": "http://localhost:9999", "disabled": True}
+        })
+        pm = app_state.proxy_manager
+        calls = []
+
+        async def fake_refresh(name, config):
+            calls.append((name, config))
+
+        monkeypatch.setattr(pm, "refresh_server", fake_refresh)
+        r = client.patch("/admin/api/servers/patch-me", json={"tags": ["web", "api"]})
+        assert r.status_code == 200
+        assert r.json()["config"]["tags"] == ["web", "api"]
+        assert calls == []  # tags-only PATCH では refresh_server を呼ばない
+
+    def test_patch_disabled_still_refreshes(self, client, monkeypatch):
+        client.post("/admin/api/servers", json={
+            "name": "sleepy2", "config": {"url": "http://localhost:9999", "disabled": True}
+        })
+        pm = app_state.proxy_manager
+        calls = []
+
+        async def fake_refresh(name, config):
+            calls.append((name, config))
+
+        monkeypatch.setattr(pm, "refresh_server", fake_refresh)
+        r = client.patch("/admin/api/servers/sleepy2", json={"disabled": False})
+        assert r.status_code == 200
+        assert len(calls) == 1  # tags 以外の更新は refresh_server を呼ぶ
+        assert calls[0][0] == "sleepy2"
+
 
 
 class TestPatchRename:
