@@ -437,8 +437,14 @@ def create_meta_app(
     index = ToolIndex(embedding_model=embedding_model)
 
     # Build initial index from all connected proxy tools
-    async def rebuild_index():
+    async def rebuild_index() -> list[str]:
+        """Rebuild the tool index from connected proxies.
+
+        Returns the names of servers whose tools could not be fetched
+        (e.g. still warming up after recovery) so callers can retry.
+        """
         all_tools = []
+        failed: list[str] = []
         for server_name, proxy in proxy_manager.get_connected_servers().items():
             try:
                 if isinstance(proxy_manager, _ProxyManager):
@@ -454,7 +460,9 @@ def create_meta_app(
                     })
             except Exception:
                 logger.warning("Failed to list tools for %s", server_name)
+                failed.append(server_name)
         await index.rebuild(all_tools)
+        return failed
 
     meta = MetaTools(
         tool_index=index,

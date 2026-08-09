@@ -185,7 +185,12 @@ async def lifespan(app: FastAPI):
     # cascade where multiple servers connect within milliseconds) into a single
     # rebuild_index() run.  Explicit await meta_app.rebuild_index() calls are
     # NOT debounced.
+    #
+    # A server that just recovered may still be warming up, so a failed rebuild
+    # is retried with backoff before giving up (see meta_provider.rebuild_index
+    # returning the list of failed servers).
     _rebuild_task: asyncio.Task | None = None
+    _REBUILD_RETRY_DELAYS = (10, 30, 60)
 
     async def _on_change_rebuild(name: str | None = None, event: str | None = None, detail: dict | None = None):
         nonlocal _rebuild_task
@@ -193,7 +198,18 @@ async def lifespan(app: FastAPI):
             _rebuild_task.cancel()
         async def _delayed():
             await asyncio.sleep(0.5)
-            await meta_app.rebuild_index()
+            failed = await meta_app.rebuild_index()
+            for delay in _REBUILD_RETRY_DELAYS:
+                if not failed:
+                    break
+                logger.warning(
+                    "Meta index missing %d server(s): %s — retrying in %ds",
+                    len(failed), failed, delay,
+                )
+                await asyncio.sleep(delay)
+                failed = await meta_app.rebuild_index()
+            if failed:
+                logger.warning("Meta index still missing servers after retries: %s", failed)
         _rebuild_task = asyncio.create_task(_delayed())
 
     async def _on_log_event(name: str, event: str, detail: dict | None = None):

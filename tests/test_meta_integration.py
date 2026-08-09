@@ -279,3 +279,27 @@ class TestMetaTagFiltering:
         assert "brave-search" in servers
         assert "puppeteer" not in servers
         assert "filesystem" not in servers
+
+
+class TestRebuildIndex:
+    """rebuild_index must report servers whose tools could not be fetched,
+    so the caller (main.py) can retry with backoff instead of silently
+    dropping them from the index forever."""
+
+    async def test_returns_failed_server_names(self, meta_app):
+        """A server whose list_tools raises is reported as failed."""
+        pm = meta_app.state.proxy_manager
+        broken = _build_mock_proxy([])
+        broken.list_tools = AsyncMock(side_effect=RuntimeError("boom"))
+        pm._proxies["broken"] = broken
+
+        failed = await meta_app.state.meta_app.rebuild_index()
+        assert "broken" in failed
+        # Healthy servers are not reported as failed
+        assert "filesystem" not in failed
+        assert "fetch" not in failed
+
+    async def test_returns_empty_list_on_full_success(self, meta_app):
+        """When every server lists tools, no failures are reported."""
+        failed = await meta_app.state.meta_app.rebuild_index()
+        assert failed == []
