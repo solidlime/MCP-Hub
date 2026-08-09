@@ -4,6 +4,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+# Disable fastembed in tests: each TextEmbedding load is ~670MB and tests don't
+# need semantic search — prevents memory buildup → swap → hang (see run-tests.sh)
+os.environ.setdefault("MCP_HUB_EMBEDDING", "0")
+
 
 @pytest.fixture
 def clean_env(monkeypatch):

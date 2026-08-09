@@ -66,6 +66,28 @@ def _build_mock_proxy_manager():
     pm.call_tool = AsyncMock(return_value="ok")
     # Support the public API — get_connected_servers returns snapshot of _proxies
     pm.get_connected_servers = MagicMock(side_effect=lambda: dict(pm._proxies))
+
+    async def _list_tools(tags=None):
+        from mcp_hub.state import request_tags
+        if tags is None:
+            tags = request_tags.get(None)
+        result = {}
+        for name, proxy in pm._proxies.items():
+            if tags:
+                server_tags = pm.server_tags(name)
+                if not any(t in server_tags for t in tags):
+                    continue
+            tools = await proxy.list_tools()
+            result[name] = [
+                {"name": t.name, "description": t.description or ""} for t in tools
+            ]
+        return result
+
+    async def _list_tools_for_server(name, proxy):
+        return await proxy.list_tools()
+
+    pm.list_tools = AsyncMock(side_effect=_list_tools)
+    pm.list_tools_for_server = AsyncMock(side_effect=_list_tools_for_server)
     return pm
 
 
@@ -279,6 +301,80 @@ class TestMetaTagFiltering:
         assert "brave-search" in servers
         assert "puppeteer" not in servers
         assert "filesystem" not in servers
+
+
+class TestLiveProxyListing:
+    """list_upstream_tools / execute_tool read from the live proxy manager,
+    not the (possibly stale / partially rebuilt) index."""
+
+    def test_list_upstream_tools_sees_new_server_without_rebuild(self, client):
+        """A server added after the last rebuild still appears in the listing."""
+        pm = client.app.state.proxy_manager
+        pm._proxies["fresh-server"] = _build_mock_proxy(
+            [SimpleNamespace(name="fresh_tool", description="", parameters={})]
+        )
+        # Note: no rebuild_index() call — this is the point.
+        data = self._call_list_upstream(client, None)
+        servers = set(data["tools_by_server"].keys())
+        assert "fresh-server" in servers
+        assert "filesystem" in servers  # original servers still listed
+
+    def test_execute_tool_works_for_server_not_in_index(self, client):
+        """execute_tool must not depend on the index — a server that failed
+        to rebuild still executes (previously rejected with 'tool not found')."""
+        pm = client.app.state.proxy_manager
+        pm._proxies["fresh-server"] = _build_mock_proxy(
+            [SimpleNamespace(name="fresh_tool", description="", parameters={})]
+        )
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"server": "fresh-server", "tool_name": "fresh_tool", "arguments": {}},
+            "t-fresh",
+        )
+        assert _get_text_content(parsed) == "ok"
+
+    def test_execute_tool_rejects_missing_tool(self, client):
+        """Unknown tool on a known server is still rejected."""
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"server": "filesystem", "tool_name": "no_such_tool", "arguments": {}},
+            "t-missing",
+        )
+        text = _get_text_content(parsed)
+        assert "not found" in text
+
+    def test_execute_tool_rejects_wrong_tag(self, client):
+        """Tag mismatch blocks execution (live server tags, not index)."""
+        pm = client.app.state.proxy_manager
+        pm.server_tags.side_effect = lambda name: {
+            "filesystem": ["dev"],
+            "fresh-server": ["search"],
+        }.get(name, [])
+        pm._proxies["fresh-server"] = _build_mock_proxy(
+            [SimpleNamespace(name="fresh_tool", description="", parameters={})]
+        )
+        request_tags.set(["librarian"])
+        try:
+            parsed = _call_tool(
+                client,
+                "execute_tool",
+                {"server": "fresh-server", "tool_name": "fresh_tool", "arguments": {}},
+                "t-tag",
+            )
+        finally:
+            request_tags.set(None)
+        text = _get_text_content(parsed)
+        assert "not available" in text
+
+    def _call_list_upstream(self, client, tags):
+        request_tags.set(tags)
+        try:
+            parsed = _call_tool(client, "list_upstream_tools", {}, "t-live")
+        finally:
+            request_tags.set(None)
+        return json.loads(_get_text_content(parsed))
 
 
 class TestRebuildIndex:

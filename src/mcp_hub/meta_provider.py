@@ -6,8 +6,9 @@ Exposes 3 tools instead of all child server tools.
 import asyncio
 import json
 import logging
+import os
 import re
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from fastmcp import FastMCP
@@ -77,7 +78,8 @@ class ToolIndex:
         self._corpus: list[list[str]] = []
         self._embedder: "TextEmbedding | None" = None  # type: ignore[name-defined]
         self._embeddings: "np.ndarray | None" = None  # type: ignore[name-defined]
-        self._use_embeddings: bool = _HAS_FASTEMBED
+        # Embedding can be disabled via MCP_HUB_EMBEDDING=0 (tests / low-memory hosts)
+        self._use_embeddings: bool = _HAS_FASTEMBED and os.environ.get("MCP_HUB_EMBEDDING", "1") != "0"
         self._embedding_model: str = resolve_embedding_model(embedding_model, _supported_embedding_models())
 
     # ── Tokenization ──────────────────────────────────────────────
@@ -173,6 +175,17 @@ class ToolIndex:
 
     # ── Build + Search ────────────────────────────────────────────
 
+    def _embed_docs_blocking(self, doc_texts: list[str]) -> "np.ndarray":  # type: ignore[name-defined]
+        """Synchronous dense embedding computation (runs in a worker thread).
+
+        TextEmbedding init + embed + numpy conversion are CPU-bound and would
+        otherwise block the event loop for seconds during every rebuild.
+        """
+        if self._embedder is None:  # type: ignore[truthiness-function]
+            self._embedder = TextEmbedding(self._embedding_model)  # type: ignore[name-defined]
+        gen = self._embedder.embed(doc_texts)
+        return np.array(list(gen), dtype=np.float32)  # type: ignore[name-defined]
+
     async def rebuild(self, documents: list[dict]) -> None:
         """Rebuild index from pre-built tool documents.
 
@@ -190,14 +203,13 @@ class ToolIndex:
             # Compute embeddings if fastembed is available
             if self._use_embeddings and documents:
                 try:
-                    if self._embedder is None:  # type: ignore[truthiness-function]
-                        self._embedder = TextEmbedding(self._embedding_model)  # type: ignore[name-defined]
                     doc_texts = [
                         f"{d['server']}/{d['name']}: {d.get('description', '')}"
                         for d in documents
                     ]
-                    gen = self._embedder.embed(doc_texts)
-                    self._embeddings = np.array(list(gen), dtype=np.float32)  # type: ignore[name-defined]
+                    # Run CPU-bound embedding in a thread; event loop stays responsive.
+                    # Search falls back to BM25 until embeddings are ready.
+                    self._embeddings = await asyncio.to_thread(self._embed_docs_blocking, doc_texts)
                 except Exception:
                     logger.warning("Embedding failed, falling back to BM25", exc_info=True)
                     self._embeddings = None
@@ -342,10 +354,23 @@ class MetaTools:
         tool_index: ToolIndex,
         execute_tool_fn: Callable[[str, str, dict], Any],
         get_server_tags: Callable[[str], list[str]] | None = None,
+        list_all_tools_fn: Callable[[], Awaitable[dict]] | None = None,
+        list_server_tools_fn: Callable[[str], Awaitable[list]] | None = None,
     ):
         self._index = tool_index
         self._execute_tool = execute_tool_fn
         self._get_server_tags = get_server_tags or (lambda _: [])
+
+        async def _noop_all() -> dict:
+            return {}
+
+        async def _noop_server(name: str) -> list:
+            return []
+
+        # Live-proxy accessors: listing and execution must NOT depend on the
+        # (possibly stale / partially-rebuilt) index.
+        self._list_all_tools = list_all_tools_fn or _noop_all
+        self._list_server_tools = list_server_tools_fn or _noop_server
 
     def _get_allowed_servers(self) -> set[str] | None:
         """Return the set of server names allowed by request_tags, or None if no filter."""
@@ -386,16 +411,24 @@ class MetaTools:
             tool_name: From search_tools results
             arguments: Use inputSchema from search_tools results
         """
-        # Tag check: block execution if server's tags don't match request_tags
-        allowed = self._get_allowed_servers()
-        if allowed is not None and server not in allowed:
-            return json.dumps({
-                "error": f"Server '{server}' is not available with current tag filter.",
-                "hint": "Check your X-MCP-Hub-Tags header or connect without tag filtering."
-            }, ensure_ascii=False, indent=2)
+        # Tag check: block execution if server's tags don't match request_tags.
+        # Uses live server tags (not the index) so fresh servers work.
+        tags = request_tags.get()
+        if tags:
+            server_tags = self._get_server_tags(server)
+            if not _tags_match(tags, server_tags):
+                return json.dumps({
+                    "error": f"Server '{server}' is not available with current tag filter.",
+                    "hint": "Check your X-MCP-Hub-Tags header or connect without tag filtering."
+                }, ensure_ascii=False, indent=2)
 
-        # Verify tool exists in index before dispatching
-        if self._index.get_schema(server, tool_name) is None:
+        # Verify tool exists on the live proxy (index may be stale/missing).
+        try:
+            tools = await self._list_server_tools(server)
+        except Exception:
+            logger.debug("list_server_tools failed for %s", server, exc_info=True)
+            tools = []
+        if not any(getattr(t, "name", None) == tool_name for t in tools):
             return json.dumps({
                 "error": f"Tool '{tool_name}' not found on server '{server}'.",
                 "hint": "Use search_tools first to discover available tools on this server."
@@ -403,18 +436,19 @@ class MetaTools:
         return await self._execute_tool(server, tool_name, arguments)
 
     async def list_upstream_tools(self) -> str:
-        """List all upstream tools grouped by server. Use for orientation, then search_tools."""
-        by_server = self._index.get_tools_by_server()
-        # Apply tag filtering if request_tags is set
-        allowed = self._get_allowed_servers()
-        if allowed is not None:
-            by_server = {srv: tools for srv, tools in by_server.items() if srv in allowed}
+        """List all upstream tools grouped by server. Use for orientation, then search_tools.
+
+        Reads from the live proxy manager (tag-filtered via request_tags),
+        NOT the index — servers that failed to rebuild still appear here.
+        """
+        by_server = await self._list_all_tools()
         if not by_server:
             return json.dumps({"message": "No upstream tools available. Add servers via admin API."}, ensure_ascii=False, indent=2)
-        total = sum(len(tools) for tools in by_server.values())
+        tools_by_server = {srv: [t["name"] for t in tools] for srv, tools in by_server.items()}
+        total = sum(len(t) for t in tools_by_server.values())
         return json.dumps({
             "total_tools": total,
-            "tools_by_server": by_server,
+            "tools_by_server": tools_by_server,
         }, ensure_ascii=False, indent=2)
 
 
@@ -464,10 +498,22 @@ def create_meta_app(
         await index.rebuild(all_tools)
         return failed
 
+    # Live-proxy accessors for MetaTools (list/execute bypass the index).
+    async def _list_all_tools() -> dict:
+        return await proxy_manager.list_tools()  # tags via request_tags
+
+    async def _list_server_tools(server_name: str) -> list:
+        proxy = proxy_manager.get_connected_servers().get(server_name)
+        if proxy is None:
+            return []
+        return await proxy_manager.list_tools_for_server(server_name, proxy)
+
     meta = MetaTools(
         tool_index=index,
         execute_tool_fn=lambda s, t, a: proxy_manager.call_tool(s, t, a),
         get_server_tags=proxy_manager.server_tags,
+        list_all_tools_fn=_list_all_tools,
+        list_server_tools_fn=_list_server_tools,
     )
 
     # Register meta tools via FastMCP tool decorator
