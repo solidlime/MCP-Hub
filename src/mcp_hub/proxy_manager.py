@@ -87,6 +87,18 @@ class ProxyManager:
             float(os.environ.get("MCP_HUB_RETRY_DELAY", "1.0")),
         )
 
+    @staticmethod
+    def _client_timeout() -> float | None:
+        """MCP_HUB_CLIENT_TIMEOUT: read timeout for upstream requests (seconds).
+        None = fastmcp/mcp SDK default (keeps current behavior)."""
+        raw = os.environ.get("MCP_HUB_CLIENT_TIMEOUT")
+        return float(raw) if raw else None
+
+    @staticmethod
+    def _connect_timeout() -> float:
+        """MCP_HUB_CONNECT_TIMEOUT: initial connectivity check timeout (seconds)."""
+        return float(os.environ.get("MCP_HUB_CONNECT_TIMEOUT", "30.0"))
+
     async def _connect_server(self, name: str, config: dict) -> "FastMCPProxy | None":
         """Create proxy + mount with retry. Call OUTSIDE asyncio.Lock.
         Returns proxy on success, None on exhaustion."""
@@ -144,7 +156,7 @@ class ProxyManager:
             # A broken server (e.g. URL endpoint returning 405) fails here
             # and is left for the health monitor to recover at its own pace.
             import time
-            tools = list(await asyncio.wait_for(proxy.list_tools(), timeout=30.0))
+            tools = list(await asyncio.wait_for(proxy.list_tools(), timeout=self._connect_timeout()))
             self._tool_cache[name] = (time.monotonic(), tools)
             self._tool_counts[name] = len(tools)
             async with self._lock:
@@ -734,7 +746,7 @@ class ProxyManager:
                 transport: Any = SSETransport(url=url, headers=headers)
             else:
                 transport = StreamableHttpTransport(url=url, headers=headers)
-            client = Client(transport=transport)
+            client = Client(transport=transport, timeout=self._client_timeout())
         elif command:
             args = config.get("args", [])
             env = config.get("env")
