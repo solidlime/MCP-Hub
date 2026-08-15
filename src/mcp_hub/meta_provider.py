@@ -222,6 +222,10 @@ class ToolIndex:
     def search(self, query: str, top_k: int = 10) -> list[dict]:
         """Search tools by keyword or semantic query.
 
+        Identifier matches (a tool whose name shares a token with the query)
+        are promoted to the front: semantic ranking and top_k truncation must
+        never bury an exact name match.
+
         Uses embedding-based semantic search when fastembed is available,
         otherwise falls back to BM25 keyword search.
 
@@ -238,13 +242,34 @@ class ToolIndex:
         """
         if not self._documents:
             return []
+        query_tokens = set(self._tokenize(query))
+
+        # Identifier matches first: name tokens ∩ query tokens.
+        exact = []
+        for doc in self._documents:
+            if set(self._tokenize(doc["name"])) & query_tokens:
+                exact.append({**doc, "score": 1.0})
+
         if self._use_embeddings and self._embeddings is not None:
             results = self._semantic_search(query, top_k)
-            if results:
-                return results
-            # All scores ≤ 0 → embeddings are useless for this query → fall back to BM25
-            logger.info("Semantic search returned 0 results, falling back to BM25 for query: %s", query)
-        return self._bm25_search(query, top_k)
+            if not results:
+                logger.info("Semantic search returned 0 results, falling back to BM25 for query: %s", query)
+                results = self._bm25_search(query, top_k)
+        else:
+            results = self._bm25_search(query, top_k)
+
+        # Merge: exact matches first, dedupe by (server, name), then truncate to top_k.
+        seen: set[tuple[str, str]] = set()
+        merged: list[dict] = []
+        for item in exact + results:
+            key = (item["server"], item["name"])
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+            if len(merged) >= top_k:
+                break
+        return merged
 
     def _semantic_search(self, query: str, top_k: int) -> list[dict]:
         """Dense retrieval via embedding cosine similarity."""
