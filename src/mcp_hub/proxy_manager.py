@@ -17,7 +17,6 @@ from fastmcp.client import Client
 from fastmcp.client.transports.http import StreamableHttpTransport
 from fastmcp.client.transports.sse import SSETransport
 from fastmcp.client.transports.stdio import StdioTransport
-from fastmcp.server import create_proxy
 from fastmcp.server.providers import proxy as _proxy_providers
 from fastmcp.server.providers.proxy import FastMCPProxy
 
@@ -726,9 +725,11 @@ class ProxyManager:
     async def _create_proxy(self, name: str, config: dict) -> tuple[FastMCPProxy, Client]:
         """config から FastMCPProxy を生成。env変数はここで展開する。
 
-        素の fastmcp Client を接続確立（__aenter__）してから create_proxy に
-        渡す。fastmcp は接続済み Client を渡すと同一セッションを再利用する
-        ため、list_tools ごとの initialize ハンドシェイクを回避できる。
+        素の fastmcp Client を接続確立（__aenter__）してから FastMCPProxy に
+        client_factory 経由で渡す。fastmcp は接続済み Client を渡すと同一
+        セッションを再利用するため、list_tools ごとの initialize ハンド
+        シェイクを回避できる。client_factory は error 状態なら即時 raise
+        する（死んだサーバーがリモート read_timeout でブロックしない）。
 
         (proxy, client) を返す。client の所有権は呼び出し元が持ち、
         close は呼び出し元（または破棄経路）が行う。
@@ -764,12 +765,33 @@ class ProxyManager:
         # 接続確立（Client は reentrant: __aenter__ で接続、close で切断）
         await client.__aenter__()
         try:
-            proxy = create_proxy(client, name=name)
+            # fastmcp の _create_client_factory が行う header forwarding の移植
+            # （接続済み Client の transport に incoming header 伝播を設定）
+            transport = getattr(client, "transport", None)
+            if isinstance(transport, (StreamableHttpTransport, SSETransport)):
+                transport.forward_incoming_headers = True
+            proxy = FastMCPProxy(
+                client_factory=self._make_client_factory(name, client),
+                name=name,
+            )
         except Exception:
-            await client.close()  # create_proxy 失敗時のリーク防止
+            await client.close()  # FastMCPProxy 生成失敗時のリーク防止
             raise
         self._clients[name] = client  # 登録は維持
         return proxy, client
+
+    def _make_client_factory(self, name: str, client: Any) -> Callable[[], Any]:
+        """Return a client factory that raises immediately when the server is in error state.
+
+        Called by FastMCPProxy._get_client() on every request (list_tools etc.);
+        raising here makes the aggregate provider skip the dead server immediately
+        instead of blocking on a remote read timeout.
+        """
+        def client_factory() -> Any:
+            if self._status.get(name) == "error":
+                raise RuntimeError(f"Server '{name}' is in error state; skipping request")
+            return client
+        return client_factory
 
     async def _rebuild_mounts(self) -> None:
         """全プロキシを再マウント（追加/削除後の整合性確保）。

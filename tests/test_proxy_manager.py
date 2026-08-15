@@ -18,6 +18,18 @@ class _MockProxy:
         return []
 
 
+class _MockProxyFactory:
+    """Callable stand-in for FastMCPProxy: records call args, returns a mock proxy."""
+
+    def __init__(self, name="mock"):
+        self.name = name
+        self.call_args = None
+
+    def __call__(self, *args, **kwargs):
+        self.call_args = (args, kwargs)
+        return _MockProxy(self.name)
+
+
 def _make_manager():
     mcp = type("MCP", (), {"mount": lambda self, p, namespace=None: None})()
     return ProxyManager(mcp, {})
@@ -26,7 +38,8 @@ def _make_manager():
 class TestCreateProxyUrlEnv:
     def test_unique_token_env_derives_bearer_header(self):
         pm = _make_manager()
-        with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")), \
+        factory = _MockProxyFactory("m")
+        with patch("mcp_hub.proxy_manager.FastMCPProxy", factory), \
              patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
             proxy, _ = asyncio.run(pm._create_proxy("map", {
                 "url": "https://example.com/mcp",
@@ -39,7 +52,7 @@ class TestCreateProxyUrlEnv:
 
     def test_explicit_headers_take_precedence(self):
         pm = _make_manager()
-        with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")), \
+        with patch("mcp_hub.proxy_manager.FastMCPProxy", _MockProxyFactory("m")), \
              patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
             asyncio.run(pm._create_proxy("map", {
                 "url": "https://example.com/mcp",
@@ -51,7 +64,8 @@ class TestCreateProxyUrlEnv:
 
     def test_ambiguous_env_no_bearer_header_derived(self):
         pm = _make_manager()
-        with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")) as cp, \
+        factory = _MockProxyFactory("m")
+        with patch("mcp_hub.proxy_manager.FastMCPProxy", factory), \
              patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
             asyncio.run(pm._create_proxy("map", {
                 "url": "https://example.com/mcp",
@@ -61,7 +75,7 @@ class TestCreateProxyUrlEnv:
         client_cls.assert_called_once()
         transport = client_cls.call_args.kwargs["transport"]
         assert not transport.headers
-        cp.assert_called_once()
+        assert factory.call_args is not None
 
 
 class TestRenameServer:
@@ -265,30 +279,38 @@ class TestConnectMountRaceGuard:
 
 
 class TestConnectedClientKept:
-    """_create_proxy が接続済み Client を create_proxy に渡し、_clients に保持すること。"""
+    """_create_proxy が接続済み Client を client_factory に渡し、_clients に保持すること。"""
 
     def test_url_server_connects_and_keeps_client(self):
         pm = _make_manager()
-        with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")) as cp, \
+        factory = _MockProxyFactory("m")
+        with patch("mcp_hub.proxy_manager.FastMCPProxy", factory), \
              patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
             proxy, _client = asyncio.run(pm._create_proxy("map", {
                 "url": "https://example.com/mcp",
                 "headers": {"Authorization": "Bearer x"},
             }))
         client_cls.return_value.__aenter__.assert_awaited_once()
-        cp.assert_called_once_with(client_cls.return_value, name="map")
+        assert factory.call_args is not None
+        kwargs = factory.call_args[1]
+        assert kwargs["name"] == "map"
+        # client_factory は error チェック付き（healthy なら接続済み client を返す）
+        assert kwargs["client_factory"]() is client_cls.return_value
         assert pm._clients["map"] is client_cls.return_value
         assert proxy.name == "m"
 
     def test_stdio_server_connects_and_keeps_client(self):
         pm = _make_manager()
-        with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")) as cp, \
+        factory = _MockProxyFactory("m")
+        with patch("mcp_hub.proxy_manager.FastMCPProxy", factory), \
              patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
             asyncio.run(pm._create_proxy("srv", {
                 "command": "uvx", "args": ["mcp-server"],
             }))
         client_cls.return_value.__aenter__.assert_awaited_once()
-        cp.assert_called_once_with(client_cls.return_value, name="srv")
+        assert factory.call_args is not None
+        assert factory.call_args[1]["name"] == "srv"
+        assert factory.call_args[1]["client_factory"]() is client_cls.return_value
         assert pm._clients["srv"] is client_cls.return_value
 
 
@@ -391,7 +413,7 @@ class TestClientCleanup:
 
     def test_create_proxy_failure_closes_client(self):
         pm = _make_manager()
-        with patch("mcp_hub.proxy_manager.create_proxy",
+        with patch("mcp_hub.proxy_manager.FastMCPProxy",
                    side_effect=RuntimeError("boom")), \
              patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
             with pytest.raises(RuntimeError):
@@ -399,3 +421,26 @@ class TestClientCleanup:
         client_cls.return_value.__aenter__.assert_awaited_once()
         client_cls.return_value.close.assert_awaited_once()
         assert "srv" not in pm._clients
+
+
+class TestClientFactoryErrorGuard:
+    """P1: status=error のサーバーでは client_factory が即時 raise する。
+
+    FastMCPProxy._get_client() はリクエストごとに client_factory() を呼ぶ。
+    error 状態で raise することで、死んだサーバーがリモート read_timeout
+    でブロックするのを防ぐ（aggregate provider が即スキップする）。
+    """
+
+    def test_client_factory_raises_for_error_server(self):
+        pm = _make_manager()
+        pm._status = {"dead": "error"}
+        factory = pm._make_client_factory("dead", AsyncMock())
+        with pytest.raises(RuntimeError):
+            factory()
+
+    def test_client_factory_returns_client_for_healthy_server(self):
+        pm = _make_manager()
+        pm._status = {"alive": "connected"}
+        client = AsyncMock()
+        factory = pm._make_client_factory("alive", client)
+        assert factory() is client
