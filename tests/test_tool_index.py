@@ -76,6 +76,74 @@ class TestToolIndex:
             assert len(results) == 0  # BM25 correctly finds no match
 
 
+class TestIdentifierPromotion:
+    """Identifier match promotion: a tool whose name shares a token with the
+    query must never be buried by semantic ranking or top_k truncation."""
+
+    @pytest.fixture
+    async def many_docs_index(self):
+        docs = [
+            {
+                "name": f"util_{i}",
+                "description": f"Create generic helper utility number {i}",
+                "server": "util",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+            for i in range(12)
+        ]
+        docs.append({
+            "name": "memory_create",
+            "description": "Create a memory record",
+            "server": "memory",
+            "inputSchema": {"type": "object", "properties": {}},
+        })
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        return idx
+
+    async def test_search_identifier_match_promoted(self, many_docs_index):
+        """Query containing a tool name token promotes that tool to the front."""
+        results = many_docs_index.search("create memory record memory_create", top_k=10)
+        assert len(results) >= 1
+        assert results[0]["name"] == "memory_create"
+        # Promoted docs carry a score for field consistency
+        assert results[0]["score"] == 1.0
+
+    async def test_search_identifier_match_not_buried_by_top_k(self, index):
+        """Even when the underlying ranking puts the name-matched tool beyond
+        top_k, promotion keeps it in the results (semantic-path regression)."""
+        idx = index
+        target = next(d for d in idx._documents if d["name"] == "brave_web_search")
+        assert not any(
+            d["name"] != target["name"]
+            and set(ToolIndex._tokenize(d["name"])) & set(ToolIndex._tokenize(target["name"]))
+            for d in idx._documents
+        ), "fixture: target name tokens must not overlap other tool names"
+
+        # Simulate a hostile ranking (e.g. embeddings) that ranks the exact
+        # name match outside the top_k window.
+        def fake_bm25(query, top_k):
+            others = [d for d in idx._documents if d["name"] != "brave_web_search"]
+            ranked = others + [target]
+            return [
+                {**d, "score": round(0.5, 4)} for d in ranked[:top_k]
+            ]
+
+        idx._bm25_search = fake_bm25
+        results = idx.search("brave_web_search", top_k=3)
+        names = [r["name"] for r in results]
+        assert "brave_web_search" in names
+        # Promotion places it first, and dedupe keeps a single entry
+        assert results[0]["name"] == "brave_web_search"
+        assert names.count("brave_web_search") == 1
+
+    async def test_search_promotion_survives_short_top_k(self, many_docs_index):
+        """top_k=3 still returns the identifier-matched tool."""
+        results = many_docs_index.search("memory_create", top_k=3)
+        names = [r["name"] for r in results]
+        assert "memory_create" in names
+
+
 class TestTokenizer:
     """Code-aware tokenizer unit tests."""
 
