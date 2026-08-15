@@ -402,6 +402,7 @@ class ProxyManager:
 
         import time
         timeout = float(os.environ.get("MCP_HUB_LIST_TOOLS_TIMEOUT", "10.0"))
+        max_failures = int(os.environ.get("MCP_HUB_HEALTH_MAX_FAILURES", "3"))
 
         # Snapshot under lock to prevent dict-mutation-during-iteration races
         async with self._lock:
@@ -439,12 +440,17 @@ class ProxyManager:
                 tools = await asyncio.wait_for(
                     self.list_tools_for_server(name, proxy), timeout=timeout
                 )
+                self._health_failures.pop(name, None)  # success resets counter
                 return name, [{"name": t.name, "description": t.description or ""} for t in tools]
             except asyncio.TimeoutError:
                 logger.warning("list_tools timed out for %s after %.1fs", name, timeout)
+                if self._record_health_failure(name, "timeout", max_failures):
+                    await self._mark_error(name, f"list_tools timeout after {timeout}s")
                 return name, []
             except Exception:
                 logger.warning("Failed to list tools for %s", name)
+                if self._record_health_failure(name, "exception", max_failures):
+                    await self._mark_error(name, "list_tools failed")
                 return name, []
 
         # 並列実行（gather は入力順を保持。name もタスクに紐づけて二重に保証）
@@ -570,6 +576,12 @@ class ProxyManager:
         self._health_failures[name] = 0
         return True
 
+    async def _mark_error(self, name: str, error_msg: str) -> None:
+        """Mark a server as error and notify disconnect."""
+        async with self._lock:
+            self._status[name] = "error"
+        await self._notify_change(name, "disconnected", {"error": error_msg})
+
     async def _health_check(self) -> None:
         """Check all connected servers, recover failed ones."""
         # Snapshots under lock (prevents dict mutation during iteration)
@@ -601,18 +613,14 @@ class ProxyManager:
                     to_recover.append(name)
             except asyncio.TimeoutError:
                 if self._record_health_failure(name, "timeout", max_failures):
-                    async with self._lock:
-                        self._status[name] = "error"
-                    await self._notify_change(name, "disconnected", {"error": "Health check timeout"})
+                    await self._mark_error(name, "Health check timeout")
             except asyncio.CancelledError:
                 raise
             except Exception:
                 if status_snapshot.get(name) == "connected":
                     logger.warning("Server %s health check failed", name)
                 if self._record_health_failure(name, "exception", max_failures):
-                    async with self._lock:
-                        self._status[name] = "error"
-                    await self._notify_change(name, "disconnected", {"error": "Health check failed"})
+                    await self._mark_error(name, "Health check failed")
 
         # Recovery: reconnect failed servers that HAVE a proxy (outside lock for IO)
         for name in to_recover:

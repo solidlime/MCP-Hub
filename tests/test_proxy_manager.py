@@ -444,3 +444,59 @@ class TestClientFactoryErrorGuard:
         client = AsyncMock()
         factory = pm._make_client_factory("alive", client)
         assert factory() is client
+
+
+class TestListToolsFailureEscalation:
+    """P2: list_tools の連続失敗で status=error に昇格、成功でカウンタリセット。"""
+
+    def _manager_with_server(self, name="srv"):
+        pm = _make_manager()
+        pm._proxies = {name: _MockProxy(name)}
+        pm._server_configs = {name: {"url": "http://x"}}
+        pm._status = {name: "connected"}
+        pm._notify_change = AsyncMock()
+        return pm
+
+    def test_consecutive_failures_mark_error_after_threshold(self):
+        pm = self._manager_with_server()
+
+        async def failing(name, proxy):
+            raise RuntimeError("boom")
+
+        pm.list_tools_for_server = failing
+        with patch.dict(os.environ, {"MCP_HUB_HEALTH_MAX_FAILURES": "3"}):
+            asyncio.run(pm.list_tools())
+            assert pm._status["srv"] == "connected"  # 1回目: error 化しない
+            asyncio.run(pm.list_tools())
+            assert pm._status["srv"] == "connected"  # 2回目: まだ
+            asyncio.run(pm.list_tools())
+            assert pm._status["srv"] == "error"  # 3回目: error に昇格
+        pm._notify_change.assert_awaited_with(
+            "srv", "disconnected", {"error": "list_tools failed"}
+        )
+
+    def test_success_resets_failure_counter(self):
+        pm = self._manager_with_server()
+        pm._health_failures["srv"] = 1  # 失敗するとカウント2
+
+        async def failing(name, proxy):
+            raise RuntimeError("boom")
+
+        async def succeeding(name, proxy):
+            return [SimpleNamespace(name="t", description="d")]
+
+        pm.list_tools_for_server = failing
+        with patch.dict(os.environ, {"MCP_HUB_HEALTH_MAX_FAILURES": "3"}):
+            asyncio.run(pm.list_tools())  # 失敗 → カウント2（error 化しない）
+        assert pm._status["srv"] == "connected"
+        assert pm._health_failures["srv"] == 2
+
+        pm.list_tools_for_server = succeeding
+        asyncio.run(pm.list_tools())  # 成功 → カウンタリセット
+        assert "srv" not in pm._health_failures
+
+        pm.list_tools_for_server = failing
+        with patch.dict(os.environ, {"MCP_HUB_HEALTH_MAX_FAILURES": "3"}):
+            asyncio.run(pm.list_tools())  # 失敗 → カウント1
+            asyncio.run(pm.list_tools())  # 失敗 → カウント2
+        assert pm._status["srv"] == "connected"  # リセット済みなので error 化しない
