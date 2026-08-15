@@ -1828,6 +1828,32 @@
                 </div>
 
                 <div class="setting-group">
+                    <label class="setting-label">⏱️ 接続タイムアウト</label>
+                    <div class="setting-row">
+                        <label class="setting-label" style="min-width:120px; font-size:13px;">クライアント</label>
+                        <input type="number" id="clientTimeout" class="setting-input"
+                               placeholder="未設定（デフォルト）" min="1" max="300"
+                               onchange="saveClientTimeout(this.value)"
+                               aria-label="クライアントタイムアウト（秒）">
+                        <span style="font-size:12px; color:var(--text-muted); white-space:nowrap;">秒</span>
+                    </div>
+                    <p class="setting-hint">
+                        アップストリームの応答待ち上限（秒）。未設定でデフォルト。
+                    </p>
+                    <div class="setting-row" style="margin-top:8px;">
+                        <label class="setting-label" style="min-width:120px; font-size:13px;">接続確認</label>
+                        <input type="number" id="connectTimeout" class="setting-input"
+                               placeholder="未設定（デフォルト）" min="1" max="300"
+                               onchange="saveConnectTimeout(this.value)"
+                               aria-label="接続確認タイムアウト（秒）">
+                        <span style="font-size:12px; color:var(--text-muted); white-space:nowrap;">秒</span>
+                    </div>
+                    <p class="setting-hint">
+                        起動時の接続確認の上限（秒）。未設定でデフォルト。
+                    </p>
+                </div>
+
+                <div class="setting-group">
                     <label class="setting-label">🔑 APIキー</label>
                     <div class="setting-row">
                         <input type="password" id="settings-apikey" class="setting-input"
@@ -3336,6 +3362,11 @@
                 fullInfoTools = settings.full_info_tools || [];
                 document.getElementById('metaModeToggle').checked = metaMode;
                 updateMetaModeDescription(metaMode);
+                // タイムアウト設定の反映（null なら空欄）
+                const clientEl = document.getElementById('clientTimeout');
+                const connectEl = document.getElementById('connectTimeout');
+                if (clientEl) clientEl.value = settings.client_timeout != null ? settings.client_timeout : '';
+                if (connectEl) connectEl.value = settings.connect_timeout != null ? settings.connect_timeout : '';
                 statusDot.style.background = 'var(--accent-green)';
                 statusText.textContent = '接続済';
                 // 設定読込は loadServers と並行で走るため、後から読めた場合は
@@ -3374,6 +3405,37 @@
                 // Revert on error
                 if (embeddingModel) el.value = embeddingModel;
                 showToast(error.message, 'error');
+            } finally {
+                el.disabled = false;
+            }
+        }
+
+        async function saveClientTimeout(value) {
+            const el = document.getElementById('clientTimeout');
+            try {
+                el.disabled = true;
+                const num = value.trim() === '' ? null : Number(value);
+                await API.patchSettings({ client_timeout: num });
+                showToast(num !== null ? `クライアントタイムアウトを ${num}秒 に設定しました` : 'クライアントタイムアウトをリセットしました', 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+                // 入力を再読込で上書き
+                loadSettings();
+            } finally {
+                el.disabled = false;
+            }
+        }
+
+        async function saveConnectTimeout(value) {
+            const el = document.getElementById('connectTimeout');
+            try {
+                el.disabled = true;
+                const num = value.trim() === '' ? null : Number(value);
+                await API.patchSettings({ connect_timeout: num });
+                showToast(num !== null ? `接続確認タイムアウトを ${num}秒 に設定しました` : '接続確認タイムアウトをリセットしました', 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+                loadSettings();
             } finally {
                 el.disabled = false;
             }

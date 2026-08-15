@@ -110,8 +110,8 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `MCP_HUB_MAX_CONCURRENT_CALLS` | `50` | 同時ツール呼び出しの最大数（DoS 対策セマフォ） |
 | `MCP_HUB_CALL_TOOL_TIMEOUT` | `30` | ツール呼び出しのタイムアウト（秒） |
 | `MCP_HUB_LIST_TOOLS_RETRY_DELAY` | `0.3` | `list_tools()` リトライ時の遅延（秒） |
-| `MCP_HUB_CLIENT_TIMEOUT` | (未設定) | アップストリームへのリクエスト読み取りタイムアウト（秒）。未設定時は fastmcp/mcp SDK のデフォルト。応答しないサーバーが tools/list をブロックするのを防ぐには `2`〜`5` を推奨 |
-| `MCP_HUB_CONNECT_TIMEOUT` | `30.0` | 起動時の接続確認 `list_tools()` のタイムアウト（秒） |
+| `MCP_HUB_CLIENT_TIMEOUT` | (未設定) | アップストリームへのリクエスト読み取りタイムアウト（秒）。未設定時は fastmcp/mcp SDK のデフォルト。応答しないサーバーが tools/list をブロックするのを防ぐには `2`〜`5` を推奨。WebUI の Hub 設定「⏱️ 接続タイムアウト」からも設定可能（保存値が env より優先） |
+| `MCP_HUB_CONNECT_TIMEOUT` | `30.0` | 起動時の接続確認 `list_tools()` のタイムアウト（秒）。WebUI の Hub 設定「⏱️ 接続タイムアウト」からも設定可能（保存値が env より優先） |
 
 ### `MCP_HUB_RESEED=1` の動作
 
