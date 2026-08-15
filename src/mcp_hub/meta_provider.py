@@ -222,9 +222,14 @@ class ToolIndex:
     def search(self, query: str, top_k: int = 10) -> list[dict]:
         """Search tools by keyword or semantic query.
 
-        Identifier matches (a tool whose name shares a token with the query)
-        are promoted to the front: semantic ranking and top_k truncation must
-        never bury an exact name match.
+        Contract:
+        - Identifier matches (tools whose name shares a token with the query)
+          are promoted to the front, ranked by shared token count (descending).
+        - Underlying semantic/BM25 results follow as tail.
+        - score is the shared token count for promoted entries, and the
+          ranker's real score otherwise.
+        - top_k truncation applies after promotion, so an exact name match is
+          never buried by ranking or truncation.
 
         Uses embedding-based semantic search when fastembed is available,
         otherwise falls back to BM25 keyword search.
@@ -244,11 +249,15 @@ class ToolIndex:
             return []
         query_tokens = set(self._tokenize(query))
 
-        # Identifier matches first: name tokens ∩ query tokens.
+        # Identifier matches: rank by shared token count (desc) so the tool whose
+        # name literally matches the query outranks loose partial hits. score =
+        # shared token count expresses "name-match strength".
         exact = []
         for doc in self._documents:
-            if set(self._tokenize(doc["name"])) & query_tokens:
-                exact.append({**doc, "score": 1.0})
+            shared = len(set(self._tokenize(doc["name"])) & query_tokens)
+            if shared > 0:
+                exact.append({**doc, "score": float(shared)})
+        exact.sort(key=lambda d: d["score"], reverse=True)  # stable: ties keep doc order
 
         if self._use_embeddings and self._embeddings is not None:
             results = self._semantic_search(query, top_k)
@@ -258,10 +267,10 @@ class ToolIndex:
         else:
             results = self._bm25_search(query, top_k)
 
-        # Merge: exact matches first, dedupe by (server, name), then truncate to top_k.
+        # exact matches first (truncated to top_k), then underlying results as tail.
         seen: set[tuple[str, str]] = set()
         merged: list[dict] = []
-        for item in exact + results:
+        for item in exact[:top_k] + results:
             key = (item["server"], item["name"])
             if key in seen:
                 continue
