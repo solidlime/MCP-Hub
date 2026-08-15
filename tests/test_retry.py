@@ -69,7 +69,7 @@ class TestConnectServer:
         """Retries on ConnectionError, eventually succeeds."""
         proxy_ok = _MockProxy("srv")
         manager._create_proxy = AsyncMock(
-            side_effect=[ConnectionError("fail1"), ConnectionError("fail2"), proxy_ok]
+            side_effect=[ConnectionError("fail1"), ConnectionError("fail2"), (proxy_ok, AsyncMock())]
         )
 
         proxy = await manager._connect_server("srv", {})
@@ -108,7 +108,7 @@ class TestRegisterServer:
     async def test_register_server_saves_and_returns_immediately(self, manager):
         """register_server saves to DB, starts background connect, returns immediately."""
         manager.registry.add_server = AsyncMock()
-        manager._create_proxy = AsyncMock(return_value=_MockProxy("srv1"))
+        manager._create_proxy = AsyncMock(return_value=(_MockProxy("srv1"), AsyncMock()))
 
         result = await manager.register_server("srv1", {"url": "http://localhost:9999"})
 

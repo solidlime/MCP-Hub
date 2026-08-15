@@ -56,7 +56,7 @@ class TestEventFiring:
         pm._server_configs["fetch"] = {"command": "uvx", "args": []}
         fake_proxy = AsyncMock()
         fake_proxy.list_tools = AsyncMock(return_value=[type("T", (), {"name": "fetch", "description": ""})()])
-        with patch.object(pm, "_create_proxy", AsyncMock(return_value=fake_proxy)):
+        with patch.object(pm, "_create_proxy", AsyncMock(return_value=(fake_proxy, AsyncMock()))):
             asyncio.run(pm._connect_and_mount("fetch", {"command": "uvx", "args": []}))
 
         assert ("fetch", "connected") in events

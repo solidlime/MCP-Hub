@@ -28,7 +28,7 @@ class TestCreateProxyUrlEnv:
         pm = _make_manager()
         with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")), \
              patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
-            proxy = asyncio.run(pm._create_proxy("map", {
+            proxy, _ = asyncio.run(pm._create_proxy("map", {
                 "url": "https://example.com/mcp",
                 "env": {"MAPBOX_ACCESS_TOKEN": "abc"},
             }))
@@ -165,7 +165,7 @@ class TestConnectMountRaceGuard:
         pm.mcp.mount = fake_mount
 
         async def fake_create_proxy(name, config):
-            return _MockProxy(name)
+            return _MockProxy(name), AsyncMock()
 
         with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
             async def run():
@@ -189,7 +189,7 @@ class TestConnectMountRaceGuard:
         async def fake_create_proxy(name, config):
             # Phase 1 と Phase 2 の間にリネーム/削除された状態を再現
             pm._server_configs.pop(name, None)
-            return _MockProxy("m")
+            return _MockProxy("m"), AsyncMock()
 
         with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
             async def run():
@@ -271,7 +271,7 @@ class TestConnectedClientKept:
         pm = _make_manager()
         with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")) as cp, \
              patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
-            proxy = asyncio.run(pm._create_proxy("map", {
+            proxy, _client = asyncio.run(pm._create_proxy("map", {
                 "url": "https://example.com/mcp",
                 "headers": {"Authorization": "Bearer x"},
             }))
@@ -325,7 +325,7 @@ class TestClientCleanup:
 
         async def fake_create_proxy(name, config):
             pm._clients[name] = new_client  # 実装と同じく新 client を登録
-            return _MockProxy("srv")
+            return _MockProxy("srv"), new_client
 
         with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
             asyncio.run(pm.refresh_server("srv", {"url": "http://x"}))
@@ -357,13 +357,37 @@ class TestClientCleanup:
                 raise RuntimeError("boom")
 
         async def fake_create_proxy(name, config):
-            return _BrokenProxy()
+            return _BrokenProxy(), client
 
         with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
             asyncio.run(pm._connect_and_mount("srv", {"url": "http://x"}))
 
         client.close.assert_awaited_once()
         assert "srv" not in pm._clients
+
+    def test_connect_and_mount_failure_keeps_others_client(self):
+        """list_tools 検証中に別フローが _clients[name] を差し替えた場合、
+        自分が作った client は close せず、差し替え後の client も維持する。"""
+        pm = _make_manager()
+        pm._server_configs = {"srv": {"url": "http://x"}}
+        my_client = AsyncMock()
+        other_client = AsyncMock()
+        pm._clients = {"srv": other_client}  # 別フローが差し替え済み
+        pm._notify_change = AsyncMock()
+
+        class _BrokenProxy:
+            async def list_tools(self):
+                raise RuntimeError("boom")
+
+        async def fake_create_proxy(name, config):
+            return _BrokenProxy(), my_client
+
+        with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
+            asyncio.run(pm._connect_and_mount("srv", {"url": "http://x"}))
+
+        my_client.close.assert_not_awaited()
+        other_client.close.assert_not_awaited()
+        assert pm._clients["srv"] is other_client  # 差し替え後の client を維持
 
     def test_create_proxy_failure_closes_client(self):
         pm = _make_manager()
