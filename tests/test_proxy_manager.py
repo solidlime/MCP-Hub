@@ -3,7 +3,7 @@ import asyncio
 import os
 import time
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -24,11 +24,11 @@ class TestCreateProxyUrlEnv:
     def test_unique_token_env_derives_bearer_header(self):
         pm = _make_manager()
         with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")), \
-             patch("mcp_hub.proxy_manager.Client") as client_cls:
-            proxy = pm._create_proxy("map", {
+             patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
+            proxy = asyncio.run(pm._create_proxy("map", {
                 "url": "https://example.com/mcp",
                 "env": {"MAPBOX_ACCESS_TOKEN": "abc"},
-            })
+            }))
         client_cls.assert_called_once()
         transport = client_cls.call_args.kwargs["transport"]
         assert transport.headers["Authorization"] == "Bearer abc"
@@ -37,25 +37,28 @@ class TestCreateProxyUrlEnv:
     def test_explicit_headers_take_precedence(self):
         pm = _make_manager()
         with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")), \
-             patch("mcp_hub.proxy_manager.Client") as client_cls:
-            pm._create_proxy("map", {
+             patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
+            asyncio.run(pm._create_proxy("map", {
                 "url": "https://example.com/mcp",
                 "headers": {"Authorization": "Bearer explicit"},
                 "env": {"MAPBOX_ACCESS_TOKEN": "abc"},
-            })
+            }))
         transport = client_cls.call_args.kwargs["transport"]
         assert transport.headers["Authorization"] == "Bearer explicit"
 
-    def test_ambiguous_env_falls_back_to_url_proxy(self):
+    def test_ambiguous_env_no_bearer_header_derived(self):
         pm = _make_manager()
         with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")) as cp, \
-             patch("mcp_hub.proxy_manager.Client") as client_cls:
-            pm._create_proxy("map", {
+             patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
+            asyncio.run(pm._create_proxy("map", {
                 "url": "https://example.com/mcp",
                 "env": {"TOKEN": "t", "SECRET": "s"},
-            })
-        cp.assert_called_once_with("https://example.com/mcp", name="map")
-        client_cls.assert_not_called()
+            }))
+        # 曖昧な env からは Authorization を導出しない → headers なしの素の Client
+        client_cls.assert_called_once()
+        transport = client_cls.call_args.kwargs["transport"]
+        assert not transport.headers
+        cp.assert_called_once()
 
 
 class TestRenameServer:
@@ -63,6 +66,7 @@ class TestRenameServer:
         pm = _make_manager()
         proxy = _MockProxy("old")
         pm._proxies = {"old": proxy}
+        pm._clients = {"old": AsyncMock()}  # 接続済み client
         pm._server_configs = {"old": {"url": "http://x"}}
         pm._status = {"old": "connected"}
         pm._tool_counts = {"old": 3}
@@ -71,6 +75,7 @@ class TestRenameServer:
 
     def test_rename_rekeys_state_and_reuses_proxy(self):
         pm, proxy = self._manager_with_server()
+        old_client = pm._clients["old"]
         rebuild_called = []
 
         async def fake_rebuild():
@@ -92,6 +97,9 @@ class TestRenameServer:
         # 同一プロキシインスタンスを再利用（接続維持）
         assert "old" not in pm._proxies
         assert pm._proxies["new"] is proxy
+        # 接続済み client も rekey（接続維持）
+        assert "old" not in pm._clients
+        assert pm._clients["new"] is old_client
         assert "old" not in pm._server_configs
         assert pm._server_configs["new"] == {"url": "http://x"}
         assert pm._status["new"] == "connected"
@@ -171,12 +179,12 @@ class TestConnectMountRaceGuard:
 
         pm.mcp.mount = fake_mount
 
-        def fake_create_proxy(*args, name=None, **kwargs):
+        async def fake_create_proxy(name, config):
             # Phase 1 と Phase 2 の間にリネーム/削除された状態を再現
             pm._server_configs.pop(name, None)
             return _MockProxy("m")
 
-        with patch("mcp_hub.proxy_manager.create_proxy", side_effect=fake_create_proxy):
+        with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
             async def run():
                 await pm.refresh_server("old", {"url": "http://x"})
 
@@ -245,3 +253,5 @@ class TestConnectMountRaceGuard:
 
         assert result["slow"] == []
         assert result["fast"] == [{"name": "ok", "description": ""}]
+
+
