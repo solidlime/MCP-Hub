@@ -184,7 +184,7 @@ def apply_patch() -> None:
     global _patch_applied
     if _patch_applied:
         return
-    StreamableHTTPTransport._handle_post_request = _patched_handle_post_request
+    StreamableHTTPTransport._handle_post_request = _patched_handle_post_request  # type: ignore[method-assign]
     _patch_applied = True
     logger.info("Streamable HTTP 202 polling patch applied")
 
@@ -194,6 +194,6 @@ def restore_patch() -> None:
     global _patch_applied
     if not _patch_applied:
         return
-    StreamableHTTPTransport._handle_post_request = _original_handle_post_request
+    StreamableHTTPTransport._handle_post_request = _original_handle_post_request  # type: ignore[method-assign]
     _patch_applied = False
     logger.info("Streamable HTTP 202 polling patch restored")
