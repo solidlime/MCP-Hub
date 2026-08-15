@@ -56,7 +56,7 @@ class TestEventFiring:
         pm._server_configs["fetch"] = {"command": "uvx", "args": []}
         fake_proxy = AsyncMock()
         fake_proxy.list_tools = AsyncMock(return_value=[type("T", (), {"name": "fetch", "description": ""})()])
-        with patch.object(pm, "_create_proxy", return_value=fake_proxy):
+        with patch.object(pm, "_create_proxy", AsyncMock(return_value=fake_proxy)):
             asyncio.run(pm._connect_and_mount("fetch", {"command": "uvx", "args": []}))
 
         assert ("fetch", "connected") in events
@@ -66,7 +66,7 @@ class TestEventFiring:
         events = []
         pm.on_change(lambda name, event, detail=None: events.append((name, event)))
 
-        with patch.object(pm, "_create_proxy", side_effect=RuntimeError("no such command")):
+        with patch.object(pm, "_create_proxy", AsyncMock(side_effect=RuntimeError("no such command"))):
             asyncio.run(pm._connect_and_mount("fetch", {"command": "uvx", "args": []}))
 
         assert ("fetch", "spawn_failed") in events

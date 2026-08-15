@@ -68,7 +68,7 @@ class TestConnectServer:
     async def test_connect_server_retries_on_transient_error(self, manager):
         """Retries on ConnectionError, eventually succeeds."""
         proxy_ok = _MockProxy("srv")
-        manager._create_proxy = MagicMock(
+        manager._create_proxy = AsyncMock(
             side_effect=[ConnectionError("fail1"), ConnectionError("fail2"), proxy_ok]
         )
 
@@ -82,7 +82,7 @@ class TestConnectServer:
     async def test_connect_server_exhausts_retries(self, manager, monkeypatch):
         """Returns None after max retries exhausted."""
         monkeypatch.setenv("MCP_HUB_RETRY_MAX", "1")
-        manager._create_proxy = MagicMock(side_effect=ConnectionError("fail"))
+        manager._create_proxy = AsyncMock(side_effect=ConnectionError("fail"))
 
         proxy = await manager._connect_server("srv", {})
 
@@ -93,7 +93,7 @@ class TestConnectServer:
     @pytest.mark.asyncio
     async def test_connect_server_no_retry_on_valueerror(self, manager):
         """ValueError is not retried — breaks out immediately."""
-        manager._create_proxy = MagicMock(side_effect=ValueError("bad config"))
+        manager._create_proxy = AsyncMock(side_effect=ValueError("bad config"))
 
         proxy = await manager._connect_server("srv", {})
 
@@ -108,7 +108,7 @@ class TestRegisterServer:
     async def test_register_server_saves_and_returns_immediately(self, manager):
         """register_server saves to DB, starts background connect, returns immediately."""
         manager.registry.add_server = AsyncMock()
-        manager._create_proxy = MagicMock(return_value=_MockProxy("srv1"))
+        manager._create_proxy = AsyncMock(return_value=_MockProxy("srv1"))
 
         result = await manager.register_server("srv1", {"url": "http://localhost:9999"})
 
