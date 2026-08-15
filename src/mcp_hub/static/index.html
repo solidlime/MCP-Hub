@@ -1832,24 +1832,24 @@
                     <div class="setting-row">
                         <label class="setting-label" style="min-width:120px; font-size:13px;">クライアント</label>
                         <input type="number" id="clientTimeout" class="setting-input"
-                               placeholder="未設定（デフォルト）" min="1" max="300"
+                               placeholder="未設定（30秒）" min="1" max="300"
                                onchange="saveClientTimeout(this.value)"
                                aria-label="クライアントタイムアウト（秒）">
                         <span style="font-size:12px; color:var(--text-muted); white-space:nowrap;">秒</span>
                     </div>
                     <p class="setting-hint">
-                        アップストリームの応答待ち上限（秒）。未設定でデフォルト。
+                        アップストリームの応答待ち上限（秒）。未設定で 30 秒（推奨）。短すぎると正常なツール実行も失敗します。
                     </p>
                     <div class="setting-row" style="margin-top:8px;">
                         <label class="setting-label" style="min-width:120px; font-size:13px;">接続確認</label>
                         <input type="number" id="connectTimeout" class="setting-input"
-                               placeholder="未設定（デフォルト）" min="1" max="300"
+                               placeholder="未設定（30秒）" min="1" max="300"
                                onchange="saveConnectTimeout(this.value)"
                                aria-label="接続確認タイムアウト（秒）">
                         <span style="font-size:12px; color:var(--text-muted); white-space:nowrap;">秒</span>
                     </div>
                     <p class="setting-hint">
-                        起動時の接続確認の上限（秒）。未設定でデフォルト。
+                        起動時の接続確認の上限（秒）。未設定で 30 秒。
                     </p>
                 </div>
 
