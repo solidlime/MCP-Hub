@@ -14,6 +14,9 @@ class _MockProxy:
     def __init__(self, name="mock"):
         self.name = name
 
+    async def list_tools(self):
+        return []
+
 
 def _make_manager():
     mcp = type("MCP", (), {"mount": lambda self, p, namespace=None: None})()
