@@ -90,8 +90,8 @@ class ProxyManager:
     def _client_timeout(self) -> float | None:
         """Read timeout for upstream requests (seconds).
         Priority: DB setting → MCP_HUB_CLIENT_TIMEOUT env → None (SDK default)."""
-        data = getattr(self.registry, "_data", None) or {}
-        db = data.get("client_timeout")
+        data = getattr(self.registry, "_data", None)
+        db = data.get("client_timeout") if isinstance(data, dict) else None
         if db is not None:
             return float(db)
         raw = os.environ.get("MCP_HUB_CLIENT_TIMEOUT")
@@ -100,8 +100,8 @@ class ProxyManager:
     def _connect_timeout(self) -> float:
         """Initial connectivity check timeout (seconds).
         Priority: DB setting → MCP_HUB_CONNECT_TIMEOUT env → 30.0."""
-        data = getattr(self.registry, "_data", None) or {}
-        db = data.get("connect_timeout")
+        data = getattr(self.registry, "_data", None)
+        db = data.get("connect_timeout") if isinstance(data, dict) else None
         if db is not None:
             return float(db)
         return float(os.environ.get("MCP_HUB_CONNECT_TIMEOUT", "30.0"))
