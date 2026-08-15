@@ -255,3 +255,85 @@ class TestConnectMountRaceGuard:
         assert result["fast"] == [{"name": "ok", "description": ""}]
 
 
+
+
+class TestConnectedClientKept:
+    """_create_proxy が接続済み Client を create_proxy に渡し、_clients に保持すること。"""
+
+    def test_url_server_connects_and_keeps_client(self):
+        pm = _make_manager()
+        with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")) as cp, \
+             patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
+            proxy = asyncio.run(pm._create_proxy("map", {
+                "url": "https://example.com/mcp",
+                "headers": {"Authorization": "Bearer x"},
+            }))
+        client_cls.return_value.__aenter__.assert_awaited_once()
+        cp.assert_called_once_with(client_cls.return_value, name="map")
+        assert pm._clients["map"] is client_cls.return_value
+        assert proxy.name == "m"
+
+    def test_stdio_server_connects_and_keeps_client(self):
+        pm = _make_manager()
+        with patch("mcp_hub.proxy_manager.create_proxy", return_value=_MockProxy("m")) as cp, \
+             patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
+            asyncio.run(pm._create_proxy("srv", {
+                "command": "uvx", "args": ["mcp-server"],
+            }))
+        client_cls.return_value.__aenter__.assert_awaited_once()
+        cp.assert_called_once_with(client_cls.return_value, name="srv")
+        assert pm._clients["srv"] is client_cls.return_value
+
+
+class TestClientCleanup:
+    """proxy 破棄時に接続済み client が close され、_clients から消えること。"""
+
+    def test_unregister_closes_and_removes_client(self):
+        pm = _make_manager()
+        pm.registry = SimpleNamespace(remove_server=AsyncMock(return_value=True))
+        client = AsyncMock()
+        pm._proxies = {"srv": _MockProxy("srv")}
+        pm._clients = {"srv": client}
+        pm._server_configs = {"srv": {"url": "http://x"}}
+        pm._status = {"srv": "connected"}
+        pm._tool_counts = {"srv": 1}
+        pm._rebuild_mounts = AsyncMock()
+        pm._notify_change = AsyncMock()
+
+        assert asyncio.run(pm.unregister_server("srv")) is True
+
+        client.close.assert_awaited_once()
+        assert "srv" not in pm._clients
+
+    def test_refresh_closes_old_client(self):
+        pm = _make_manager()
+        old_client = AsyncMock()
+        new_client = AsyncMock()
+        pm._proxies = {"srv": _MockProxy("srv")}
+        pm._clients = {"srv": old_client}
+        pm._server_configs = {"srv": {"url": "http://x"}}
+        pm._status = {"srv": "connected"}
+        pm._rebuild_mounts = AsyncMock()
+        pm._notify_change = AsyncMock()
+
+        async def fake_create_proxy(name, config):
+            pm._clients[name] = new_client  # 実装と同じく新 client を登録
+            return _MockProxy("srv")
+
+        with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
+            asyncio.run(pm.refresh_server("srv", {"url": "http://x"}))
+
+        old_client.close.assert_awaited_once()
+        assert pm._clients["srv"] is new_client
+        assert pm._proxies["srv"].name == "srv"
+
+    def test_close_all_closes_every_client(self):
+        pm = _make_manager()
+        c1, c2 = AsyncMock(), AsyncMock()
+        pm._clients = {"a": c1, "b": c2}
+
+        asyncio.run(pm.close_all())
+
+        c1.close.assert_awaited_once()
+        c2.close.assert_awaited_once()
+        assert pm._clients == {}
