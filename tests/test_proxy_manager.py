@@ -392,7 +392,7 @@ class TestClientCleanup:
     def test_create_proxy_failure_closes_client(self):
         pm = _make_manager()
         with patch("mcp_hub.proxy_manager.create_proxy",
-                   side_effect=RuntimeError("boom")) as cp, \
+                   side_effect=RuntimeError("boom")), \
              patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
             with pytest.raises(RuntimeError):
                 asyncio.run(pm._create_proxy("srv", {"url": "http://x"}))
