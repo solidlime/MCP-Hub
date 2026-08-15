@@ -137,6 +137,9 @@ class ProxyManager:
             await self._notify_change(name, "connected", {"tool_count": len(tools)})
         except asyncio.TimeoutError:
             logger.warning("Server %s connection timed out — health monitor will retry", name)
+            client = self._clients.pop(name, None)
+            if client is not None:
+                await client.close()
             async with self._lock:
                 self._status[name] = "error"
             await self._notify_change(name, "spawn_failed", {"error": "Connection timed out"})
@@ -145,6 +148,9 @@ class ProxyManager:
                 "Server %s failed initial connection — health monitor will retry",
                 name, exc_info=True,
             )
+            client = self._clients.pop(name, None)
+            if client is not None:
+                await client.close()
             async with self._lock:
                 self._status[name] = "error"
             await self._notify_change(name, "spawn_failed", {
@@ -710,8 +716,16 @@ class ProxyManager:
             raise ValueError(f"Invalid config for {name}: need 'url' or 'command'")
         # 接続確立（Client は reentrant: __aenter__ で接続、close で切断）
         await client.__aenter__()
+        try:
+            proxy = create_proxy(client, name=name)
+        except Exception:
+            await client.close()  # create_proxy 失敗時のリーク防止
+            raise
+        old = self._clients.get(name)
+        if old is not None and old is not client:
+            await old.close()  # 上書き前の旧接続を破棄（リトライ/レース対策）
         self._clients[name] = client
-        return create_proxy(client, name=name)
+        return proxy
 
     async def _rebuild_mounts(self) -> None:
         """全プロキシを再マウント（追加/削除後の整合性確保）。
