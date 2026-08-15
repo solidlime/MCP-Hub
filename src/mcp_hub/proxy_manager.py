@@ -62,6 +62,7 @@ class ProxyManager:
         self.mcp = mcp
         self.registry = registry
         self._proxies: dict[str, FastMCPProxy] = {}
+        self._clients: dict[str, Client] = {}  # 接続済み upstream Client（session 再利用のため保持）
         self._server_configs: dict[str, dict] = {}
         self._status: dict[str, str] = {}
         self._tool_counts: dict[str, int] = {}
@@ -92,7 +93,7 @@ class ProxyManager:
         max_retries, base_delay = self._retry_env()
         for attempt in range(max_retries + 1):
             try:
-                proxy = self._create_proxy(name, config)
+                proxy = await self._create_proxy(name, config)
                 self.mcp.mount(proxy, namespace=name)
                 return proxy
             except RETRYABLE_EXCEPTIONS as e:
@@ -117,7 +118,7 @@ class ProxyManager:
         registering the proxy — avoids mounting broken proxies that would
         trigger cascading rebuild_index failures or SSE reconnection loops."""
         try:
-            proxy = self._create_proxy(name, config)
+            proxy = await self._create_proxy(name, config)
             # Verify the proxy actually works before registering.
             # A broken server (e.g. URL endpoint returning 405) fails here
             # and is left for the health monitor to recover at its own pace.
@@ -212,11 +213,15 @@ class ProxyManager:
 
         async with self._lock:
             self._proxies.pop(name, None)
+            client = self._clients.pop(name, None)
             self._server_configs.pop(name, None)
             self._status.pop(name, None)
             self._tool_counts.pop(name, None)
             self._tool_cache.pop(name, None)
             await self._rebuild_mounts()
+
+        if client is not None:
+            await client.close()  # ゾンビ接続防止
 
         await self._notify_change(name, "removed", None)
         return True
@@ -227,11 +232,13 @@ class ProxyManager:
         needs_remount = False
         refreshed = False
         is_disabled = config.get("disabled", False)
+        old_client = None
         async with self._lock:
             self._refreshing.add(name)
             self._server_configs[name] = config
             self._status[name] = "disabled" if is_disabled else "connected"
             old_proxy = self._proxies.pop(name, None)
+            old_client = self._clients.pop(name, None)
             self._tool_cache.pop(name, None)
             if old_proxy:
                 needs_remount = True
@@ -242,10 +249,13 @@ class ProxyManager:
                 async with self._lock:
                     await self._rebuild_mounts()
 
+            if old_client is not None:
+                await old_client.close()  # ゾンビ接続防止
+
             if not is_disabled:
                 # プロキシ生成（サブプロセス起動を含む可能性があるためロック外）
                 try:
-                    proxy = self._create_proxy(name, config)
+                    proxy = await self._create_proxy(name, config)
                     async with self._lock:
                         if name not in self._server_configs:
                             return  # リネーム/削除済み — ゾンビ復活を防ぐ
@@ -289,6 +299,7 @@ class ProxyManager:
                 self._refreshing.discard(new_name)
                 raise ValueError(f"Server '{new_name}' already exists")
             proxy = self._proxies.pop(old_name, None)
+            client = self._clients.pop(old_name, None)
             status = self._status.pop(old_name, "unknown")
             tc = self._tool_counts.pop(old_name, None)
             cache = self._tool_cache.pop(old_name, None)
@@ -296,6 +307,8 @@ class ProxyManager:
             if proxy is not None:
                 self._proxies[new_name] = proxy  # 接続維持
                 await self._rebuild_mounts()
+            if client is not None:
+                self._clients[new_name] = client  # 接続維持
             self._server_configs[new_name] = config
             self._status[new_name] = status
             if tc is not None:
@@ -348,6 +361,7 @@ class ProxyManager:
             status_snapshot = dict(self._status)
 
         result: dict[str, list[dict]] = {}
+        pending: list[tuple[str, Any]] = []  # (name, proxy) — gather 対象
         for srv_name, proxy in proxies_snapshot.items():
             # Tag filter (OR logic)
             if tags:
@@ -369,17 +383,27 @@ class ProxyManager:
                     result[srv_name] = []
                 continue
 
+            pending.append((srv_name, proxy))
+
+        async def _fetch_one(name: str, proxy: Any) -> tuple[str, list[dict]]:
             try:
                 tools = await asyncio.wait_for(
-                    self.list_tools_for_server(srv_name, proxy), timeout=timeout
+                    self.list_tools_for_server(name, proxy), timeout=timeout
                 )
-                result[srv_name] = [{"name": t.name, "description": t.description or ""} for t in tools]
+                return name, [{"name": t.name, "description": t.description or ""} for t in tools]
             except asyncio.TimeoutError:
-                logger.warning("list_tools timed out for %s after %.1fs", srv_name, timeout)
-                result[srv_name] = []
+                logger.warning("list_tools timed out for %s after %.1fs", name, timeout)
+                return name, []
             except Exception:
-                logger.warning("Failed to list tools for %s", srv_name)
-                result[srv_name] = []
+                logger.warning("Failed to list tools for %s", name)
+                return name, []
+
+        # 並列実行（gather は入力順を保持。name もタスクに紐づけて二重に保証）
+        if pending:
+            for name, tools in await asyncio.gather(
+                *(_fetch_one(n, p) for n, p in pending)
+            ):
+                result[name] = tools
 
         return result
 
@@ -550,6 +574,7 @@ class ProxyManager:
                 if name in self._refreshing:
                     continue  # skip — refresh_server is handling it
                 current_config = self._server_configs.get(name)
+                old_client = self._clients.get(name)
             if not current_config:
                 continue
             new_proxy = await self._connect_server(name, current_config)
@@ -568,6 +593,8 @@ class ProxyManager:
                     self._status[name] = "error"
                     await self._notify_change(name, "spawn_failed", {"error": "Recovery failed"})
             if recovered:
+                if old_client is not None:
+                    await old_client.close()  # 差し替え前の旧接続を破棄
                 self._health_failures.pop(name, None)
                 await self._notify_change(name, "recovered", None)
 
@@ -636,8 +663,23 @@ class ProxyManager:
                 pass
         self._health_task = None
 
-    def _create_proxy(self, name: str, config: dict) -> FastMCPProxy:
-        """config から FastMCPProxy を生成。env変数はここで展開する。"""
+    async def close_all(self) -> None:
+        """全 upstream client を閉じる（アプリ shutdown 時）。"""
+        clients = list(self._clients.values())
+        self._clients.clear()
+        for client in clients:
+            try:
+                await client.close()
+            except Exception:
+                logger.warning("Failed to close upstream client", exc_info=True)
+
+    async def _create_proxy(self, name: str, config: dict) -> FastMCPProxy:
+        """config から FastMCPProxy を生成。env変数はここで展開する。
+
+        素の fastmcp Client を接続確立（__aenter__）してから create_proxy に
+        渡す。fastmcp は接続済み Client を渡すと同一セッションを再利用する
+        ため、list_tools ごとの initialize ハンドシェイクを回避できる。
+        """
         config = expand_env_vars(config)
         url = config.get("url")
         command = config.get("command")
@@ -653,24 +695,23 @@ class ProxyManager:
                     logger.warning(
                         "env for URL server '%s' ignored: no unique TOKEN/API_KEY/SECRET "
                         "variable found; use 'headers' for custom authentication", name)
-            if headers:
-                path = urlparse(url).path
-                if re.search(r"/sse(/|\?|&|$)", path):
-                    transport: Any = SSETransport(url=url, headers=headers)
-                else:
-                    transport = StreamableHttpTransport(url=url, headers=headers)
-                client = Client(transport=transport)
-                proxy = create_proxy(client, name=name)
+            path = urlparse(url).path
+            if re.search(r"/sse(/|\?|&|$)", path):
+                transport: Any = SSETransport(url=url, headers=headers)
             else:
-                proxy = create_proxy(url, name=name)
+                transport = StreamableHttpTransport(url=url, headers=headers)
+            client = Client(transport=transport)
         elif command:
             args = config.get("args", [])
             env = config.get("env")
             transport = StdioTransport(command=command, args=args, env=env)  # type: ignore[assignment]
-            proxy = create_proxy(transport, name=name)
+            client = Client(transport=transport)
         else:
             raise ValueError(f"Invalid config for {name}: need 'url' or 'command'")
-        return proxy
+        # 接続確立（Client は reentrant: __aenter__ で接続、close で切断）
+        await client.__aenter__()
+        self._clients[name] = client
+        return create_proxy(client, name=name)
 
     async def _rebuild_mounts(self) -> None:
         """全プロキシを再マウント（追加/削除後の整合性確保）。

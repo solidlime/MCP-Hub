@@ -321,6 +321,7 @@ async def lifespan(app: FastAPI):
     # --- 終了処理 ---
     await dispatcher.shutdown()
     await proxy_manager.stop_health_monitor()
+    await proxy_manager.close_all()  # upstream 接続の切断（ゾンビ防止）
     logger.info("MCP Hub shutting down")
     app_state.registry = None
     app_state.proxy_manager = None
