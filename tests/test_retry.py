@@ -68,8 +68,9 @@ class TestConnectServer:
     async def test_connect_server_retries_on_transient_error(self, manager):
         """Retries on ConnectionError, eventually succeeds."""
         proxy_ok = _MockProxy("srv")
+        ok_client = AsyncMock()
         manager._create_proxy = AsyncMock(
-            side_effect=[ConnectionError("fail1"), ConnectionError("fail2"), (proxy_ok, AsyncMock())]
+            side_effect=[ConnectionError("fail1"), ConnectionError("fail2"), (proxy_ok, ok_client)]
         )
 
         proxy = await manager._connect_server("srv", {})
@@ -77,6 +78,7 @@ class TestConnectServer:
         assert proxy is not None
         assert proxy.name == "srv"
         assert manager._create_proxy.call_count == 3
+        ok_client.close.assert_not_awaited()  # 成功した client は close されない
 
     @pytest.mark.asyncio
     async def test_connect_server_exhausts_retries(self, manager, monkeypatch):

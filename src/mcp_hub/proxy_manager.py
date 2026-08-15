@@ -107,6 +107,7 @@ class ProxyManager:
                     proxy, client = await self._create_proxy(name, config)
                     prev_client = client
                     self.mcp.mount(proxy, namespace=name)
+                    prev_client = None  # 成功: client は保持対象から外す（finally が close しないように）
                     return proxy
                 except RETRYABLE_EXCEPTIONS as e:
                     if attempt < max_retries:
@@ -161,7 +162,7 @@ class ProxyManager:
                 async with self._lock:
                     if self._clients.get(name) is client:
                         self._clients.pop(name, None)
-                await client.close()
+                        await client.close()  # 自分が登録した client のみ close
             async with self._lock:
                 self._status[name] = "error"
             await self._notify_change(name, "spawn_failed", {"error": "Connection timed out"})
@@ -174,7 +175,7 @@ class ProxyManager:
                 async with self._lock:
                     if self._clients.get(name) is client:
                         self._clients.pop(name, None)
-                await client.close()
+                        await client.close()  # 自分が登録した client のみ close
             async with self._lock:
                 self._status[name] = "error"
             await self._notify_change(name, "spawn_failed", {
@@ -624,10 +625,7 @@ class ProxyManager:
                     await self._notify_change(name, "spawn_failed", {"error": "Recovery failed"})
             if recovered:
                 if old_client is not None:
-                    async with self._lock:
-                        if self._clients.get(name) is old_client:
-                            self._clients.pop(name, None)
-                            await old_client.close()  # 差し替え前の旧接続を破棄（同一でなければ別フローが差し替え済み — 触らない）
+                    await old_client.close()  # 旧接続を破棄（new_proxy に置換済みなので安全）
                 self._health_failures.pop(name, None)
                 await self._notify_change(name, "recovered", None)
 
