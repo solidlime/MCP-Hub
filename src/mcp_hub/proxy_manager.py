@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 import traceback
 from collections.abc import Callable
 from typing import Any
@@ -77,6 +78,7 @@ class ProxyManager:
         self._call_semaphore = asyncio.Semaphore(_max_calls)
         self._tool_cache: dict[str, tuple[float, list[Any]]] = {}  # server_name -> (timestamp, tools)
         self._health_failures: dict[str, int] = {}  # server_name -> consecutive health-check failures
+        self._last_recovery_fail: dict[str, float] = {}  # server_name -> last recovery attempt time
 
     @staticmethod
     def _retry_env() -> tuple[int, float]:
@@ -85,6 +87,11 @@ class ProxyManager:
             int(os.environ.get("MCP_HUB_RETRY_MAX", "3")),
             float(os.environ.get("MCP_HUB_RETRY_DELAY", "1.0")),
         )
+
+    @staticmethod
+    def _recovery_cooldown() -> float:
+        """Minimum seconds between recovery attempts for a failed server."""
+        return float(os.environ.get("MCP_HUB_RECOVERY_COOLDOWN", "60.0"))
 
     def _client_timeout(self) -> float | None:
         """Read timeout for upstream requests (seconds).
@@ -445,12 +452,14 @@ class ProxyManager:
             except asyncio.TimeoutError:
                 logger.warning("list_tools timed out for %s after %.1fs", name, timeout)
                 if self._record_health_failure(name, "timeout", max_failures):
-                    await self._mark_error(name, f"list_tools timeout after {timeout}s")
+                    if self._status.get(name) != "recovering":
+                        await self._mark_error(name, f"list_tools timeout after {timeout}s")
                 return name, []
             except Exception:
                 logger.warning("Failed to list tools for %s", name)
                 if self._record_health_failure(name, "exception", max_failures):
-                    await self._mark_error(name, "list_tools failed")
+                    if self._status.get(name) != "recovering":
+                        await self._mark_error(name, "list_tools failed")
                 return name, []
 
         # 並列実行（gather は入力順を保持。name もタスクに紐づけて二重に保証）
@@ -552,7 +561,9 @@ class ProxyManager:
             if now - ts < cache_ttl:
                 return tools
         tools = await self._list_tools_with_retry(proxy, name)
-        self._tool_cache[name] = (now, tools)
+        if tools:
+            # 空リストでは上書きしない（probe が空を返しても最後の既知ツールを保持）
+            self._tool_cache[name] = (now, tools)
         self._tool_counts[name] = len(tools)
         return tools
 
@@ -634,7 +645,25 @@ class ProxyManager:
                 old_client = self._clients.get(name)
             if not current_config:
                 continue
-            new_proxy = await self._connect_server(name, current_config)
+            last_fail = self._last_recovery_fail.get(name)
+            if last_fail is not None and (time.monotonic() - last_fail) < self._recovery_cooldown():
+                logger.debug("Recovery for %s skipped (cooldown)", name)
+                async with self._lock:
+                    self._status[name] = "error"  # 次の probe で再評価できるように戻す
+                continue
+            try:
+                new_proxy = await asyncio.wait_for(
+                    self._connect_server(name, current_config),
+                    timeout=self._connect_timeout(),
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Recovery connect for %s timed out after %.1fs",
+                    name, self._connect_timeout(),
+                )
+                new_proxy = None
+            if new_proxy is None:
+                self._last_recovery_fail[name] = time.monotonic()
             recovered = False
             async with self._lock:
                 if name in self._refreshing:
@@ -650,6 +679,7 @@ class ProxyManager:
                     self._status[name] = "error"
                     await self._notify_change(name, "spawn_failed", {"error": "Recovery failed"})
             if recovered:
+                self._last_recovery_fail.pop(name, None)
                 if old_client is not None:
                     await old_client.close()  # 旧接続を破棄（new_proxy に置換済みなので安全）
                 self._health_failures.pop(name, None)
@@ -666,9 +696,25 @@ class ProxyManager:
             async with self._lock:
                 if name in self._refreshing:
                     continue  # skip — refresh_server is handling it
+            last_fail = self._last_recovery_fail.get(name)
+            if last_fail is not None and (time.monotonic() - last_fail) < self._recovery_cooldown():
+                logger.debug("Recovery for %s skipped (cooldown)", name)
+                continue
             # Attempt initial recovery
             logger.info("Attempting recovery for %s (never connected)", name)
-            new_proxy = await self._connect_server(name, config)
+            try:
+                new_proxy = await asyncio.wait_for(
+                    self._connect_server(name, config),
+                    timeout=self._connect_timeout(),
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Recovery connect for %s timed out after %.1fs",
+                    name, self._connect_timeout(),
+                )
+                new_proxy = None
+            if new_proxy is None:
+                self._last_recovery_fail[name] = time.monotonic()
             recovered = False
             async with self._lock:
                 if name in self._refreshing:
@@ -684,6 +730,7 @@ class ProxyManager:
                     # stays "error", will retry next interval
                     await self._notify_change(name, "spawn_failed", {"error": "Recovery failed"})
             if recovered:
+                self._last_recovery_fail.pop(name, None)
                 self._health_failures.pop(name, None)
                 await self._notify_change(name, "recovered", None)
 

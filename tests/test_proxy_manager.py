@@ -500,3 +500,73 @@ class TestListToolsFailureEscalation:
             asyncio.run(pm.list_tools())  # 失敗 → カウント1
             asyncio.run(pm.list_tools())  # 失敗 → カウント2
         assert pm._status["srv"] == "connected"  # リセット済みなので error 化しない
+
+
+class TestRecoveryResilience:
+    """レビュー対応: recovery の有界化・クールダウン・recovering ガード・cache 保持。"""
+
+    def _manager_with_server(self, name="srv", status="error"):
+        pm = _make_manager()
+        pm._proxies = {name: _MockProxy(name)}
+        pm._server_configs = {name: {"url": "http://x"}}
+        pm._status = {name: status}
+        pm._notify_change = AsyncMock()
+        return pm
+
+    def test_recovery_connect_timeout_records_failure_and_keeps_error(self):
+        pm = self._manager_with_server()
+
+        async def slow_connect(name, config):
+            await asyncio.sleep(5)  # connect が応答しない（ブラックホール型）
+
+        pm._connect_server = slow_connect
+        with patch.dict(os.environ, {"MCP_HUB_CONNECT_TIMEOUT": "0.05"}):
+            asyncio.run(pm._health_check())
+
+        assert "srv" in pm._last_recovery_fail  # クールダウン用に記録
+        assert pm._status["srv"] == "error"  # error のまま
+        pm._notify_change.assert_awaited_with(
+            "srv", "spawn_failed", {"error": "Recovery failed"}
+        )
+
+    def test_recovery_cooldown_skips_reconnect(self):
+        pm = self._manager_with_server()
+        pm._last_recovery_fail["srv"] = time.monotonic()  # 失敗直後
+
+        connect_called = []
+
+        async def fake_connect(name, config):
+            connect_called.append(name)
+            return _MockProxy(name)
+
+        pm._connect_server = fake_connect
+        with patch.dict(os.environ, {"MCP_HUB_RECOVERY_COOLDOWN": "3600"}):
+            asyncio.run(pm._health_check())
+
+        assert connect_called == []  # cooldown 中は再試行しない
+        assert pm._status["srv"] == "error"  # recovering から error に戻し、次の probe で再評価
+
+    def test_fetch_one_does_not_mark_error_while_recovering(self):
+        pm = self._manager_with_server(status="recovering")
+
+        async def failing(name, proxy):
+            raise RuntimeError("boom")
+
+        pm.list_tools_for_server = failing
+        with patch.dict(os.environ, {"MCP_HUB_HEALTH_MAX_FAILURES": "1"}):
+            result = asyncio.run(pm.list_tools())
+
+        assert result["srv"] == []
+        assert pm._status["srv"] == "recovering"  # error 化しない
+        pm._notify_change.assert_not_awaited()
+
+    def test_empty_probe_keeps_last_known_tools_cache(self):
+        """指摘 C: 空 probe は _tool_cache を [] で上書きしない。"""
+        pm = _make_manager()
+        tool = SimpleNamespace(name="t1", description="d1")
+        pm._tool_cache["srv"] = (time.monotonic() - 120.0, [tool])  # TTL 切れ → fetch する
+
+        asyncio.run(pm.list_tools_for_server("srv", _MockProxy("srv")))
+
+        _ts, cached = pm._tool_cache["srv"]
+        assert cached == [tool]  # 最後の既知ツールが保持される
