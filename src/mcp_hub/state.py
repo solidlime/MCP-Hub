@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

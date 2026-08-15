@@ -1,11 +1,9 @@
 """ToolLogMiddleware tests — server resolution + call recording."""
-import time
-from unittest.mock import AsyncMock
 
 import pytest
 
 from mcp_hub.middleware import ToolLogMiddleware, resolve_server
-from mcp_hub.state import LogEntry, app_state
+from mcp_hub.state import app_state
 
 
 @pytest.fixture(autouse=True)

@@ -1,5 +1,4 @@
 """Masking utility tests."""
-import pytest
 
 from mcp_hub.masking import mask_args, mask_text
 
