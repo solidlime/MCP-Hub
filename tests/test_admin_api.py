@@ -398,3 +398,37 @@ class TestSettings:
         r = client.patch("/admin/api/settings", json={})
         assert r.status_code == 200
         assert r.json() == current
+
+    def test_patch_settings_client_timeout(self, client):
+        """PATCH client_timeout=5 persists and reflects in subsequent GET."""
+        r = client.patch("/admin/api/settings", json={"client_timeout": 5})
+        assert r.status_code == 200
+        assert r.json()["client_timeout"] == 5.0
+
+        r2 = client.get("/admin/api/settings")
+        assert r2.json()["client_timeout"] == 5.0
+
+    def test_patch_settings_connect_timeout(self, client):
+        """PATCH connect_timeout=10 persists and reflects in subsequent GET."""
+        r = client.patch("/admin/api/settings", json={"connect_timeout": 10})
+        assert r.status_code == 200
+        assert r.json()["connect_timeout"] == 10.0
+
+        r2 = client.get("/admin/api/settings")
+        assert r2.json()["connect_timeout"] == 10.0
+
+    def test_patch_settings_client_timeout_reset(self, client):
+        """PATCH client_timeout=None resets to null."""
+        client.patch("/admin/api/settings", json={"client_timeout": 5})
+        r = client.patch("/admin/api/settings", json={"client_timeout": None})
+        assert r.status_code == 200
+        assert r.json()["client_timeout"] is None
+
+        r2 = client.get("/admin/api/settings")
+        assert r2.json()["client_timeout"] is None
+
+    def test_patch_settings_timeout_invalid(self, client):
+        """PATCH with out-of-range timeout returns 422."""
+        for bad in (-1, 999):
+            r = client.patch("/admin/api/settings", json={"client_timeout": bad})
+            assert r.status_code == 422

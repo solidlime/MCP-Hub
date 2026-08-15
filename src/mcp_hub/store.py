@@ -224,6 +224,23 @@ class JsonStore:
             data["embedding_model"] = model_name
             await self._write_internal(data)
 
+    async def set_timeouts(
+        self, client_timeout: float | None, connect_timeout: float | None
+    ) -> None:
+        """Atomically update client/connect timeout settings.
+        None はキーを削除（= env / デフォルトにリセット）。"""
+        async with self._lock:
+            data = await self._read_locked()
+            if client_timeout is None:
+                data.pop("client_timeout", None)
+            else:
+                data["client_timeout"] = client_timeout
+            if connect_timeout is None:
+                data.pop("connect_timeout", None)
+            else:
+                data["connect_timeout"] = connect_timeout
+            await self._write_internal(data)
+
     async def set_full_info_tools(self, tools: list[str]) -> None:
         """フル公開ツール一覧（"{server}_{tool}" 形式）を保存する。"""
         async with self._lock:

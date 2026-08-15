@@ -83,6 +83,25 @@ def _get_proxy_manager():
     return app_state.proxy_manager
 
 
+def _validate_timeout(value: Any, name: str) -> float | None:
+    """Validate timeout value: None (=reset) or 0 < float <= 300."""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{name} は 0 より大きく 300 以下の数値、または null である必要があります",
+        )
+    if not (0 < f <= 300):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{name} は 0 より大きく 300 以下の数値、または null である必要があります",
+        )
+    return f
+
+
 @router.get("/settings")
 async def get_settings():
     registry = _get_registry()
@@ -90,6 +109,8 @@ async def get_settings():
     return {
         "meta_mode": data.get("meta_mode", False),
         "full_info_tools": data.get("full_info_tools", []),
+        "client_timeout": data.get("client_timeout"),
+        "connect_timeout": data.get("connect_timeout"),
     }
 
 
@@ -108,10 +129,21 @@ async def update_settings(body: dict):
                 detail="full_info_tools は '{server}_{tool}' 形式の文字列リストである必要があります",
             )
         await registry.set_full_info_tools(tools)
+    if "client_timeout" in body or "connect_timeout" in body:
+        data = await registry._read()
+        client_timeout = _validate_timeout(
+            body.get("client_timeout", data.get("client_timeout")), "client_timeout"
+        )
+        connect_timeout = _validate_timeout(
+            body.get("connect_timeout", data.get("connect_timeout")), "connect_timeout"
+        )
+        await registry.set_timeouts(client_timeout, connect_timeout)
     data = await registry._read()
     return {
         "meta_mode": data.get("meta_mode", False),
         "full_info_tools": data.get("full_info_tools", []),
+        "client_timeout": data.get("client_timeout"),
+        "connect_timeout": data.get("connect_timeout"),
     }
 
 
@@ -463,7 +495,6 @@ async def install_dependency(body: InstallRequest):
     pip/uv pip commands are auto-wrapped with --target for persistence.
     """
     import os
-    import shlex
 
     EXTRAS_DIR = "/home/mcp-hub/pip-extras"
     command = body.command.strip()
