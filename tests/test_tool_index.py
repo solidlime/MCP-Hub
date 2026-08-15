@@ -78,11 +78,23 @@ class TestToolIndex:
 
 class TestIdentifierPromotion:
     """Identifier match promotion: a tool whose name shares a token with the
-    query must never be buried by semantic ranking or top_k truncation."""
+    query must never be buried by ranking or top_k truncation. Promoted
+    entries rank by shared token count (desc); score = shared token count."""
 
     @pytest.fixture
-    async def many_docs_index(self):
+    async def memory_corpus_index(self):
+        """memory_* tools (partial name overlap) + util filler docs.
+        Insertion order deliberately differs from match strength."""
         docs = [
+            {
+                "name": name,
+                "description": f"{name} operation on the memory store",
+                "server": "memory",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+            for name in ["memory_stats", "memory_delete", "memory_read", "memory_create", "get_context"]
+        ]
+        docs += [
             {
                 "name": f"util_{i}",
                 "description": f"Create generic helper utility number {i}",
@@ -91,28 +103,29 @@ class TestIdentifierPromotion:
             }
             for i in range(12)
         ]
-        docs.append({
-            "name": "memory_create",
-            "description": "Create a memory record",
-            "server": "memory",
-            "inputSchema": {"type": "object", "properties": {}},
-        })
         idx = ToolIndex()
         await idx.rebuild(docs)
+        idx._use_embeddings = False  # env-independent: exercise the BM25 path
         return idx
 
-    async def test_search_identifier_match_promoted(self, many_docs_index):
-        """Query containing a tool name token promotes that tool to the front."""
-        results = many_docs_index.search("create memory record memory_create", top_k=10)
-        assert len(results) >= 1
-        assert results[0]["name"] == "memory_create"
-        # Promoted docs carry a score for field consistency
-        assert results[0]["score"] == 1.0
+    async def test_search_identifier_match_ranked_by_shared_tokens(self, memory_corpus_index):
+        """Exact name match (3 shared tokens) outranks loose partial hits
+        (1 token) regardless of document order; score = shared token count."""
+        results = memory_corpus_index.search("create memory record memory_create", top_k=10)
+        names = [r["name"] for r in results]
+        assert names[0] == "memory_create"
+        assert names.index("memory_create") < names.index("memory_delete")
+        assert names.index("memory_create") < names.index("memory_stats")
+        scores = {r["name"]: r["score"] for r in results}
+        assert scores["memory_create"] == 3.0
+        assert scores["memory_delete"] == 1.0
+        assert scores["memory_stats"] == 1.0
 
     async def test_search_identifier_match_not_buried_by_top_k(self, index):
-        """Even when the underlying ranking puts the name-matched tool beyond
-        top_k, promotion keeps it in the results (semantic-path regression)."""
+        """A hostile underlying ranking that puts the name-matched tool beyond
+        top_k cannot hide it: promotion prepends it."""
         idx = index
+        idx._use_embeddings = False  # env-independent: force the BM25 path
         target = next(d for d in idx._documents if d["name"] == "brave_web_search")
         assert not any(
             d["name"] != target["name"]
@@ -120,8 +133,8 @@ class TestIdentifierPromotion:
             for d in idx._documents
         ), "fixture: target name tokens must not overlap other tool names"
 
-        # Simulate a hostile ranking (e.g. embeddings) that ranks the exact
-        # name match outside the top_k window.
+        # Simulate a hostile underlying ranking that ranks the exact name
+        # match outside the top_k window.
         def fake_bm25(query, top_k):
             others = [d for d in idx._documents if d["name"] != "brave_web_search"]
             ranked = others + [target]
@@ -137,11 +150,42 @@ class TestIdentifierPromotion:
         assert results[0]["name"] == "brave_web_search"
         assert names.count("brave_web_search") == 1
 
-    async def test_search_promotion_survives_short_top_k(self, many_docs_index):
-        """top_k=3 still returns the identifier-matched tool."""
-        results = many_docs_index.search("memory_create", top_k=3)
+    async def test_search_exact_overflows_top_k_sorted_by_strength(self):
+        """When identifier matches exceed top_k, the top entries follow shared
+        token count (desc), not insertion order."""
+        docs = [
+            {
+                "name": f"file_{i}",
+                "description": f"File utility number {i}",
+                "server": "filesystem",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+            for i in range(1, 12)
+        ]
+        docs += [
+            {
+                "name": "read_write",
+                "description": "Read and write helper",
+                "server": "filesystem",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+            {
+                "name": "file_read_write",
+                "description": "Combined file read/write",
+                "server": "filesystem",
+                "inputSchema": {"type": "object", "properties": {}},
+            },
+        ]
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        idx._use_embeddings = False
+        # Insertion order puts file_1 first; shared-token ranking must win.
+        results = idx.search("file read write", top_k=5)
+        assert len(results) <= 5
         names = [r["name"] for r in results]
-        assert "memory_create" in names
+        assert names[0] == "file_read_write"  # 3 shared tokens
+        assert names[1] == "read_write"        # 2 shared tokens
+        assert results[0]["score"] > results[1]["score"] > results[2]["score"]
 
 
 class TestTokenizer:
