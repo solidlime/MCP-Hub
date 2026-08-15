@@ -87,16 +87,21 @@ class ProxyManager:
             float(os.environ.get("MCP_HUB_RETRY_DELAY", "1.0")),
         )
 
-    @staticmethod
-    def _client_timeout() -> float | None:
-        """MCP_HUB_CLIENT_TIMEOUT: read timeout for upstream requests (seconds).
-        None = fastmcp/mcp SDK default (keeps current behavior)."""
+    def _client_timeout(self) -> float | None:
+        """Read timeout for upstream requests (seconds).
+        Priority: DB setting → MCP_HUB_CLIENT_TIMEOUT env → None (SDK default)."""
+        db = self.registry._data.get("client_timeout")
+        if db is not None:
+            return float(db)
         raw = os.environ.get("MCP_HUB_CLIENT_TIMEOUT")
         return float(raw) if raw else None
 
-    @staticmethod
-    def _connect_timeout() -> float:
-        """MCP_HUB_CONNECT_TIMEOUT: initial connectivity check timeout (seconds)."""
+    def _connect_timeout(self) -> float:
+        """Initial connectivity check timeout (seconds).
+        Priority: DB setting → MCP_HUB_CONNECT_TIMEOUT env → 30.0."""
+        db = self.registry._data.get("connect_timeout")
+        if db is not None:
+            return float(db)
         return float(os.environ.get("MCP_HUB_CONNECT_TIMEOUT", "30.0"))
 
     async def _connect_server(self, name: str, config: dict) -> "FastMCPProxy | None":
