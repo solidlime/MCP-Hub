@@ -422,6 +422,30 @@ class TestClientCleanup:
         client_cls.return_value.close.assert_awaited_once()
         assert "srv" not in pm._clients
 
+    def test_create_proxy_aenter_failure_closes_client(self):
+        """__aenter__ 失敗（Exception）でも close を保証する。"""
+        pm = _make_manager()
+        with patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
+            client_cls.return_value.__aenter__.side_effect = RuntimeError("boom")
+            with pytest.raises(RuntimeError):
+                asyncio.run(pm._create_proxy("srv", {"url": "http://x"}))
+        client_cls.return_value.close.assert_awaited_once()
+        assert "srv" not in pm._clients
+
+    def test_create_proxy_aenter_cancelled_closes_client(self):
+        """recovery の wait_for タイムアウトによる CancelledError でも close を保証。
+
+        CancelledError は BaseException のため except Exception では捕まらない。
+        close 漏れだと stdio サブプロセスが孤児として蓄積する。
+        """
+        pm = _make_manager()
+        with patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
+            client_cls.return_value.__aenter__.side_effect = asyncio.CancelledError()
+            with pytest.raises(asyncio.CancelledError):
+                asyncio.run(pm._create_proxy("srv", {"url": "http://x"}))
+        client_cls.return_value.close.assert_awaited_once()
+        assert "srv" not in pm._clients
+
 
 class TestClientFactoryErrorGuard:
     """P1: status=error のサーバーでは client_factory が即時 raise する。

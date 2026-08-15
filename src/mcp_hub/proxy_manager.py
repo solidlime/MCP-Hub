@@ -91,7 +91,7 @@ class ProxyManager:
     @staticmethod
     def _recovery_cooldown() -> float:
         """Minimum seconds between recovery attempts for a failed server."""
-        return float(os.environ.get("MCP_HUB_RECOVERY_COOLDOWN", "60.0"))
+        return float(os.environ.get("MCP_HUB_RECOVERY_COOLDOWN", "300.0"))
 
     def _client_timeout(self) -> float | None:
         """Read timeout for upstream requests (seconds).
@@ -818,7 +818,15 @@ class ProxyManager:
         else:
             raise ValueError(f"Invalid config for {name}: need 'url' or 'command'")
         # 接続確立（Client は reentrant: __aenter__ で接続、close で切断）
-        await client.__aenter__()
+        try:
+            await client.__aenter__()
+        except BaseException:
+            # CancelledError（recovery の wait_for タイムアウト等）でも close を
+            # 保証。BaseException で捕まえないと誰も close せず、stdio サーバーの
+            # サブプロセスが孤児として蓄積する（Client.close → transport close
+            # で kill される）。
+            await client.close()
+            raise
         try:
             # fastmcp の _create_client_factory が行う header forwarding の移植
             # （接続済み Client の transport に incoming header 伝播を設定）
