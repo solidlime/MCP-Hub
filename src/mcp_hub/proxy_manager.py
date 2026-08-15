@@ -91,34 +91,54 @@ class ProxyManager:
         """Create proxy + mount with retry. Call OUTSIDE asyncio.Lock.
         Returns proxy on success, None on exhaustion."""
         max_retries, base_delay = self._retry_env()
-        for attempt in range(max_retries + 1):
-            try:
-                proxy = await self._create_proxy(name, config)
-                self.mcp.mount(proxy, namespace=name)
-                return proxy
-            except RETRYABLE_EXCEPTIONS as e:
-                if attempt < max_retries:
-                    delay = base_delay * (2 ** attempt)
-                    logger.warning(
-                        "Retry %d/%d for %s in %.1fs: %s",
-                        attempt + 1, max_retries, name, delay, e,
-                    )
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error("Exhausted %d retries for %s", max_retries, name)
-            except Exception:
-                # Non-retryable error — don't retry
-                logger.exception("Non-retryable error connecting %s", name)
-                break
-        return None
+        prev_client: Client | None = None
+        try:
+            for attempt in range(max_retries + 1):
+                # 前回試行の client を破棄（mount 失敗 = proxy 未使用なので安全。
+                # _clients[name] に登録されているのが自分が作った client と同一の
+                # 場合のみ pop してから close する）
+                if prev_client is not None:
+                    async with self._lock:
+                        if self._clients.get(name) is prev_client:
+                            self._clients.pop(name, None)
+                    await prev_client.close()
+                    prev_client = None
+                try:
+                    proxy, client = await self._create_proxy(name, config)
+                    prev_client = client
+                    self.mcp.mount(proxy, namespace=name)
+                    return proxy
+                except RETRYABLE_EXCEPTIONS as e:
+                    if attempt < max_retries:
+                        delay = base_delay * (2 ** attempt)
+                        logger.warning(
+                            "Retry %d/%d for %s in %.1fs: %s",
+                            attempt + 1, max_retries, name, delay, e,
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error("Exhausted %d retries for %s", max_retries, name)
+                except Exception:
+                    # Non-retryable error — don't retry
+                    logger.exception("Non-retryable error connecting %s", name)
+                    break
+            return None
+        finally:
+            # ループ終了時（成功以外）に最後の client が open のまま残らないようにする
+            if prev_client is not None:
+                async with self._lock:
+                    if self._clients.get(name) is prev_client:
+                        self._clients.pop(name, None)
+                await prev_client.close()
 
     async def _connect_and_mount(self, name: str, config: dict) -> None:
         """Single-shot connect + mount (no retry). Used by load_all() for
         non-blocking startup.  Verifies connectivity via list_tools() before
         registering the proxy — avoids mounting broken proxies that would
         trigger cascading rebuild_index failures or SSE reconnection loops."""
+        client: Client | None = None
         try:
-            proxy = await self._create_proxy(name, config)
+            proxy, client = await self._create_proxy(name, config)
             # Verify the proxy actually works before registering.
             # A broken server (e.g. URL endpoint returning 405) fails here
             # and is left for the health monitor to recover at its own pace.
@@ -137,8 +157,10 @@ class ProxyManager:
             await self._notify_change(name, "connected", {"tool_count": len(tools)})
         except asyncio.TimeoutError:
             logger.warning("Server %s connection timed out — health monitor will retry", name)
-            client = self._clients.pop(name, None)
             if client is not None:
+                async with self._lock:
+                    if self._clients.get(name) is client:
+                        self._clients.pop(name, None)
                 await client.close()
             async with self._lock:
                 self._status[name] = "error"
@@ -148,8 +170,10 @@ class ProxyManager:
                 "Server %s failed initial connection — health monitor will retry",
                 name, exc_info=True,
             )
-            client = self._clients.pop(name, None)
             if client is not None:
+                async with self._lock:
+                    if self._clients.get(name) is client:
+                        self._clients.pop(name, None)
                 await client.close()
             async with self._lock:
                 self._status[name] = "error"
@@ -261,7 +285,7 @@ class ProxyManager:
             if not is_disabled:
                 # プロキシ生成（サブプロセス起動を含む可能性があるためロック外）
                 try:
-                    proxy = await self._create_proxy(name, config)
+                    proxy, _client = await self._create_proxy(name, config)
                     async with self._lock:
                         if name not in self._server_configs:
                             return  # リネーム/削除済み — ゾンビ復活を防ぐ
@@ -600,7 +624,10 @@ class ProxyManager:
                     await self._notify_change(name, "spawn_failed", {"error": "Recovery failed"})
             if recovered:
                 if old_client is not None:
-                    await old_client.close()  # 差し替え前の旧接続を破棄
+                    async with self._lock:
+                        if self._clients.get(name) is old_client:
+                            self._clients.pop(name, None)
+                            await old_client.close()  # 差し替え前の旧接続を破棄（同一でなければ別フローが差し替え済み — 触らない）
                 self._health_failures.pop(name, None)
                 await self._notify_change(name, "recovered", None)
 
@@ -679,12 +706,15 @@ class ProxyManager:
             except Exception:
                 logger.warning("Failed to close upstream client", exc_info=True)
 
-    async def _create_proxy(self, name: str, config: dict) -> FastMCPProxy:
+    async def _create_proxy(self, name: str, config: dict) -> tuple[FastMCPProxy, Client]:
         """config から FastMCPProxy を生成。env変数はここで展開する。
 
         素の fastmcp Client を接続確立（__aenter__）してから create_proxy に
         渡す。fastmcp は接続済み Client を渡すと同一セッションを再利用する
         ため、list_tools ごとの initialize ハンドシェイクを回避できる。
+
+        (proxy, client) を返す。client の所有権は呼び出し元が持ち、
+        close は呼び出し元（または破棄経路）が行う。
         """
         config = expand_env_vars(config)
         url = config.get("url")
@@ -721,11 +751,8 @@ class ProxyManager:
         except Exception:
             await client.close()  # create_proxy 失敗時のリーク防止
             raise
-        old = self._clients.get(name)
-        if old is not None and old is not client:
-            await old.close()  # 上書き前の旧接続を破棄（リトライ/レース対策）
-        self._clients[name] = client
-        return proxy
+        self._clients[name] = client  # 登録は維持
+        return proxy, client
 
     async def _rebuild_mounts(self) -> None:
         """全プロキシを再マウント（追加/削除後の整合性確保）。
