@@ -161,10 +161,14 @@ class TestConnectMountRaceGuard:
 
         pm.mcp.mount = fake_mount
 
-        async def run():
-            await pm._connect_and_mount("old", {"url": "http://x"})
+        async def fake_create_proxy(name, config):
+            return _MockProxy(name)
 
-        asyncio.run(run())
+        with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
+            async def run():
+                await pm._connect_and_mount("old", {"url": "http://x"})
+
+            asyncio.run(run())
 
         assert mounted == []
         assert "old" not in pm._proxies
@@ -337,3 +341,34 @@ class TestClientCleanup:
         c1.close.assert_awaited_once()
         c2.close.assert_awaited_once()
         assert pm._clients == {}
+
+    def test_connect_and_mount_failure_closes_client(self):
+        pm = _make_manager()
+        pm._server_configs = {"srv": {"url": "http://x"}}
+        client = AsyncMock()
+        pm._clients = {"srv": client}
+        pm._notify_change = AsyncMock()
+
+        class _BrokenProxy:
+            async def list_tools(self):
+                raise RuntimeError("boom")
+
+        async def fake_create_proxy(name, config):
+            return _BrokenProxy()
+
+        with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
+            asyncio.run(pm._connect_and_mount("srv", {"url": "http://x"}))
+
+        client.close.assert_awaited_once()
+        assert "srv" not in pm._clients
+
+    def test_create_proxy_failure_closes_client(self):
+        pm = _make_manager()
+        with patch("mcp_hub.proxy_manager.create_proxy",
+                   side_effect=RuntimeError("boom")) as cp, \
+             patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
+            with pytest.raises(RuntimeError):
+                asyncio.run(pm._create_proxy("srv", {"url": "http://x"}))
+        client_cls.return_value.__aenter__.assert_awaited_once()
+        client_cls.return_value.close.assert_awaited_once()
+        assert "srv" not in pm._clients
