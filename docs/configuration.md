@@ -110,7 +110,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `MCP_HUB_MAX_CONCURRENT_CALLS` | `50` | 同時ツール呼び出しの最大数（DoS 対策セマフォ） |
 | `MCP_HUB_CALL_TOOL_TIMEOUT` | `30` | ツール呼び出しのタイムアウト（秒） |
 | `MCP_HUB_LIST_TOOLS_RETRY_DELAY` | `0.3` | `list_tools()` リトライ時の遅延（秒） |
-| `MCP_HUB_CLIENT_TIMEOUT` | `30.0` | アップストリームへのリクエスト読み取りタイムアウト（秒）。デフォルト 30 秒（SDK の httpx デフォルトと一致）。応答しないサーバーによる tools/list のブロック防止は `MCP_HUB_LIST_TOOLS_TIMEOUT` が担当。短すぎる値（例: 5 秒）は正常稼働サーバーのツール実行も失敗させるため非推奨。WebUI の Hub 設定「⏱️ 接続タイムアウト」からも設定可能（保存値が env より優先） |
+| `MCP_HUB_CLIENT_TIMEOUT` | `180.0` | アップストリームへのリクエスト読み取りタイムアウト（秒）。デフォルト 180 秒。応答しないサーバーによる tools/list のブロック防止は `MCP_HUB_LIST_TOOLS_TIMEOUT` が担当。短すぎる値（例: 5 秒）は正常稼働サーバーのツール実行も失敗させるため非推奨。WebUI の Hub 設定「⏱️ 接続タイムアウト」からも設定可能（保存値が env より優先） |
 | `MCP_HUB_CONNECT_TIMEOUT` | `30.0` | 起動時の接続確認 `list_tools()` のタイムアウト（秒）。WebUI の Hub 設定「⏱️ 接続タイムアウト」からも設定可能（保存値が env より優先） |
 | `MCP_HUB_RECOVERY_COOLDOWN` | `300.0` | ヘルスチェックで死んだサーバーへの自動再接続試行の最小間隔（秒）。ヘルスチェック間隔（デフォルト 60s）より長く設定すること |
 
