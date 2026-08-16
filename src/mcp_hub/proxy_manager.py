@@ -170,7 +170,8 @@ class ProxyManager:
             # and is left for the health monitor to recover at its own pace.
             import time
             tools = list(await asyncio.wait_for(proxy.list_tools(), timeout=self._connect_timeout()))
-            self._tool_cache[name] = (time.monotonic(), tools)
+            if tools:
+                self._tool_cache[name] = (time.monotonic(), tools)
             self._tool_counts[name] = len(tools)
             async with self._lock:
                 if name not in self._server_configs:
