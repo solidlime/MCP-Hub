@@ -177,6 +177,46 @@ class TestHealthFailureTolerance:
         assert manager._health_failures["srv1"] == 1
 
 
+class TestCounterErrorRecovery:
+    """Nesting-counter RuntimeError は error 化 + proxy/client 破棄 → 初期 recovery で復旧。"""
+
+    @pytest.mark.asyncio
+    async def test_counter_error_marks_error_and_drops_proxy(self, manager, monkeypatch):
+        """list_tools が nesting counter RuntimeError を投げると error 化し、
+        壊れた proxy と client が _proxies/_clients から破棄される。"""
+        monkeypatch.setenv("MCP_HUB_HEALTH_MAX_FAILURES", "1")
+        proxy = _MockProxy("srv1")
+        proxy.list_tools = AsyncMock(
+            side_effect=RuntimeError("nesting counter should be 0 but got 1")
+        )
+        manager._proxies["srv1"] = proxy
+        client = AsyncMock()
+        manager._clients["srv1"] = client
+        manager._server_configs["srv1"] = {"url": "http://localhost:9999"}
+        manager._status["srv1"] = "connected"
+        manager._tool_cache.pop("srv1", None)  # bypass list_tools_for_server cache
+
+        await manager._health_check()
+
+        assert manager._status["srv1"] == "error"
+        assert "srv1" not in manager._proxies
+        assert "srv1" not in manager._clients
+        client.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_error_server_recovered_via_initial_recovery(self, manager):
+        """status=error かつ _proxies にないサーバーは initial recovery 経路で再接続される。"""
+        manager._server_configs["srv1"] = {"url": "http://localhost:9999"}
+        manager._status["srv1"] = "error"
+        new_proxy = _MockProxy("srv1")
+        manager._connect_server = AsyncMock(return_value=new_proxy)
+
+        await manager._health_check()
+
+        assert manager._status["srv1"] == "connected"
+        assert manager._proxies["srv1"] is new_proxy
+
+
 class TestHealthMonitorLifecycle:
     @pytest.mark.asyncio
     async def test_health_monitor_loop_survives_exceptions(self, manager):

@@ -31,7 +31,11 @@ class _MockProxyFactory:
 
 
 def _make_manager():
-    mcp = type("MCP", (), {"mount": lambda self, p, namespace=None: None})()
+    # local_provider: _rebuild_mounts が self.mcp.providers の先頭に置くため必要
+    mcp = type("MCP", (), {
+        "mount": lambda self, p, namespace=None: None,
+        "local_provider": object(),
+    })()
     return ProxyManager(mcp, {})
 
 
