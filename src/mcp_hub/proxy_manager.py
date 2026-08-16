@@ -588,10 +588,27 @@ class ProxyManager:
         return True
 
     async def _mark_error(self, name: str, error_msg: str) -> None:
-        """Mark a server as error and notify disconnect."""
+        """Mark a server as error and drop its broken proxy/client.
+
+        Dropping the proxy from _proxies (and thus from the FastMCP mount list via
+        _rebuild_mounts) routes the server into the health monitor's initial
+        recovery path (status="error" with no proxy → _connect_server with a fresh
+        client). A stale client with leaked nesting_counter can never recover in
+        place, so it must be closed and recreated.
+        """
         async with self._lock:
             self._status[name] = "error"
+            old_proxy = self._proxies.pop(name, None)
+            old_client = self._clients.pop(name, None)
+        if old_client is not None:
+            try:
+                await old_client.close()
+            except Exception:
+                logger.warning("Failed to close upstream client for %s", name, exc_info=True)
         await self._notify_change(name, "disconnected", {"error": error_msg})
+        if old_proxy is not None:
+            async with self._lock:
+                await self._rebuild_mounts()
 
     async def _health_check(self) -> None:
         """Check all connected servers, recover failed ones."""
@@ -836,6 +853,7 @@ class ProxyManager:
             proxy = FastMCPProxy(
                 client_factory=self._make_client_factory(name, client),
                 name=name,
+                provider_error_strategy="raise",
             )
         except Exception:
             await client.close()  # FastMCPProxy 生成失敗時のリーク防止
