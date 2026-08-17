@@ -88,6 +88,17 @@ class ToolLogMiddleware(Middleware):
         arguments = params.arguments or {}
         server, tool = resolve_server(name, arguments, self._pm.get_connected_servers())
 
+        # 受信フェーズを記録。call_next が例外を投げても started は残る
+        # （try の外に置く）。started のみで完了ログがない = 進行中/ハング。
+        app_state.append_log(LogEntry(
+            ts=time.time(),
+            type="tool_call",
+            server=server,
+            tool=tool,
+            status="started",
+            args=mask_args(arguments),
+        ))
+
         start = time.monotonic()
         try:
             result = await call_next(context)

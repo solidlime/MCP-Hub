@@ -63,12 +63,13 @@ class TestToolLogMiddleware:
         asyncio.run(mw.on_call_tool(_DummyContext("fetch_fetch", {"url": "https://example.com"}), call_next))
 
         logs = app_state.snapshot_logs()
-        assert len(logs) == 1
-        assert logs[0].type == "tool_call"
-        assert logs[0].server == "fetch"
-        assert logs[0].tool == "fetch_fetch"
-        assert logs[0].status == "success"
-        assert logs[0].duration_ms is not None
+        assert len(logs) == 2
+        assert logs[0].status == "started"
+        assert logs[1].type == "tool_call"
+        assert logs[1].server == "fetch"
+        assert logs[1].tool == "fetch_fetch"
+        assert logs[1].status == "success"
+        assert logs[1].duration_ms is not None
         assert app_state.tool_calls_total == 1
         assert app_state.tool_call_errors == 0
 
@@ -84,9 +85,10 @@ class TestToolLogMiddleware:
             asyncio.run(mw.on_call_tool(_DummyContext("fetch_fetch", {}), call_next))
 
         logs = app_state.snapshot_logs()
-        assert logs[0].status == "error"
-        assert "boom" in logs[0].error
-        assert logs[0].traceback is not None
+        assert logs[0].status == "started"
+        assert logs[1].status == "error"
+        assert "boom" in logs[1].error
+        assert logs[1].traceback is not None
         assert app_state.tool_call_errors == 1
 
     def test_records_meta_execute_tool_error_json(self):
@@ -108,8 +110,50 @@ class TestToolLogMiddleware:
         ))
 
         logs = app_state.snapshot_logs()
-        assert logs[0].status == "error"
-        assert "Tool not found" in logs[0].error
+        assert logs[0].status == "started"
+        assert logs[1].status == "error"
+        assert "Tool not found" in logs[1].error
+
+    def test_records_started_and_success(self):
+        """started ログが success ログより先に、同じ server/tool で記録される。"""
+        pm = type("PM", (), {"get_connected_servers": lambda self: {"fetch": object()}})()
+        mw = ToolLogMiddleware(pm)
+
+        async def call_next(ctx):
+            return type("R", (), {"is_error": False, "content": []})()
+
+        import asyncio
+        asyncio.run(mw.on_call_tool(_DummyContext("fetch_fetch", {"url": "https://example.com"}), call_next))
+
+        logs = app_state.snapshot_logs()
+        assert len(logs) == 2
+        assert logs[0].status == "started"
+        assert logs[0].server == "fetch"
+        assert logs[0].tool == "fetch_fetch"
+        assert logs[0].duration_ms is None  # 完了前なので duration なし
+        assert logs[1].status == "success"
+        assert logs[1].server == "fetch"
+        assert logs[1].tool == "fetch_fetch"
+
+    def test_records_started_and_error(self):
+        """例外時も started ログが記録され、error ログが続く。"""
+        pm = type("PM", (), {"get_connected_servers": lambda self: {"fetch": object()}})()
+        mw = ToolLogMiddleware(pm)
+
+        async def call_next(ctx):
+            raise RuntimeError("boom")
+
+        import asyncio
+        with pytest.raises(RuntimeError):
+            asyncio.run(mw.on_call_tool(_DummyContext("fetch_fetch", {}), call_next))
+
+        logs = app_state.snapshot_logs()
+        assert len(logs) == 2
+        assert logs[0].status == "started"
+        assert logs[0].server == "fetch"
+        assert logs[0].tool == "fetch_fetch"
+        assert logs[1].status == "error"
+        assert "boom" in logs[1].error
 
 
 class TestIntegration:

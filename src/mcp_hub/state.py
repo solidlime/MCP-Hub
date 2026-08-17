@@ -39,7 +39,7 @@ class LogEntry:
     type: str            # "tool_call" | "server_event"
     server: str          # サーバー名（該当なしは "-"）
     tool: str            # ツール名（server_event では "-"）
-    status: str          # success|error|timeout|connected|disconnected|spawn_failed|recovered|removed|updated
+    status: str          # success|error|timeout|started|connected|disconnected|spawn_failed|recovered|removed|updated
     duration_ms: float | None = None
     args: str | None = None        # マスク済み・最大500字（tool_call のみ）
     error: str | None = None       # エラー概要・最大500字（マスク適用済み）
