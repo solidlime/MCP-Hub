@@ -33,6 +33,7 @@ from .admin_router import router as admin_router
 from .auth import ApiKeyMiddleware
 from .config import load_config
 from .full_info import FullInfoMiddleware
+from .lenient_session_manager import LenientSessionManager
 from .masking import mask_text
 from .middleware import ToolLogMiddleware
 from .proxy_manager import ProxyManager
@@ -260,10 +261,7 @@ async def lifespan(app: FastAPI):
     # _lifespan_manager, session_manager). These may break across FastMCP
     # minor version updates. FastMCP is pinned to <3.5.0 in pyproject.toml.
     # When upgrading FastMCP, verify these attributes still exist.
-    from fastmcp.server.http import (
-        FastMCPStreamableHTTPSessionManager,
-        StreamableHTTPASGIApp,
-    )
+    from fastmcp.server.http import StreamableHTTPASGIApp
 
     inner_app: StreamableHTTPASGIApp | None = None
     for route in mcp_http.routes:
@@ -274,7 +272,7 @@ async def lifespan(app: FastAPI):
     if inner_app is None:
         raise RuntimeError("Could not find StreamableHTTPASGIApp in mounted routes")
 
-    sm = FastMCPStreamableHTTPSessionManager(
+    sm = LenientSessionManager(
         app=mcp_server._mcp_server,
     )
     inner_app.session_manager = sm
@@ -292,7 +290,7 @@ async def lifespan(app: FastAPI):
     if meta_inner_app is None:
         raise RuntimeError("Could not find StreamableHTTPASGIApp in meta routes")
 
-    meta_sm = FastMCPStreamableHTTPSessionManager(
+    meta_sm = LenientSessionManager(
         app=meta_mcp._mcp_server,
     )
     meta_inner_app.session_manager = meta_sm
