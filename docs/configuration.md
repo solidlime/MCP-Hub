@@ -104,7 +104,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `MCP_HUB_LOG` | `text` | `json` を設定すると JSON 構造化ログを出力 |
 | `MCP_HUB_API_KEY` | (未設定) | 設定すると管理 API に X-API-Key 認証が有効になる |
 | `MCP_HUB_HEALTH_INTERVAL` | `60` | ヘルスチェックの間隔（秒）。0以下で無効化 |
-| `MCP_HUB_HEALTH_TIMEOUT` | `10` | ヘルスチェックのタイムアウト（秒） |
+| `MCP_HUB_HEALTH_TIMEOUT` | `25` | ヘルスチェックのタイムアウト（秒）。202 ポーリング対応サーバー（EDINET 等）は tools/list に最大 20 秒かかるため、10 秒以下だと毎回ヘルスチェック失敗 → 切断になる。20 秒以上を推奨 |
 | `MCP_HUB_RETRY_MAX` | `3` | サーバー接続の最大リトライ回数 |
 | `MCP_HUB_RETRY_DELAY` | `1.0` | リトライ間隔のベース delay（秒）。指数バックオフ適用 |
 | `MCP_HUB_MAX_CONCURRENT_CALLS` | `50` | 同時ツール呼び出しの最大数（DoS 対策セマフォ） |

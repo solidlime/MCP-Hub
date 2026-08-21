@@ -619,7 +619,10 @@ class ProxyManager:
             configs_snapshot = dict(self._server_configs)
             status_snapshot = dict(self._status)
 
-        timeout = int(os.environ.get("MCP_HUB_HEALTH_TIMEOUT", "10"))
+        # Must exceed the 202-polling budget in streamable_http_patch.py
+        # (MAX_POLL_ATTEMPTS * POLL_DELAY_SECONDS = 20s), or 202-style servers
+        # (EDINET etc.) time out on every health check and get disconnected.
+        timeout = int(os.environ.get("MCP_HUB_HEALTH_TIMEOUT", "25"))
         max_failures = int(os.environ.get("MCP_HUB_HEALTH_MAX_FAILURES", "3"))
         to_recover: list[str] = []
 
