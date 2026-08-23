@@ -5,6 +5,7 @@ Simulates: search_tools -> execute_tool flow (2-hop discovery).
 import asyncio
 import json
 import os
+import sys
 import tempfile
 
 import pytest
@@ -36,7 +37,7 @@ async def _hub_with_echo(name: str = "stdio-echo"):
     await meta_app.rebuild_index()
     pm.on_change(lambda: meta_app.rebuild_index())
 
-    await pm.register_server(name, {"command": "python3", "args": [_SCRIPT]})
+    await pm.register_server(name, {"command": sys.executable, "args": [_SCRIPT]})
     for _ in range(60):
         s = pm.get_all_status().get(name)
         if s != "connecting":

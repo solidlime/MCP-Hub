@@ -11,6 +11,7 @@ Tests verify that MCP-Hub's ProxyManager can:
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
 
 import pytest
@@ -133,7 +134,7 @@ class TestStdioDogfood:
                 os.path.dirname(__file__), "test_servers", "stdio_echo_server.py"
             )
         )
-        config = {"command": "python3", "args": [script_path]}
+        config = {"command": sys.executable, "args": [script_path]}
         pm, status = await setup_hub_and_register(config, "stdio-echo")
         assert status == "connecting"
 
