@@ -432,3 +432,31 @@ class TestSettings:
         for bad in (-1, 999):
             r = client.patch("/admin/api/settings", json={"client_timeout": bad})
             assert r.status_code == 422
+
+
+class TestUseEmbeddingsSetting:
+    """use_embeddings 設定（GET はライブ index の実効値を返す）。"""
+
+    def test_get_settings_includes_use_embeddings(self, client):
+        r = client.get("/admin/api/settings")
+        assert r.status_code == 200
+        # conftest で MCP_HUB_EMBEDDING=0 → 実効値は常 False（ハードキル）
+        assert r.json()["use_embeddings"] is False
+
+    def test_patch_true_persists_but_env_hard_kill_holds_effective_false(self, client):
+        """PATCH true は store に永続化、GET の実効値は env キルで False のまま。"""
+        r = client.patch("/admin/api/settings", json={"use_embeddings": True})
+        assert r.status_code == 200
+        assert r.json()["use_embeddings"] is False  # 実効値（intended でなく real）
+        # store への永続化を確認（registry はファイルから再読込）
+        stored = app_state.registry._do_read()
+        assert stored["use_embeddings"] is True
+
+    def test_patch_string_value_is_422(self, client):
+        """bool 以外は拒否（meta_mode の truthy 強制バグを再現しない）。"""
+        r = client.patch("/admin/api/settings", json={"use_embeddings": "yes"})
+        assert r.status_code == 422
+
+    def test_patch_int_value_is_422(self, client):
+        r = client.patch("/admin/api/settings", json={"use_embeddings": 1})
+        assert r.status_code == 422

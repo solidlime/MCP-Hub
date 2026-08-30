@@ -4,7 +4,7 @@ ToolIndex unit tests — embedding-based search with BM25 fallback.
 
 import pytest
 from mcp_hub.config import DEFAULT_EMBEDDING_MODEL
-from mcp_hub.meta_provider import ToolIndex, resolve_embedding_model
+from mcp_hub.meta_provider import ToolIndex, resolve_embedding_model, _HAS_FASTEMBED
 
 
 @pytest.fixture
@@ -447,3 +447,37 @@ class TestTagsInIndex:
         for r in results:
             assert "tags" in r
         assert {r["name"] for r in results} == {"tool_0", "tool_1", "tool_2"}
+
+
+class TestUseEmbeddingsSetting:
+    """Feature B: use_embeddings ランタイム設定（env 変数はハードキル）。"""
+
+    def test_effective_flag_respects_construction_args(self, monkeypatch):
+        monkeypatch.delenv("MCP_HUB_EMBEDDING", raising=False)
+        idx = ToolIndex(use_embeddings=True)
+        assert idx.use_embeddings is _HAS_FASTEMBED
+        idx_off = ToolIndex(use_embeddings=False)
+        assert idx_off.use_embeddings is False
+
+    def test_runtime_toggle_off(self):
+        """use_embeddings=True で起動した index を set_use_embeddings(False) で止められる。"""
+        idx = ToolIndex(use_embeddings=False)
+        idx.set_use_embeddings(True)  # fastembed 不在なら False のまま（据 _HAS_FASTEMBED）
+        idx.set_use_embeddings(False)
+        assert idx.use_embeddings is False
+
+    @pytest.mark.skipif(not _HAS_FASTEMBED, reason="fastembed not installed")
+    def test_runtime_toggle_on_without_env_kill(self, monkeypatch):
+        monkeypatch.delenv("MCP_HUB_EMBEDDING", raising=False)
+        idx = ToolIndex(use_embeddings=False)
+        assert idx.use_embeddings is False
+        idx.set_use_embeddings(True)
+        assert idx.use_embeddings is True
+
+    def test_env_hard_kill_beats_setting(self, monkeypatch):
+        """MCP_HUB_EMBEDDING=0 は設定より優先（ハードキル、アーキテクト決定）。"""
+        monkeypatch.setenv("MCP_HUB_EMBEDDING", "0")
+        idx = ToolIndex(use_embeddings=True)
+        assert idx.use_embeddings is False
+        idx.set_use_embeddings(True)
+        assert idx.use_embeddings is False
