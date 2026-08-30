@@ -472,6 +472,49 @@ class TestFlattenedCallCompat:
         assert meta._resolve_server_name("nope") == "nope"
 
 
+class TestServerResolutionErrors:
+    """execute_tool error paths after case-insensitive resolution: an absent
+    server must say "not found" (with the live list) rather than masquerading
+    as a tag-filter rejection, and a real tag rejection must expose the
+    server's actual tags for debugging."""
+
+    def test_unknown_server_no_tags_returns_not_found(self, client):
+        """No tag header + unknown server → 'not found' (not a misleading tag
+        error) and the available server list is attached."""
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"server": "ghost", "tool_name": "whatever", "arguments": {}},
+            "t-ghost",
+        )
+        data = json.loads(_get_text_content(parsed))
+        assert "not found" in data["error"]
+        assert "filesystem" in data["available_servers"]
+        assert "tag filter" not in data["error"]
+
+    def test_tag_mismatch_exposes_server_tags(self, client):
+        """Connected server whose tags miss the filter → tag-filter error that
+        includes the server's real tags so the mismatch is debuggable."""
+        pm = client.app.state.proxy_manager
+        pm.server_tags.side_effect = lambda name: {
+            "brave-search": ["search"],
+        }.get(name, [])
+        request_tags.set(["librarian"])
+        try:
+            parsed = _call_tool(
+                client,
+                "execute_tool",
+                {"server": "brave-search", "tool_name": "brave_web_search",
+                 "arguments": {}},
+                "t-tagdbg",
+            )
+        finally:
+            request_tags.set(None)
+        data = json.loads(_get_text_content(parsed))
+        assert "tag filter" in data["error"]
+        assert data["server_tags"] == ["search"]
+
+
 class TestRebuildIndex:
     """rebuild_index must report servers whose tools could not be fetched,
     so the caller (main.py) can retry with backoff instead of silently

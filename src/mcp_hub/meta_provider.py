@@ -570,6 +570,26 @@ class MetaTools:
         # Normalize to the registered (live) server name before tag check /
         # execution — "Exa" → "exa" (ora-1).
         server = self._resolve_server_name(server)
+
+        # Existence gate BEFORE the tag check: _get_server_tags() returns []
+        # for an unknown server, which the tag check below reported as a
+        # misleading "tag filter" error (prod: librarian tripped on this).
+        # An absent server must say so, with the live server list attached.
+        # (live 未注入 = 検証不能なので素通し。解決失敗＝ここまで素通し済み。)
+        live = self._list_servers()
+        if live and server not in live:
+            return json.dumps(
+                {
+                    "error": f"Server '{server}' not found.",
+                    "hint": "Call search_tools first and copy the exact 'server' "
+                    "value from its results (case-insensitive match was tried "
+                    "and found no unique server).",
+                    "available_servers": sorted(live),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
         # Tag check: block execution if server's tags don't match request_tags.
         # Uses live server tags (not the index) so fresh servers work.
         tags = request_tags.get()
@@ -580,6 +600,8 @@ class MetaTools:
                     {
                         "error": f"Server '{server}' is not available with current tag filter.",
                         "hint": "Check your X-MCP-Hub-Tags header or connect without tag filtering.",
+                        # 実タグを返すことで「フィルタ不一致」をデバッグ可能に
+                        "server_tags": list(server_tags),
                     },
                     ensure_ascii=False,
                     indent=2,

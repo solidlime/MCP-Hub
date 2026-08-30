@@ -303,8 +303,9 @@ class TestResourcesPrompts:
     def test_resources_connected_server_returns_list(self, client):
         mock = self._inject_mock_proxy("res-srv")
         from mcp.types import Resource
+        from pydantic import AnyUrl  # Resource.uri の実型（mcp.types 経由では pyright 不可視）
         mock.list_resources.return_value = [
-            Resource(uri="file:///test.txt", name="test.txt", description="A test file"),
+            Resource(uri=AnyUrl("file:///test.txt"), name="test.txt", description="A test file"),
         ]
         r = client.get("/admin/api/servers/res-srv/resources")
         assert r.status_code == 200
@@ -449,6 +450,7 @@ class TestUseEmbeddingsSetting:
         assert r.status_code == 200
         assert r.json()["use_embeddings"] is False  # 実効値（intended でなく real）
         # store への永続化を確認（registry はファイルから再読込）
+        assert app_state.registry is not None  # narrow for pyright
         stored = app_state.registry._do_read()
         assert stored["use_embeddings"] is True
 
