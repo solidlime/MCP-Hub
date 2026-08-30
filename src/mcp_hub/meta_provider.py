@@ -22,6 +22,7 @@ from .state import tags_match as _tags_match
 try:
     from fastembed import TextEmbedding
     import numpy as np
+
     _HAS_FASTEMBED = True
 except ImportError:
     _HAS_FASTEMBED = False
@@ -40,7 +41,9 @@ def _supported_embedding_models() -> set[str] | None:
         try:
             if _HAS_FASTEMBED:
                 # list_supported_models() は dict のリストを返す（各要素に "model" キー）
-                _SUPPORTED_MODELS_CACHE = {m["model"].lower() for m in TextEmbedding.list_supported_models()}  # type: ignore[name-defined]
+                _SUPPORTED_MODELS_CACHE = {
+                    m["model"].lower() for m in TextEmbedding.list_supported_models()
+                }  # type: ignore[name-defined]
             else:
                 _SUPPORTED_MODELS_CACHE = None
         except Exception:
@@ -54,7 +57,8 @@ def resolve_embedding_model(model: str, supported: set[str] | None) -> str:
     if supported is not None and model.lower() not in supported:
         logger.warning(
             "Embedding model '%s' is not supported by fastembed; falling back to '%s'",
-            model, DEFAULT_EMBEDDING_MODEL,
+            model,
+            DEFAULT_EMBEDDING_MODEL,
         )
         return DEFAULT_EMBEDDING_MODEL
     return model
@@ -77,7 +81,9 @@ class ToolIndex:
         use_embeddings: bool = True,
     ):
         self._lock = asyncio.Lock()
-        self._documents: list[dict] = []  # [{server, name, description, inputSchema, tags}, ...]
+        self._documents: list[
+            dict
+        ] = []  # [{server, name, description, inputSchema, tags}, ...]
         self._bm25: BM25Okapi | None = None
         self._corpus: list[list[str]] = []
         self._embedder: "TextEmbedding | None" = None  # type: ignore[name-defined]
@@ -89,7 +95,9 @@ class ToolIndex:
             and use_embeddings
             and os.environ.get("MCP_HUB_EMBEDDING", "1") != "0"
         )
-        self._embedding_model: str = resolve_embedding_model(embedding_model, _supported_embedding_models())
+        self._embedding_model: str = resolve_embedding_model(
+            embedding_model, _supported_embedding_models()
+        )
 
     @property
     def use_embeddings(self) -> bool:
@@ -180,10 +188,10 @@ class ToolIndex:
                 tokens.extend(field_tokens)
 
         # Core fields with explicit weights
-        _add(doc["name"], copies=5)               # Tool name: ×5
-        _add(doc["server"], copies=3)              # Server name: ×3
-        _add(doc.get("description", ""), copies=2) # Description: ×2
-        for tag in doc.get("tags", []):            # サーバータグ: ×2（説明と同重み）
+        _add(doc["name"], copies=5)  # Tool name: ×5
+        _add(doc["server"], copies=3)  # Server name: ×3
+        _add(doc.get("description", ""), copies=2)  # Description: ×2
+        for tag in doc.get("tags", []):  # サーバータグ: ×2（説明と同重み）
             _add(tag, copies=2)
 
         # InputSchema fields — included at ×1 (baseline)
@@ -193,7 +201,7 @@ class ToolIndex:
                 _add(param_name, copies=1)  # Parameter name
 
                 if isinstance(param_info, dict):
-                    _add(param_info.get("type", ""), copies=1)      # Type
+                    _add(param_info.get("type", ""), copies=1)  # Type
                     _add(param_info.get("description", ""), copies=1)  # Param desc
 
                     # Enum values are highly specific → ×2
@@ -240,9 +248,13 @@ class ToolIndex:
                     ]
                     # Run CPU-bound embedding in a thread; event loop stays responsive.
                     # Search falls back to BM25 until embeddings are ready.
-                    self._embeddings = await asyncio.to_thread(self._embed_docs_blocking, doc_texts)
+                    self._embeddings = await asyncio.to_thread(
+                        self._embed_docs_blocking, doc_texts
+                    )
                 except Exception:
-                    logger.warning("Embedding failed, falling back to BM25", exc_info=True)
+                    logger.warning(
+                        "Embedding failed, falling back to BM25", exc_info=True
+                    )
                     self._embeddings = None
                     self._use_embeddings = False
             else:
@@ -289,20 +301,27 @@ class ToolIndex:
             if shared > 0:
                 # 明示的 dict 構築: {**doc,...} では doc に余計なキーが
                 # あった時に promotion 経路だけ結果形状がずれる。
-                exact.append({
-                    "server": doc["server"],
-                    "name": doc["name"],
-                    "description": doc.get("description", ""),
-                    "tags": doc.get("tags", []),
-                    "inputSchema": doc.get("inputSchema", {}),
-                    "score": float(shared),
-                })
-        exact.sort(key=lambda d: d["score"], reverse=True)  # stable: ties keep doc order
+                exact.append(
+                    {
+                        "server": doc["server"],
+                        "name": doc["name"],
+                        "description": doc.get("description", ""),
+                        "tags": doc.get("tags", []),
+                        "inputSchema": doc.get("inputSchema", {}),
+                        "score": float(shared),
+                    }
+                )
+        exact.sort(
+            key=lambda d: d["score"], reverse=True
+        )  # stable: ties keep doc order
 
         if self._use_embeddings and self._embeddings is not None:
             results = self._semantic_search(query, top_k)
             if not results:
-                logger.info("Semantic search returned 0 results, falling back to BM25 for query: %s", query)
+                logger.info(
+                    "Semantic search returned 0 results, falling back to BM25 for query: %s",
+                    query,
+                )
                 results = self._bm25_search(query, top_k)
         else:
             results = self._bm25_search(query, top_k)
@@ -323,7 +342,8 @@ class ToolIndex:
     def _semantic_search(self, query: str, top_k: int) -> list[dict]:
         """Dense retrieval via embedding cosine similarity."""
         query_vec = np.array(  # type: ignore[name-defined]
-            list(self._embedder.embed([query])), dtype=np.float32  # type: ignore[union-attr]
+            list(self._embedder.embed([query])),  # type: ignore[union-attr]
+            dtype=np.float32,  # type: ignore[union-attr]
         ).squeeze(0)
         # L2-normalize query (bge-small produces normalized docs already)
         norm = np.linalg.norm(query_vec)  # type: ignore[name-defined]
@@ -331,9 +351,7 @@ class ToolIndex:
             query_vec = query_vec / norm
         # Dot product = cosine similarity (both vectors L2-normalized)
         scores = self._embeddings @ query_vec  # type: ignore[name-defined,operator]
-        ranked = sorted(
-            range(len(scores)), key=lambda i: scores[i], reverse=True
-        )
+        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
         docs = self._documents
         results = []
         for idx in ranked[:top_k]:
@@ -341,14 +359,16 @@ class ToolIndex:
             if score <= 0.0:
                 break  # Remaining scores are ≤ 0 (sorted descending) — stop
             doc = docs[idx]
-            results.append({
-                "server": doc["server"],
-                "name": doc["name"],
-                "description": doc.get("description", ""),
-                "tags": doc.get("tags", []),
-                "inputSchema": doc.get("inputSchema", {}),
-                "score": round(score, 4),
-            })
+            results.append(
+                {
+                    "server": doc["server"],
+                    "name": doc["name"],
+                    "description": doc.get("description", ""),
+                    "tags": doc.get("tags", []),
+                    "inputSchema": doc.get("inputSchema", {}),
+                    "score": round(score, 4),
+                }
+            )
         return results
 
     def _bm25_search(self, query: str, top_k: int) -> list[dict]:
@@ -358,22 +378,22 @@ class ToolIndex:
         tokens = self._tokenize(query)
         scores = self._bm25.get_scores(tokens)
         docs = self._documents
-        ranked = sorted(
-            range(len(scores)), key=lambda i: scores[i], reverse=True
-        )
+        ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
         results = []
         for idx in ranked[:top_k]:
             if scores[idx] <= 0:
                 break
             doc = docs[idx]
-            results.append({
-                "server": doc["server"],
-                "name": doc["name"],
-                "description": doc.get("description", ""),
-                "tags": doc.get("tags", []),
-                "inputSchema": doc.get("inputSchema", {}),
-                "score": round(float(scores[idx]), 4),
-            })
+            results.append(
+                {
+                    "server": doc["server"],
+                    "name": doc["name"],
+                    "description": doc.get("description", ""),
+                    "tags": doc.get("tags", []),
+                    "inputSchema": doc.get("inputSchema", {}),
+                    "score": round(float(scores[idx]), 4),
+                }
+            )
         # Small-corpus fallback: when N ≤ 5 and BM25 produces negative IDF
         # (all terms appear in most docs), use simple TF overlap scoring
         if not results and len(self._corpus) <= 5:
@@ -382,19 +402,23 @@ class ToolIndex:
             for doc_tokens in self._corpus:
                 hits = sum(1 for t in doc_tokens if t in query_set)
                 tf_scores.append(hits / max(1, len(doc_tokens)))
-            tf_ranked = sorted(range(len(tf_scores)), key=lambda i: tf_scores[i], reverse=True)
+            tf_ranked = sorted(
+                range(len(tf_scores)), key=lambda i: tf_scores[i], reverse=True
+            )
             for idx in tf_ranked[:top_k]:
                 if tf_scores[idx] <= 0:
                     break
                 doc = docs[idx]
-                results.append({
-                    "server": doc["server"],
-                    "name": doc["name"],
-                    "description": doc.get("description", ""),
-                    "tags": doc.get("tags", []),
-                    "inputSchema": doc.get("inputSchema", {}),
-                    "score": round(tf_scores[idx], 4),
-                })
+                results.append(
+                    {
+                        "server": doc["server"],
+                        "name": doc["name"],
+                        "description": doc.get("description", ""),
+                        "tags": doc.get("tags", []),
+                        "inputSchema": doc.get("inputSchema", {}),
+                        "score": round(tf_scores[idx], 4),
+                    }
+                )
         return results
 
     # ── Schema + Server listing ───────────────────────────────────
@@ -433,6 +457,7 @@ class MetaTools:
         get_server_tags: Callable[[str], list[str]] | None = None,
         list_all_tools_fn: Callable[[], Awaitable[dict]] | None = None,
         list_server_tools_fn: Callable[[str], Awaitable[list]] | None = None,
+        list_servers_fn: Callable[[], list[str]] | None = None,
     ):
         self._index = tool_index
         self._execute_tool = execute_tool_fn
@@ -448,6 +473,21 @@ class MetaTools:
         # (possibly stale / partially-rebuilt) index.
         self._list_all_tools = list_all_tools_fn or _noop_all
         self._list_server_tools = list_server_tools_fn or _noop_server
+        self._list_servers = list_servers_fn or (lambda: [])
+
+    def _resolve_server_name(self, server: str) -> str:
+        """case-insensitive に live サーバー名へ正規化する（ora-1）。
+
+        LLM クライアントは登録名 "exa" に "Exa" を送ることがある（prod ログ）。
+        完全一致が先（既存動作を壊さない）。大小違いがユニークに決まる時だけ
+        置換し、曖昧（"EXA" と "exa" が両方生接続）なら素通しして既存の
+        not-found エラーに落とす。index でなく live 接続一覧を照合源に使う。
+        """
+        live = self._list_servers()
+        if server in live:
+            return server
+        matches = [s for s in live if s.lower() == server.lower()]
+        return matches[0] if len(matches) == 1 else server
 
     def _get_allowed_servers(self) -> set[str] | None:
         """Return the set of server names allowed by request_tags, or None if no filter."""
@@ -461,7 +501,9 @@ class MetaTools:
                 allowed.add(server_name)
         return allowed
 
-    def _filter_search_results(self, results: list[dict], allowed: set[str]) -> list[dict]:
+    def _filter_search_results(
+        self, results: list[dict], allowed: set[str]
+    ) -> list[dict]:
         """Remove results from servers not in *allowed*."""
         return [r for r in results if r["server"] in allowed]
 
@@ -477,10 +519,22 @@ class MetaTools:
         if allowed is not None:
             results = self._filter_search_results(results, allowed)
         if not results:
-            return json.dumps({"message": "No matching tools found", "hint": "Try broader keywords or check server connections."}, ensure_ascii=False, indent=2)
+            return json.dumps(
+                {
+                    "message": "No matching tools found",
+                    "hint": "Try broader keywords or check server connections.",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
         return json.dumps({"results": results}, ensure_ascii=False, indent=2)
 
-    async def execute_tool(self, server: str, tool_name: str, arguments: dict[str, Any]) -> Any:
+    async def execute_tool(
+        self,
+        server: str = "",
+        tool_name: str = "",
+        arguments: dict[str, Any] | None = None,
+    ) -> Any:
         """Execute a tool discovered via search_tools.
 
         Args:
@@ -488,16 +542,48 @@ class MetaTools:
             tool_name: From search_tools results
             arguments: Use inputSchema from search_tools results
         """
+        # Compat shim: some LLM clients flatten ALL params into `arguments`
+        # (prod logs: {"arguments": {"query": ..., "server": "Exa",
+        # "tool_name": "web_search_exa"}}), which pydantic rejected before this
+        # code ran. Lift those keys ONLY when the top-level value is absent —
+        # a correct caller is unaffected, and an upstream tool that genuinely
+        # has a "server" parameter keeps it whenever server was passed.
+        if arguments is None:
+            arguments = {}
+        if not server or not tool_name:
+            arguments = dict(arguments)
+            if not server:
+                server = str(arguments.pop("server", "") or "")
+            if not tool_name:
+                tool_name = str(arguments.pop("tool_name", "") or "")
+
+        if not server or not tool_name:
+            return json.dumps(
+                {
+                    "error": "execute_tool requires both 'server' and 'tool_name'.",
+                    "hint": "Call search_tools first and use the server/name values it returns.",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
+        # Normalize to the registered (live) server name before tag check /
+        # execution — "Exa" → "exa" (ora-1).
+        server = self._resolve_server_name(server)
         # Tag check: block execution if server's tags don't match request_tags.
         # Uses live server tags (not the index) so fresh servers work.
         tags = request_tags.get()
         if tags:
             server_tags = self._get_server_tags(server)
             if not _tags_match(tags, server_tags):
-                return json.dumps({
-                    "error": f"Server '{server}' is not available with current tag filter.",
-                    "hint": "Check your X-MCP-Hub-Tags header or connect without tag filtering."
-                }, ensure_ascii=False, indent=2)
+                return json.dumps(
+                    {
+                        "error": f"Server '{server}' is not available with current tag filter.",
+                        "hint": "Check your X-MCP-Hub-Tags header or connect without tag filtering.",
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
 
         # Verify tool exists on the live proxy (index may be stale/missing).
         try:
@@ -506,10 +592,14 @@ class MetaTools:
             logger.debug("list_server_tools failed for %s", server, exc_info=True)
             tools = []
         if not any(getattr(t, "name", None) == tool_name for t in tools):
-            return json.dumps({
-                "error": f"Tool '{tool_name}' not found on server '{server}'.",
-                "hint": "Use search_tools first to discover available tools on this server."
-            }, ensure_ascii=False, indent=2)
+            return json.dumps(
+                {
+                    "error": f"Tool '{tool_name}' not found on server '{server}'.",
+                    "hint": "Use search_tools first to discover available tools on this server.",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
         return await self._execute_tool(server, tool_name, arguments)
 
     async def list_upstream_tools(self) -> str:
@@ -520,13 +610,23 @@ class MetaTools:
         """
         by_server = await self._list_all_tools()
         if not by_server:
-            return json.dumps({"message": "No upstream tools available. Add servers via admin API."}, ensure_ascii=False, indent=2)
-        tools_by_server = {srv: [t["name"] for t in tools] for srv, tools in by_server.items()}
+            return json.dumps(
+                {"message": "No upstream tools available. Add servers via admin API."},
+                ensure_ascii=False,
+                indent=2,
+            )
+        tools_by_server = {
+            srv: [t["name"] for t in tools] for srv, tools in by_server.items()
+        }
         total = sum(len(t) for t in tools_by_server.values())
-        return json.dumps({
-            "total_tools": total,
-            "tools_by_server": tools_by_server,
-        }, ensure_ascii=False, indent=2)
+        return json.dumps(
+            {
+                "total_tools": total,
+                "tools_by_server": tools_by_server,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
 
 
 class MetaApp:
@@ -560,17 +660,21 @@ def create_meta_app(
         for server_name, proxy in proxy_manager.get_connected_servers().items():
             try:
                 if isinstance(proxy_manager, _ProxyManager):
-                    tools = await proxy_manager.list_tools_for_server(server_name, proxy)
+                    tools = await proxy_manager.list_tools_for_server(
+                        server_name, proxy
+                    )
                 else:
                     tools = await asyncio.wait_for(proxy.list_tools(), timeout=30.0)
                 for t in tools:
-                    all_tools.append({
-                        "server": server_name,
-                        "name": t.name,
-                        "description": t.description or "",
-                        "tags": list(proxy_manager.server_tags(server_name)),
-                        "inputSchema": getattr(t, "parameters", {}),
-                    })
+                    all_tools.append(
+                        {
+                            "server": server_name,
+                            "name": t.name,
+                            "description": t.description or "",
+                            "tags": list(proxy_manager.server_tags(server_name)),
+                            "inputSchema": getattr(t, "parameters", {}),
+                        }
+                    )
             except Exception:
                 logger.warning("Failed to list tools for %s", server_name)
                 failed.append(server_name)
@@ -593,6 +697,8 @@ def create_meta_app(
         get_server_tags=proxy_manager.server_tags,
         list_all_tools_fn=_list_all_tools,
         list_server_tools_fn=_list_server_tools,
+        # live 接続名（index の遅延に左右されない）— case-insensitive 解決用
+        list_servers_fn=lambda: list(proxy_manager.get_connected_servers()),
     )
 
     # Register meta tools via FastMCP tool decorator
@@ -607,7 +713,11 @@ def create_meta_app(
         return await meta.search_tools(query, top_k)
 
     @mcp.tool()
-    async def execute_tool(server: str, tool_name: str, arguments: dict[str, Any]) -> Any:
+    async def execute_tool(
+        server: str = "",
+        tool_name: str = "",
+        arguments: dict[str, Any] | None = None,
+    ) -> Any:
         """Execute a tool discovered via search_tools.
 
         Args:
@@ -615,6 +725,9 @@ def create_meta_app(
             tool_name: From search_tools results
             arguments: Use inputSchema from search_tools results
         """
+        # Defaults are optional (not required) so flattened LLM calls — where
+        # server/tool_name ride inside `arguments` — reach the lift shim in
+        # MetaTools.execute_tool instead of dying in schema validation.
         return await meta.execute_tool(server, tool_name, arguments)
 
     @mcp.tool()

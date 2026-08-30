@@ -377,6 +377,101 @@ class TestLiveProxyListing:
         return json.loads(_get_text_content(parsed))
 
 
+class TestFlattenedCallCompat:
+    """Compatibility shim: some LLM clients flatten ALL execute_tool params
+    inside `arguments` (prod logs, 5 occurrences):
+    {"arguments": {"numResults": 8, "query": "...", "server": "Exa",
+    "tool_name": "web_search_exa"}} — pydantic rejected these before our code
+    ran. server/tool_name are lifted from `arguments` ONLY when the top-level
+    value is missing, so correct callers are byte-for-byte unaffected."""
+
+    def test_flattened_call_lifts_server_and_tool_name(self, client):
+        """Flat call reaches the executor with lifted server/tool_name and
+        the meta keys removed from arguments."""
+        pm = client.app.state.proxy_manager
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"arguments": {"server": "filesystem", "tool_name": "file_read",
+                           "path": "/tmp/x.txt"}},
+            "t-flat",
+        )
+        assert _get_text_content(parsed) == "ok"
+        pm.call_tool.assert_awaited_once_with(
+            "filesystem", "file_read", {"path": "/tmp/x.txt"}
+        )
+
+    def test_normal_call_does_not_steal_legit_server_param(self, client):
+        """Top-level present → arguments dict passed through untouched, even
+        if the upstream tool legitimately has a 'server' parameter."""
+        pm = client.app.state.proxy_manager
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"server": "filesystem", "tool_name": "file_read",
+             "arguments": {"path": "/p", "server": "not-mine"}},
+            "t-legit",
+        )
+        assert _get_text_content(parsed) == "ok"
+        pm.call_tool.assert_awaited_once_with(
+            "filesystem", "file_read", {"path": "/p", "server": "not-mine"}
+        )
+
+    def test_partial_lift_fills_only_the_missing_field(self, client):
+        """server at top level, tool_name buried in arguments → lift only tool_name."""
+        pm = client.app.state.proxy_manager
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"server": "filesystem",
+             "arguments": {"tool_name": "file_read", "path": "/p"}},
+            "t-partial",
+        )
+        assert _get_text_content(parsed) == "ok"
+        pm.call_tool.assert_awaited_once_with(
+            "filesystem", "file_read", {"path": "/p"}
+        )
+
+    def test_both_missing_returns_friendly_error(self, client):
+        """Nothing to lift → JSON error naming both params and search_tools."""
+        pm = client.app.state.proxy_manager
+        parsed = _call_tool(
+            client, "execute_tool", {"arguments": {"query": "hi"}}, "t-empty"
+        )
+        text = _get_text_content(parsed)
+        assert "server" in text and "tool_name" in text
+        assert "search_tools" in text
+        pm.call_tool.assert_not_awaited()
+
+    def test_flattened_call_resolves_case_insensitively(self, client):
+        """ora-1: "Exa" (as LLMs send it) reaches the proxy registered as
+        lowercase "exa", and call_tool gets the canonical registered name."""
+        pm = client.app.state.proxy_manager
+        pm._proxies["exa"] = _build_mock_proxy(
+            [SimpleNamespace(name="web_search_exa", description="", parameters={})]
+        )
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"arguments": {"query": "hi", "server": "Exa",
+                           "tool_name": "web_search_exa"}},
+            "t-case",
+        )
+        assert _get_text_content(parsed) == "ok"
+        pm.call_tool.assert_awaited_once_with(
+            "exa", "web_search_exa", {"query": "hi"}
+        )
+
+    def test_ambiguous_case_passthrough_keeps_existing_error(self, client):
+        """Both "EXA" and "exa" live → no unique resolution; pass through so
+        the existing not-found error fires (never guess)."""
+        meta = client.app.state.meta_app.meta_tools
+        meta._list_servers = lambda: ["EXA", "exa"]
+        assert meta._resolve_server_name("Exa") == "Exa"
+        assert meta._resolve_server_name("exa") == "exa"  # exact match wins
+        assert meta._resolve_server_name("nope") == "nope"
+
+
 class TestRebuildIndex:
     """rebuild_index must report servers whose tools could not be fetched,
     so the caller (main.py) can retry with backoff instead of silently
