@@ -155,6 +155,8 @@ class ToolIndex:
         _add(doc["name"], copies=5)               # Tool name: ×5
         _add(doc["server"], copies=3)              # Server name: ×3
         _add(doc.get("description", ""), copies=2) # Description: ×2
+        for tag in doc.get("tags", []):            # サーバータグ: ×2（説明と同重み）
+            _add(tag, copies=2)
 
         # InputSchema fields — included at ×1 (baseline)
         schema = doc.get("inputSchema", {})
@@ -203,8 +205,9 @@ class ToolIndex:
             # Compute embeddings if fastembed is available
             if self._use_embeddings and documents:
                 try:
+                    # タグ無しでも括弧付きで均一フォーマット（埋め込みの決定性を担保）
                     doc_texts = [
-                        f"{d['server']}/{d['name']}: {d.get('description', '')}"
+                        f"{d['server']}/{d['name']} [{', '.join(d.get('tags', []))}]: {d.get('description', '')}"
                         for d in documents
                     ]
                     # Run CPU-bound embedding in a thread; event loop stays responsive.
@@ -238,7 +241,7 @@ class ToolIndex:
         language mismatch), automatically
         falls back to BM25 which supports multilingual input.
 
-        Returns list of {server, name, description, inputSchema, score}.
+        Returns list of {server, name, description, tags, inputSchema, score}.
 
         inputSchema is included so the LLM can proceed directly to execute_tool without
         a separate get_tool_schema call.
@@ -256,7 +259,16 @@ class ToolIndex:
         for doc in self._documents:
             shared = len(set(self._tokenize(doc["name"])) & query_tokens)
             if shared > 0:
-                exact.append({**doc, "score": float(shared)})
+                # 明示的 dict 構築: {**doc,...} では doc に余計なキーが
+                # あった時に promotion 経路だけ結果形状がずれる。
+                exact.append({
+                    "server": doc["server"],
+                    "name": doc["name"],
+                    "description": doc.get("description", ""),
+                    "tags": doc.get("tags", []),
+                    "inputSchema": doc.get("inputSchema", {}),
+                    "score": float(shared),
+                })
         exact.sort(key=lambda d: d["score"], reverse=True)  # stable: ties keep doc order
 
         if self._use_embeddings and self._embeddings is not None:
@@ -305,6 +317,7 @@ class ToolIndex:
                 "server": doc["server"],
                 "name": doc["name"],
                 "description": doc.get("description", ""),
+                "tags": doc.get("tags", []),
                 "inputSchema": doc.get("inputSchema", {}),
                 "score": round(score, 4),
             })
@@ -329,6 +342,7 @@ class ToolIndex:
                 "server": doc["server"],
                 "name": doc["name"],
                 "description": doc.get("description", ""),
+                "tags": doc.get("tags", []),
                 "inputSchema": doc.get("inputSchema", {}),
                 "score": round(float(scores[idx]), 4),
             })
@@ -349,6 +363,7 @@ class ToolIndex:
                     "server": doc["server"],
                     "name": doc["name"],
                     "description": doc.get("description", ""),
+                    "tags": doc.get("tags", []),
                     "inputSchema": doc.get("inputSchema", {}),
                     "score": round(tf_scores[idx], 4),
                 })
@@ -524,6 +539,7 @@ def create_meta_app(
                         "server": server_name,
                         "name": t.name,
                         "description": t.description or "",
+                        "tags": list(proxy_manager.server_tags(server_name)),
                         "inputSchema": getattr(t, "parameters", {}),
                     })
             except Exception:
