@@ -1820,11 +1820,24 @@
                     <label class="setting-label">🧠 埋め込みモデル</label>
                     <div class="setting-row">
                         <input type="text" id="embeddingModel" class="setting-input"
-                               placeholder="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+                               placeholder="sentence-transformers/all-MiniLM-L6-v2"
                                onchange="saveEmbeddingModel(this.value)">
                     </div>
                     <p class="setting-hint">
                         ツール検索のセマンティック検索に使用する埋め込みモデル。変更は再起動後に反映されます。
+                    </p>
+                    <div class="settings-toggle-row">
+                        <span class="settings-toggle-label" id="useEmbeddingsLabel">use_embeddings</span>
+                        <label class="settings-toggle-switch" title="use_embeddings ON/OFF 切替">
+                            <input type="checkbox" id="useEmbeddingsToggle"
+                                   onchange="toggleEmbedding(this.checked)"
+                                   aria-label="セマンティック検索 (use_embeddings) の ON/OFF 切替">
+                            <span class="settings-toggle-track"></span>
+                            <span class="settings-toggle-thumb"></span>
+                        </label>
+                    </div>
+                    <p class="setting-hint">
+                        セマンティック検索のON/OFF（OFFはBM25のみ・メモリ節約）。変更時はインデックスが再構築されます。
                     </p>
                 </div>
 
@@ -3362,6 +3375,8 @@
                 metaMode = settings.meta_mode;
                 fullInfoTools = settings.full_info_tools || [];
                 document.getElementById('metaModeToggle').checked = metaMode;
+                const useEmbEl = document.getElementById('useEmbeddingsToggle');
+                if (useEmbEl) useEmbEl.checked = !!settings.use_embeddings;
                 updateMetaModeDescription(metaMode);
                 // タイムアウト設定の反映（null なら空欄）
                 const clientEl = document.getElementById('clientTimeout');
@@ -3517,6 +3532,35 @@
             } catch (error) {
                 // Revert toggle on error
                 toggle.checked = metaMode;
+                statusDot.style.background = 'var(--accent-red)';
+                statusText.textContent = '保存に失敗';
+                showToast(error.message, 'error');
+            } finally {
+                toggle.disabled = false;
+            }
+        }
+
+        async function toggleEmbedding(enabled) {
+            const toggle = document.getElementById('useEmbeddingsToggle');
+            const statusDot = document.getElementById('settingsStatusDot');
+            const statusText = document.getElementById('settingsStatusText');
+
+            try {
+                toggle.disabled = true;
+                statusDot.style.background = 'var(--accent-primary)';
+                statusText.textContent = '保存中...';
+
+                const result = await API.patchSettings({ use_embeddings: enabled });
+                // 実効値をサーバーから再同期（環境変数で強制無効化されうるためローカル状態を信用しない）
+                toggle.checked = !!result.use_embeddings;
+                loadSettings();
+
+                statusDot.style.background = 'var(--accent-green)';
+                statusText.textContent = '保存済';
+                showToast(`セマンティック検索を ${toggle.checked ? 'ON' : 'OFF'} にしました`, 'success');
+            } catch (error) {
+                // Revert toggle on error
+                toggle.checked = !enabled;
                 statusDot.style.background = 'var(--accent-red)';
                 statusText.textContent = '保存に失敗';
                 showToast(error.message, 'error');

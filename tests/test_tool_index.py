@@ -338,14 +338,14 @@ class TestResolveEmbeddingModel:
 
     def test_unsupported_model_falls_back(self):
         """非対応モデルは DEFAULT_EMBEDDING_MODEL にフォールバックする。"""
-        supported = {"sentence-transformers/paraphrase-multilingual-minilm-l12-v2"}
+        supported = {"sentence-transformers/all-minilm-l6-v2"}
         result = resolve_embedding_model("cl-nagoya/ruri-v3-30m", supported)
         assert result == DEFAULT_EMBEDDING_MODEL
 
     def test_supported_model_kept(self):
         """対応モデルはそのまま返される。"""
-        supported = {"sentence-transformers/paraphrase-multilingual-minilm-l12-v2"}
-        model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        supported = {"sentence-transformers/all-minilm-l6-v2"}
+        model = "sentence-transformers/all-MiniLM-L6-v2"
         assert resolve_embedding_model(model, supported) == model
 
     def test_support_unknown_returns_as_is(self):
@@ -355,17 +355,14 @@ class TestResolveEmbeddingModel:
 
     def test_supported_matching_is_case_insensitive(self):
         """対応判定は大文字小文字を無視する。"""
-        supported = {"sentence-transformers/paraphrase-multilingual-minilm-l12-v2"}
-        model = "SENTENCE-TRANSFORMERS/PARAPHRASE-MULTILINGUAL-MINILM-L12-V2"
+        supported = {"sentence-transformers/all-minilm-l6-v2"}
+        model = "SENTENCE-TRANSFORMERS/ALL-MINILM-L6-V2"
         assert resolve_embedding_model(model, supported) == model
 
 
-def test_default_embedding_model_is_supported_multilingual():
-    """デフォルト埋め込みモデルは sentence-transformers の多言語対応モデル。"""
-    assert (
-        DEFAULT_EMBEDDING_MODEL
-        == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    )
+def test_default_embedding_model_is_supported():
+    """デフォルト埋め込みモデルは fastembed 対応の軽量モデル。"""
+    assert DEFAULT_EMBEDDING_MODEL == "sentence-transformers/all-MiniLM-L6-v2"
 
 
 class TestTagsInIndex:

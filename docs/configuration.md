@@ -22,7 +22,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 {
   "version": 1,
   "log_level": "info",
-  "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
   "meta_mode": true,
   "full_info_tools": ["fetch_fetch"],
   "mcpServers": {
@@ -49,9 +49,10 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 |---|---|---|---|
 | `version` | int | `1` | 設定ファイルバージョン。現在は `1` のみ。 |
 | `log_level` | string | `"info"` | ログレベル (`debug`, `info`, `warning`, `error`)。大文字小文字を区別しない。 |
-| `embedding_model` | string | `"sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"` | セマンティック検索に使用する埋め込みモデル。fastembed がインストールされている場合に有効。fastembed がサポートしないモデルを指定した場合は警告ログを出してデフォルトにフォールバック。 |
+| `embedding_model` | string | `"sentence-transformers/all-MiniLM-L6-v2"` | セマンティック検索に使用する埋め込みモデル。fastembed がインストールされている場合に有効。fastembed がサポートしないモデルを指定した場合は警告ログを出してデフォルトにフォールバック。 |
 | `meta_mode` | bool | `true`（バンドル設定からシード） | Meta モード（Progressive Discovery）の有効/無効。`true` のとき `search_tools` / `execute_tool` / `list_upstream_tools` の 3 ツールのみ公開。設定未保存時はバンドルされた `hub.config.json` の値が初回起動時にシードされます。 |
 | `full_info_tools` | array\<string\> | `[]` | フル公開するツールのリスト。要素は `"{server}_{tool}"` 形式（例: `"fetch_fetch"`）。Meta モード時、ここに指定したツールのみ `tools/list` に通常ツールとしてフル公開され、`tools/call` で直接呼び出せる。未指定（空配列）なら現行の挙動と互換。 |
+| `use_embeddings` | bool | `true` | セマンティック検索（fastembed）の有効/無効。`false` で BM25 のみ。fastembed が未インストールの場合は実効値が常に `false` になる（ハードゲート）。Web UI の「⚙️ Hub 設定」からも変更可（ランタイム反映・検索インデックス再構築あり）。 |
 | `mcpServers` | object | `{}` | MCP サーバー定義のマップ。キーがサーバー名。 |
 
 ### サーバーエントリフィールド
@@ -113,6 +114,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `MCP_HUB_CLIENT_TIMEOUT` | `180.0` | アップストリームへのリクエスト読み取りタイムアウト（秒）。デフォルト 180 秒。応答しないサーバーによる tools/list のブロック防止は `MCP_HUB_LIST_TOOLS_TIMEOUT` が担当。短すぎる値（例: 5 秒）は正常稼働サーバーのツール実行も失敗させるため非推奨。WebUI の Hub 設定「⏱️ 接続タイムアウト」からも設定可能（保存値が env より優先） |
 | `MCP_HUB_CONNECT_TIMEOUT` | `30.0` | 起動時の接続確認 `list_tools()` のタイムアウト（秒）。WebUI の Hub 設定「⏱️ 接続タイムアウト」からも設定可能（保存値が env より優先） |
 | `MCP_HUB_RECOVERY_COOLDOWN` | `300.0` | ヘルスチェックで死んだサーバーへの自動再接続試行の最小間隔（秒）。ヘルスチェック間隔（デフォルト 60s）より長く設定すること |
+| `MCP_HUB_EMBEDDING` | `1` | `0` に設定するとセマンティック検索を強制無効化（ハードキル）。`use_embeddings` 設定や Web UI トグルより優先され、ランタイム設定で再有効化できない |
 
 ### `MCP_HUB_RESEED=1` の動作
 

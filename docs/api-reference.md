@@ -64,8 +64,8 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
 
 | ツール | 説明 |
 |---|---|
-| `search_tools(query, top_k=10)` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索 |
-| `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行 |
+| `search_tools(query, top_k=10)` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。結果に `tags`（サーバータグ配列）を含む |
+| `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行。互換のため `{"arguments": {...}}` に `server` / `tool_name` / `arguments` を折り畳んだ形式（LLM が生成しがちなフラット呼び出し）も受け付ける。サーバー名の大文字小文字は case-insensitive に解決される |
 | `list_upstream_tools()` | 全アップストリームツールをサーバー別に一覧表示 |
 
 #### フル公開ツール（`full_info_tools`）
@@ -187,13 +187,14 @@ X-API-Key: your-api-key-here
 ```json
 {
   "meta_mode": true,
-  "full_info_tools": ["fetch_fetch"]
+  "full_info_tools": ["fetch_fetch"],
+  "use_embeddings": true
 }
 ```
 
 #### `PATCH /admin/api/settings`
 
-meta_mode を切り替えたり、フル公開ツールを設定します。切り替え後、MCPDispatcher のキャッシュが自動的に無効化されます。
+meta_mode を切り替えたり、フル公開ツールを設定します。切り替え後、MCPDispatcher のキャッシュが自動的に無効化されます。`use_embeddings` は bool で指定し、変更時は検索インデックスが再構築されます（非 bool は `422`）。`MCP_HUB_EMBEDDING=0` によるハードキルが有効な場合、実効値は常に `false` になります。
 
 **Request Body:**
 ```json
@@ -215,7 +216,8 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 ```json
 {
   "meta_mode": true,
-  "full_info_tools": ["fetch_fetch", "filesystem_read_file"]
+  "full_info_tools": ["fetch_fetch", "filesystem_read_file"],
+  "use_embeddings": true
 }
 ```
 
@@ -224,7 +226,7 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 **Response:**
 ```json
 {
-  "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2"
 }
 ```
 

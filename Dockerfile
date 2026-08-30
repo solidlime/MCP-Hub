@@ -42,9 +42,11 @@ RUN uv venv /opt/venv && \
     uv pip install setuptools
 
 # 依存パッケージのみ先にインストール（ソース変更の影響を受けない）
+# embeddings extra (fastembed) も同梱——無いとセマンティック検索が常に BM25 にフォールバックする
 RUN . /opt/venv/bin/activate && \
     uv pip install $(python3 -c "import tomllib; \
-    print(*tomllib.load(open('pyproject.toml','rb'))['project']['dependencies'])")
+    data = tomllib.load(open('pyproject.toml','rb'))['project']; \
+    print(*data['dependencies'], *data['optional-dependencies']['embeddings'])")
 
 # アプリケーションコード + 設定ファイル
 COPY src/ ${APP_HOME}/src/
