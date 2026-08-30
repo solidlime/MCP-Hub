@@ -342,9 +342,13 @@ class ProxyManager:
         プロキシ再生成・サブプロセス再起動を伴わない。tags は
         server_tags() 経由で動的に参照されるため、ここでの更新で
         タグフィルタ・meta index に即時反映される。
+
+        tags_updated は検索インデックス再構築（tags が doc に焼込まれているため）
+        をトリガーする専用の変更通知。プロキシ再生成は伴わない。
         """
         async with self._lock:
             self._server_configs[name] = config
+        await self._notify_change(name, "tags_updated", None)
 
     async def rename_server(self, old_name: str, new_name: str, config: dict) -> None:
         """サーバー名変更。プロキシインスタンスは再利用（接続維持）。"""
@@ -496,7 +500,7 @@ class ProxyManager:
         New signature: callback(name: str, event: str, detail: dict | None)
         where event is one of:
           "connected" | "disconnected" | "spawn_failed" | "recovered"
-          | "removed" | "updated"
+          | "removed" | "updated" | "tags_updated"
         """
         self._on_change_callbacks.append(callback)
 

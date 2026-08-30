@@ -366,3 +366,84 @@ def test_default_embedding_model_is_supported_multilingual():
         DEFAULT_EMBEDDING_MODEL
         == "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     )
+
+
+class TestTagsInIndex:
+    """Feature A: サーバータグを検索インデックスに注入する。"""
+
+    @pytest.fixture
+    async def tagged_index(self):
+        docs = [
+            {
+                "name": "deploy_app",
+                "description": "Ship the artifact to the cluster",
+                "server": "infra",
+                "inputSchema": {"type": "object", "properties": {}},
+                "tags": ["kubernetes", "release"],
+            },
+            {
+                "name": "cook_pasta",
+                "description": "Boil water and drain",
+                "server": "kitchen",
+                "inputSchema": {"type": "object", "properties": {}},
+                "tags": [],
+            },
+        ]
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        idx._use_embeddings = False  # env-independent: exercise the BM25 path
+        return idx
+
+    async def test_bm25_hits_tag_only_keyword(self, tagged_index):
+        """説明に無くタグにのみ含まれる語句で BM25 ヒットする。"""
+        results = tagged_index.search("kubernetes")
+        names = [r["name"] for r in results]
+        assert "deploy_app" in names
+        assert "cook_pasta" not in names
+
+    async def test_all_result_paths_carry_tags(self, tagged_index):
+        """検索結果の全経路（promotion / bm25）で tags キーが同一形状で出る。"""
+        # promotion 経路（name トークン一致）+ bm25 本体
+        results = tagged_index.search("deploy_app")
+        assert results, "promotion 経路の結果が空"
+        for r in results:
+            assert "tags" in r
+        by_name = {r["name"]: r for r in results}
+        assert by_name["deploy_app"]["tags"] == ["kubernetes", "release"]
+        # bm25 本体のみ（説明一致、tags 無し doc）
+        results2 = tagged_index.search("boil water")
+        assert results2
+        for r in results2:
+            assert "tags" in r
+        assert {r["name"] for r in results2} == {"cook_pasta"}
+        assert results2[0]["tags"] == []
+
+    async def test_doc_without_tags_key_gets_empty_list(self):
+        """tags キー自体が無い doc でも結果の tags は []（形状統一）。"""
+        idx = ToolIndex()
+        await idx.rebuild([
+            {"name": "legacy_tool", "description": "Old doc without tags",
+             "server": "legacy", "inputSchema": {}},
+        ])
+        idx._use_embeddings = False
+        results = idx.search("legacy_tool")
+        assert results
+        for r in results:
+            assert r["tags"] == []
+
+    async def test_tf_fallback_carry_tags(self):
+        """小コーパス TF フォールバック経路でも tags が出る。"""
+        docs = [
+            {"name": f"tool_{i}", "description": "generic helper", "server": "s",
+             "inputSchema": {}, "tags": ["shared"] if i == 0 else []}
+            for i in range(3)
+        ]
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        idx._use_embeddings = False
+        # 全 query 語が全 doc に出現 → BM25 IDF 全て負 → TF フォールバック発動
+        results = idx.search("generic helper")
+        assert results, "TF フォールバックが発動していない"
+        for r in results:
+            assert "tags" in r
+        assert {r["name"] for r in results} == {"tool_0", "tool_1", "tool_2"}
