@@ -71,16 +71,44 @@ class ToolIndex:
     BM25 uses token duplication to simulate BM25F field weights.
     """
 
-    def __init__(self, embedding_model: str = DEFAULT_EMBEDDING_MODEL):
+    def __init__(
+        self,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+        use_embeddings: bool = True,
+    ):
         self._lock = asyncio.Lock()
-        self._documents: list[dict] = []  # [{server, name, description, inputSchema}, ...]
+        self._documents: list[dict] = []  # [{server, name, description, inputSchema, tags}, ...]
         self._bm25: BM25Okapi | None = None
         self._corpus: list[list[str]] = []
         self._embedder: "TextEmbedding | None" = None  # type: ignore[name-defined]
         self._embeddings: "np.ndarray | None" = None  # type: ignore[name-defined]
-        # Embedding can be disabled via MCP_HUB_EMBEDDING=0 (tests / low-memory hosts)
-        self._use_embeddings: bool = _HAS_FASTEMBED and os.environ.get("MCP_HUB_EMBEDDING", "1") != "0"
+        # Runtime setting (WebUI 編集可、デフォルト ON) に加え、
+        # MCP_HUB_EMBEDDING=0 はハードキル: 設定が ON でも埋め込みは常に無効。
+        self._use_embeddings: bool = (
+            _HAS_FASTEMBED
+            and use_embeddings
+            and os.environ.get("MCP_HUB_EMBEDDING", "1") != "0"
+        )
         self._embedding_model: str = resolve_embedding_model(embedding_model, _supported_embedding_models())
+
+    @property
+    def use_embeddings(self) -> bool:
+        """現在の効値（設定×fastembed 可否×env ハードキル）。admin GET はこれ-reported."""
+        return self._use_embeddings
+
+    def set_use_embeddings(self, enabled: bool) -> None:
+        """ランタイムで埋め込み ON/OFF を切り替える。
+
+        env の MCP_HUB_EMBEDDING=0 は設定より優先（ハードキル）。
+        ここはフラグだけ変え、再構築は呼び出し側（rebuild_index）の責務。
+        ON 化直後 _embeddings が None でも search() のガード
+        （_use_embeddings and _embeddings is not None）で BM25 に落ちるため安全。
+        """
+        self._use_embeddings = (
+            _HAS_FASTEMBED
+            and enabled
+            and os.environ.get("MCP_HUB_EMBEDDING", "1") != "0"
+        )
 
     # ── Tokenization ──────────────────────────────────────────────
 
@@ -514,10 +542,11 @@ class MetaApp:
 def create_meta_app(
     proxy_manager,  # ProxyManager instance
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+    use_embeddings: bool = True,
 ) -> MetaApp:
     """Create a MetaApp with meta-tools."""
     mcp = FastMCP("MCP Hub Meta")
-    index = ToolIndex(embedding_model=embedding_model)
+    index = ToolIndex(embedding_model=embedding_model, use_embeddings=use_embeddings)
 
     # Build initial index from all connected proxy tools
     async def rebuild_index() -> list[str]:

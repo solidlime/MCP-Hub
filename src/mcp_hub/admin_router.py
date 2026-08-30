@@ -102,6 +102,17 @@ def _validate_timeout(value: Any, name: str) -> float | None:
     return f
 
 
+def _effective_use_embeddings() -> bool:
+    """ライブ index の実効値を返す（ストアの意図値でなく現状値を UI に出すため）。
+
+    meta_app 未初期化なら埋め込み検索は動作し得ないので False が真実。
+    """
+    index = getattr(getattr(app_state, "meta_app", None), "index", None)
+    if index is None:
+        return False
+    return bool(index.use_embeddings)
+
+
 @router.get("/settings")
 async def get_settings():
     registry = _get_registry()
@@ -111,6 +122,7 @@ async def get_settings():
         "full_info_tools": data.get("full_info_tools", []),
         "client_timeout": data.get("client_timeout"),
         "connect_timeout": data.get("connect_timeout"),
+        "use_embeddings": _effective_use_embeddings(),
     }
 
 
@@ -119,6 +131,24 @@ async def update_settings(body: dict):
     registry = _get_registry()
     if "meta_mode" in body:
         await registry.set_meta_mode(bool(body["meta_mode"]))
+    if "use_embeddings" in body:
+        value = body["use_embeddings"]
+        # meta_mode の bool() 強制とは違い、厳密に bool を要求する
+        if not isinstance(value, bool):
+            raise HTTPException(
+                status_code=422,
+                detail="use_embeddings は真偽値（true/false）である必要があります",
+            )
+        await registry.set_use_embeddings(value)
+        meta_app = getattr(app_state, "meta_app", None)
+        if meta_app is not None:
+            # 設定→実効フラグ（env ハードキルは index 側で再評価）へ反映し、
+            # 検索インデックスを再構築（embed/on 切替で doc テキストが変わる）。
+            meta_app.index.set_use_embeddings(value)
+            try:
+                await meta_app.rebuild_index()
+            except Exception:
+                logger.exception("Index rebuild after use_embeddings change failed")
     if "full_info_tools" in body:
         tools = body["full_info_tools"]
         if not isinstance(tools, list) or not all(
@@ -144,6 +174,7 @@ async def update_settings(body: dict):
         "full_info_tools": data.get("full_info_tools", []),
         "client_timeout": data.get("client_timeout"),
         "connect_timeout": data.get("connect_timeout"),
+        "use_embeddings": _effective_use_embeddings(),
     }
 
 

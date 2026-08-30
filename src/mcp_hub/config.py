@@ -21,6 +21,7 @@ class HubConfig:
     version: int = 1
     log_level: str = "info"
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    use_embeddings: bool = True
 
 
 def _data_dir() -> str:
@@ -60,6 +61,7 @@ def _parse_config(filepath: Path) -> HubConfig:
 
     log_level = raw.get("log_level", "info")
     embedding_model = raw.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+    use_embeddings = raw.get("use_embeddings", True)
     raw_servers = raw.get("mcpServers", raw.get("servers", {}))
 
     if not isinstance(raw_servers, dict):
@@ -79,6 +81,7 @@ def _parse_config(filepath: Path) -> HubConfig:
         version=version,
         log_level=log_level,
         embedding_model=embedding_model,
+        use_embeddings=use_embeddings,
     )
 
 
