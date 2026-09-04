@@ -10,11 +10,13 @@ import re
 import time
 import traceback
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 from urllib.parse import urlparse
 
 from fastmcp import FastMCP
 from fastmcp.client import Client
+from fastmcp.client.transports.base import TransportOptions
 from fastmcp.client.transports.http import StreamableHttpTransport
 from fastmcp.client.transports.sse import SSETransport
 from fastmcp.client.transports.stdio import StdioTransport
@@ -32,6 +34,9 @@ logger = logging.getLogger(__name__)
 # connects to MCP-Hub), the default handler calls ctx.list_roots() which fails
 # with "session is not available".  Replace with a resilient version that
 # returns empty roots instead of raising RuntimeError.
+# 4.x note: default_proxy_roots_handler survives as the canonical proxy
+# forwarding path (fastmcp.server.providers.proxy); the frontend path is
+# Client(roots=...). Hub itself makes no direct ctx.list_roots() call.
 _orig_default_roots = _proxy_providers.default_proxy_roots_handler
 
 
@@ -834,6 +839,7 @@ class ProxyManager:
                 transport: Any = SSETransport(url=url, headers=headers)
             else:
                 transport = StreamableHttpTransport(url=url, headers=headers)
+            # timeout は float 秒のまま (4.x でも単位不変のため変更なし)
             client = Client(transport=transport, timeout=self._client_timeout())
         elif command:
             args = config.get("args", [])
@@ -842,6 +848,16 @@ class ProxyManager:
             client = Client(transport=transport)
         else:
             raise ValueError(f"Invalid config for {name}: need 'url' or 'command'")
+        # 4.x header forwarding: TransportOptions.forward_incoming_headers.
+        # Transports read it at connect time via _get_forwardable_http_headers()
+        # (authorization + custom proxy headers; mcp-*/last-event-id stripped,
+        # Cookie excluded — escape hatch is get_http_headers(include={"cookie"})).
+        # Must be set BEFORE __aenter__; the old transport.forward_incoming_headers
+        # attribute no longer exists in 4.x. Honored by HTTP/SSE, ignored by stdio.
+        client._transport_options = replace(
+            client._transport_options or TransportOptions(),
+            forward_incoming_headers=True,
+        )
         # 接続確立（Client は reentrant: __aenter__ で接続、close で切断）
         try:
             await client.__aenter__()
@@ -853,11 +869,11 @@ class ProxyManager:
             await client.close()
             raise
         try:
-            # fastmcp の _create_client_factory が行う header forwarding の移植
-            # （接続済み Client の transport に incoming header 伝播を設定）
-            transport = getattr(client, "transport", None)
-            if isinstance(transport, (StreamableHttpTransport, SSETransport)):
-                transport.forward_incoming_headers = True
+            # 4.x: FastMCPProxy builds ProxyProvider(client_factory) internally;
+            # per-request fresh sessions come from ProxyClient.new() for
+            # non-Client targets, while our connected-Client factory keeps the
+            # single-session reuse (handshake avoidance + error short-circuit).
+            # mode="auto" default is kept (not pinned to legacy) for v1 fallback.
             proxy = FastMCPProxy(
                 client_factory=self._make_client_factory(name, client),
                 name=name,
@@ -887,13 +903,18 @@ class ProxyManager:
 
         NOTE: Callers must hold self._lock when calling this method.
         """
-        # NOTE: self.mcp.providers and self.mcp.local_provider are FastMCP
-        # internal/private APIs. These may break across FastMCP minor
-        # version updates. FastMCP is pinned to <3.5.0 in pyproject.toml.
+        # 4.x: unmount/remove_provider は不在のため、リセットは providers
+        # リストの作り直し + 公開 mount(namespace=) (= add_provider 経路) での
+        # 再マウントで行う。self.mcp の object identity は main.py が保持
+        # (middleware/http_app 構築元) するため FastMCP(providers=[...]) での
+        # 差し替えはしない。local_provider は公開 property。
+        # _server_instances には触らない (shutdown terminate 専用)。
         self._rebuilding = True
         self._rebuild_complete.clear()
         try:
-            self.mcp.providers = [self.mcp.local_provider]
+            mounted = self.mcp.providers
+            mounted.clear()
+            mounted.append(self.mcp.local_provider)
 
             # 全 proxy を再マウント
             for srv_name, proxy in self._proxies.items():
