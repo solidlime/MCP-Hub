@@ -300,12 +300,12 @@ MCP Hub は以下の FastMCP 内部/プライベート API に依存していま
 - `FastMCPStreamableHTTPSessionManager`
 
 これらの API は FastMCP のメジャーバージョン更新で変更される可能性があります。
-現在は FastMCP `<4.0.0` で動作確認済みです。
+現在は FastMCP `<5.0.0` で動作確認済みです。
 
 **バージョンガード：**
-- `pyproject.toml` で `fastmcp>=3.4.0,<4.0.0` にピン止め
-- 起動時に `fastmcp.__version__` が `>=4.0.0` の場合、警告ログを出力
-- インストール時に FastMCP `>=3.5.0` が検出されると `sys.exit(1)` で強制終了
+- `pyproject.toml` で `fastmcp>=4.0,<5.0` にピン止め
+- 起動時に `fastmcp.__version__` が `>=5.0.0` の場合、警告ログを出力
+- インストール時の上限は `<5.0.0`。`>=5.0.0` 検出時は警告のみ（強制終了なし）
 
 ### SSE 再接続
 

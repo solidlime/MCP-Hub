@@ -141,20 +141,20 @@ MCP エンドポイント（`/mcp`）にはビルトインの認証機構はあ�
 
 ### 3.1 インストール時のバージョンチェック
 
-`pyproject.toml` で FastMCP のバージョンを `<4.0.0` にピン止めしています：
+`pyproject.toml` で FastMCP のバージョンを `<5.0.0` にピン止めしています：
 
 ```toml
 dependencies = [
-    "fastmcp>=3.4.0,<4.0.0",
+    "fastmcp>=4.0,<5.0",
 ]
 ```
 
 ### 3.2 起動時の互換性警告
 
-起動時に `fastmcp.__version__` をチェックし、`>=4.0.0` の場合は警告をログに出力します：
+起動時に `fastmcp.__version__` をチェックし、`>=5.0.0` の場合は警告をログに出力します：
 
 ```
-WARNING: FastMCP 4.x may not be compatible (tested against <4.0.0).
+WARNING: FastMCP 5.x may not be compatible (tested against <5.0.0).
 Internal APIs used by MCP-Hub may have changed.
 ```
 
