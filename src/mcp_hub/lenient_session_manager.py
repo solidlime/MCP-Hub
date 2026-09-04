@@ -8,8 +8,11 @@ through the SDK's stateless request path so tool calls still work.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastmcp.server.http import FastMCPStreamableHTTPSessionManager
 from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
+from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
 
 
 class LenientSessionManager(FastMCPStreamableHTTPSessionManager):
@@ -19,9 +22,20 @@ class LenientSessionManager(FastMCPStreamableHTTPSessionManager):
     would just hang an SSE stream). Only POST is made lenient.
     """
 
+    def __init__(self, *args: Any, session_idle_timeout: float | None = None, **kwargs: Any) -> None:
+        """Accept session_idle_timeout (4.x idle-expiry knob, default None)."""
+        super().__init__(*args, session_idle_timeout=session_idle_timeout, **kwargs)
+
     async def handle_request(self, scope, receive, send):
         if scope["method"] == "POST" and self._is_unknown_session(scope):
-            await self._handle_stateless_request(scope, receive, send)
+            # mcp 2.x: _handle_stateless_request takes protocol_version_hint
+            # first (from the mcp-protocol-version header, None if absent).
+            header = MCP_PROTOCOL_VERSION_HEADER.encode("ascii")
+            pv = next(
+                (v.decode("latin-1") for k, v in scope.get("headers", []) if k == header),
+                None,
+            )
+            await self._handle_stateless_request(pv, scope, receive, send)
             return
         await super().handle_request(scope, receive, send)
 
