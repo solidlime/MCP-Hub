@@ -136,7 +136,14 @@ class ToolIndex:
 
         Snake_case identifiers are preserved intact (step 2) AND also split
         (step 3), giving both exact match and component match capability.
+
+        v2 SDK schemas use list-form fields (e.g. type: ["string", "null"]);
+        coerce here so one non-str field can't kill an index rebuild.
         """
+        if isinstance(text, list):
+            text = " ".join(str(t) for t in text)
+        elif not isinstance(text, str):
+            text = str(text)
         seen: set[str] = set()
         out: list[str] = []
 

@@ -235,6 +235,21 @@ class TestTokenizer:
         assert ToolIndex._tokenize("") == []
         assert ToolIndex._tokenize("   ") == []
 
+    def test_list_type_coerced(self):
+        """v2 SDK list-form fields (e.g. type: ['string', 'null']) tokenize."""
+        tokens = ToolIndex._tokenize(["string", "null"])
+        assert "string" in tokens
+        assert "null" in tokens
+
+    def test_build_doc_tokens_v2_list_type(self):
+        """_build_doc_tokens survives v2 list-form param types."""
+        doc = {
+            "name": "x", "server": "s", "description": "",
+            "inputSchema": {"properties": {"q": {"type": ["string", "null"]}}},
+        }
+        tokens = ToolIndex._build_doc_tokens(doc)
+        assert "string" in tokens
+
 
 class TestSchemaAwareSearch:
     """Search tests that verify inputSchema inclusion."""
