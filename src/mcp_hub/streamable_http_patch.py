@@ -24,15 +24,14 @@ import logging
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
-import httpx
+import httpx2
 
 from mcp.client.streamable_http import (
-    CONTENT_TYPE,
-    JSON,
-    SSE,
     StreamableHTTPTransport,
 )
+from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCRequest, JSONRPCMessage
+from mcp_types import ErrorData, INVALID_REQUEST, JSONRPCError
 
 if TYPE_CHECKING:
     from mcp.client.streamable_http import RequestContext
@@ -124,10 +123,14 @@ async def _patched_handle_post_request(
 
         # Original logic for non-202 responses (unchanged)
         if response.status_code == 404:
-            if isinstance(message.root, JSONRPCRequest):
-                await self._send_session_terminated_error(
-                    ctx.read_stream_writer, message.root.id,
+            if isinstance(message, JSONRPCRequest):
+                # 2.x: _send_session_terminated_error is gone — inline the
+                # Session-terminated error send (SessionMessage + JSONRPCError).
+                error_data = ErrorData(code=INVALID_REQUEST, message="Session terminated")
+                session_message = SessionMessage(
+                    JSONRPCError(jsonrpc="2.0", id=message.id, error=error_data)
                 )
+                await ctx.read_stream_writer.send(session_message)
             return
 
         response.raise_for_status()
@@ -136,7 +139,7 @@ async def _patched_handle_post_request(
 
 async def _process_response(
     self: StreamableHTTPTransport,
-    response: "httpx.Response",
+    response: "httpx2.Response",
     ctx: "RequestContext",
     message: JSONRPCMessage,
     is_initialization: bool,
@@ -149,8 +152,8 @@ async def _process_response(
     if is_initialization:
         self._maybe_extract_session_id_from_response(response)
 
-    if isinstance(message.root, JSONRPCRequest):
-        content_type = response.headers.get(CONTENT_TYPE, "").lower()
+    if isinstance(message, JSONRPCRequest):
+        content_type = response.headers.get("content-type", "").lower()
         content_encoding = response.headers.get("content-encoding", "")
         content_length = response.headers.get("content-length", "")
         logger.debug(
@@ -158,7 +161,7 @@ async def _process_response(
             self.url, content_type, content_encoding or "none", content_length or "unknown",
         )
 
-        if content_type.startswith(JSON):
+        if content_type.startswith("application/json"):
             # Pre-read body for diagnostics (aread() caches; _handle_json_response reuses cached bytes)
             body = await response.aread()
             if body and body[:1] != b"{":
@@ -168,15 +171,23 @@ async def _process_response(
                     self.url, content_type, content_encoding or "none",
                     body[:128].hex(),
                 )
+            # 2.x: _handle_json_response(response, writer, *, request_id=...)
             await self._handle_json_response(
-                response, ctx.read_stream_writer, is_initialization,
+                response, ctx.read_stream_writer, request_id=message.id,
             )
-        elif content_type.startswith(SSE):
-            await self._handle_sse_response(response, ctx, is_initialization)
+        elif content_type.startswith("text/event-stream"):
+            # 2.x: _handle_sse_response(response, ctx)
+            await self._handle_sse_response(response, ctx)
         else:
-            await self._handle_unexpected_content_type(
-                content_type, ctx.read_stream_writer,
+            # 2.x: no _handle_unexpected* helper — inline the error send.
+            logger.error("Unexpected content type: %s", content_type)
+            error_data = ErrorData(
+                code=INVALID_REQUEST, message=f"Unexpected content type: {content_type}"
             )
+            error_msg = SessionMessage(
+                JSONRPCError(jsonrpc="2.0", id=message.id, error=error_data)
+            )
+            await ctx.read_stream_writer.send(error_msg)
 
 
 def apply_patch() -> None:
