@@ -511,7 +511,7 @@ async def list_server_resource_templates(name: str):
     try:
         templates = await proxy.list_resource_templates()
         return {"resource_templates": [
-            {"uriTemplate": str(rt.uriTemplate), "name": rt.name, "description": rt.description or ""}
+            {"uriTemplate": str(rt.uri_template), "name": rt.name, "description": rt.description or ""}
             for rt in templates
         ]}
     except Exception:
