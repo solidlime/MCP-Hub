@@ -44,9 +44,9 @@ class TestTagMiddleware:
         r = client.post("/mcp?tags=web,local", json={
             "jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}
         })
-        # FastMCP returns 406 (Not Acceptable) for streamable-http
-        # without proper Accept header — that's expected
-        assert r.status_code == 406
+        # mcp 2.x returns 400 (-32600 Missing session ID) for session-less
+        # POST (was 406 on v1) — either proves no 500 on tagged path
+        assert r.status_code == 400
 
     def test_header_override_query(self, client):
         """X-MCP-Hub-Tags header takes priority over ?tags= query param."""
@@ -55,7 +55,8 @@ class TestTagMiddleware:
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
             headers={"X-MCP-Hub-Tags": "local"}
         )
-        assert r.status_code == 406
+        # v2: 400 proves no 500 (see above)
+        assert r.status_code == 400
 
 
 class TestTagFilterMiddlewareUnit:
