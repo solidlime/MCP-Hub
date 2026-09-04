@@ -51,6 +51,18 @@ PORT = int(os.environ.get("MCP_HUB_PORT", "26263"))
 HOST = os.environ.get("MCP_HUB_HOST", "0.0.0.0")
 
 
+def _session_idle_timeout() -> float | None:
+    """Upstream session idle expiry (seconds) for 4.x session managers.
+
+    4.x removed SessionManager._cleanup_stale(); idle expiry is now owned by
+    the SDK via session_idle_timeout=. Default None (= SDK default, no expiry)
+    preserves current behavior; set MCP_HUB_SESSION_IDLE_TIMEOUT to trim idle
+    upstream sessions. _server_instances is shutdown-terminate only — untouched.
+    """
+    raw = os.environ.get("MCP_HUB_SESSION_IDLE_TIMEOUT")
+    return float(raw) if raw else None
+
+
 class MCPDispatcher:
     """ASGI dispatcher with cached meta_mode. Call invalidate_cache() after toggling."""
 
@@ -79,23 +91,18 @@ class MCPDispatcher:
                 pass
 
     async def _session_cleanup_loop(self):
-        """Every 5 minutes, trim sessions on the inactive side."""
+        """Cadence/shutdown hook for session hygiene.
+
+        4.x: idle expiry is owned by the SDK (session_idle_timeout= on SM
+        construction). _cleanup_stale no longer exists, so this loop only
+        sleeps until shutdown — kept as the lifecycle hook.
+        """
         import asyncio
         while not self._shutdown:
             try:
                 await asyncio.sleep(300)
             except asyncio.CancelledError:
                 break
-            try:
-                if hasattr(self, '_last_active_side'):
-                    if self._last_active_side == 'normal':
-                        if hasattr(self, '_normal_sm') and hasattr(self._normal_sm, '_cleanup_stale'):
-                            await self._normal_sm._cleanup_stale()
-                    elif self._last_active_side == 'meta':
-                        if hasattr(self, '_meta_sm') and hasattr(self._meta_sm, '_cleanup_stale'):
-                            await self._meta_sm._cleanup_stale()
-            except Exception:
-                pass
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
@@ -142,14 +149,14 @@ async def lifespan(app: FastAPI):
     # NOTE: We use FastMCP internal/private APIs (_mcp_server,
     # _lifespan_manager, session_manager, providers, local_provider).
     # These may break across FastMCP major version updates.
-    # Tested against <4.0.0.
+    # Tested against <5.0.0.
     try:
         from packaging import version as _v
 
         _fver = _v.parse(fastmcp.__version__)
-        if _fver >= _v.parse("4.0.0"):
+        if _fver >= _v.parse("5.0.0"):
             logger.warning(
-                "FastMCP %s may not be compatible (tested against <4.0.0). "
+                "FastMCP %s may not be compatible (tested against <5.0.0). "
                 "Internal APIs used by MCP-Hub may have changed.",
                 fastmcp.__version__,
             )
@@ -256,15 +263,19 @@ async def lifespan(app: FastAPI):
 
     # FastMCP の HTTP ASGI アプリを生成
     # path="/" は mount 先が /mcp なので sub-app のルートで受けるため
-    mcp_http = mcp_server.http_app(transport="streamable-http", path="/")
+    # 4.x: http_app(path, middleware, json_response, stateless_http, transport, ...) — path先頭
+    mcp_http = mcp_server.http_app(path="/", transport="streamable-http")
 
     # FastMCP のライフスパンを手動で実行
     # (mounted ASGI サブアプリの lifespan は親から自動実行されない)
     # 内部の StreamableHTTPASGIApp を見つけて session_manager を設定する
     # NOTE: The following uses FastMCP internal/private APIs (_mcp_server,
     # _lifespan_manager, session_manager). These may break across FastMCP
-    # minor version updates. FastMCP is pinned to <3.5.0 in pyproject.toml.
+    # major version updates. FastMCP is >=4.0,<5.0 in pyproject.toml.
     # When upgrading FastMCP, verify these attributes still exist.
+    # Route scan matches ONLY the StreamableHTTPASGIApp endpoint: modern-era
+    # extra routes (server/discover, auth RequireAuthMiddleware, HostOriginGuard)
+    # never match this isinstance check, so no false positives.
     from fastmcp.server.http import StreamableHTTPASGIApp
 
     inner_app: StreamableHTTPASGIApp | None = None
@@ -278,12 +289,13 @@ async def lifespan(app: FastAPI):
 
     sm = LenientSessionManager(
         app=mcp_server._mcp_server,
+        session_idle_timeout=_session_idle_timeout(),
     )
     inner_app.session_manager = sm
 
     # === meta app (Progressive Discovery, used when meta_mode=True) ===
     meta_mcp = meta_app.mcp
-    meta_http = meta_mcp.http_app(transport="streamable-http", path="/")
+    meta_http = meta_mcp.http_app(path="/", transport="streamable-http")
 
     meta_inner_app: StreamableHTTPASGIApp | None = None
     for route in meta_http.routes:
@@ -296,6 +308,7 @@ async def lifespan(app: FastAPI):
 
     meta_sm = LenientSessionManager(
         app=meta_mcp._mcp_server,
+        session_idle_timeout=_session_idle_timeout(),
     )
     meta_inner_app.session_manager = meta_sm
 
@@ -310,6 +323,8 @@ async def lifespan(app: FastAPI):
     app.mount("/mcp", dispatcher)
 
     # Python 3.12+ parenthesized context managers
+    # 4.x: _mcp_server 注入 + _lifespan_manager()+sm.run() を1回ずつ維持
+    # (lifespan exactly-once 前提 — verified present in 4.0.2)
     async with (
         mcp_server._lifespan_manager(),
         sm.run(),
