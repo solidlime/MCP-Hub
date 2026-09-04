@@ -33,6 +33,8 @@ def sse_echo(message: str) -> str:
 
 
 app = mcp.http_app(transport="sse", path="/sse")
+# 4.x note: SSETransport is legacy-only (legacy_only=True) — even with
+# Client(mode="auto") the handshake era is pinned for SSE endpoints.
 
 # ---------------------------------------------------------------------------
 # State

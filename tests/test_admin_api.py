@@ -302,10 +302,9 @@ class TestResourcesPrompts:
 
     def test_resources_connected_server_returns_list(self, client):
         mock = self._inject_mock_proxy("res-srv")
-        from mcp.types import Resource
-        from pydantic import AnyUrl  # Resource.uri の実型（mcp.types 経由では pyright 不可視）
+        from mcp.types import Resource  # v2: Resource.uri is str
         mock.list_resources.return_value = [
-            Resource(uri=AnyUrl("file:///test.txt"), name="test.txt", description="A test file"),
+            Resource(uri="file:///test.txt", name="test.txt", description="A test file"),
         ]
         r = client.get("/admin/api/servers/res-srv/resources")
         assert r.status_code == 200
@@ -462,3 +461,71 @@ class TestUseEmbeddingsSetting:
     def test_patch_int_value_is_422(self, client):
         r = client.patch("/admin/api/settings", json={"use_embeddings": 1})
         assert r.status_code == 422
+
+
+class TestV2Contracts:
+    """SDK v2 migration contract checks (fast, no live upstream needed)."""
+
+    def test_mount_namespace_tool_naming(self):
+        """Mounted tools are exposed as {server}_{tool}."""
+        import asyncio
+
+        from fastmcp import FastMCP
+
+        async def go():
+            mcp = FastMCP("hub")
+            sub = FastMCP("sub")
+
+            @sub.tool
+            def foo() -> str:
+                return "x"
+
+            mcp.mount(sub, namespace="api")
+            return [t.name for t in await mcp.list_tools()]
+
+        assert asyncio.run(go()) == ["api_foo"]
+
+    def test_mount_namespace_resource_uri(self):
+        """Mounted resources are exposed as protocol://{server}/path."""
+        import asyncio
+
+        from fastmcp import FastMCP
+
+        async def go():
+            mcp = FastMCP("hub")
+            sub = FastMCP("sub")
+
+            @sub.resource("data://api/info")
+            def info() -> str:
+                return "ok"
+
+            mcp.mount(sub, namespace="api")
+            return [str(r.uri) for r in await mcp.list_resources()]
+
+        assert asyncio.run(go()) == ["data://api/api/info"]
+
+    def test_client_defaults_to_auto_mode(self):
+        """Client(mode='auto') default keeps the v1 handshake fallback path."""
+        from fastmcp.client import Client
+
+        assert Client(transport="http://localhost:9/mcp").mode == "auto"
+
+    def test_sse_transport_is_legacy_only(self):
+        """SSE endpoints pin the handshake era even under mode='auto'."""
+        from fastmcp.client.transports.sse import SSETransport
+
+        assert SSETransport.legacy_only is True
+
+    def test_dispatcher_uses_lenient_session_managers(self, client):
+        """Both dispatcher sides run LenientSessionManager (unknown-session POSTs stay lenient)."""
+        from mcp_hub.lenient_session_manager import LenientSessionManager
+
+        dispatcher = app_state.mcp_dispatcher
+        assert isinstance(dispatcher._normal_sm, LenientSessionManager)
+        assert isinstance(dispatcher._meta_sm, LenientSessionManager)
+
+    def test_202_polling_patch_is_active(self, client):
+        """streamable_http_patch.apply_patch() ran at startup (httpx2 202-poll path live)."""
+        from mcp.client.streamable_http import StreamableHTTPTransport
+
+        assert StreamableHTTPTransport._handle_post_request.__name__ == "_patched_handle_post_request"
