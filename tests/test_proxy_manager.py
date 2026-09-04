@@ -35,6 +35,9 @@ def _make_manager():
     mcp = type("MCP", (), {
         "mount": lambda self, p, namespace=None: None,
         "local_provider": object(),
+        # _rebuild_mounts mutates this list in place (mirrors FastMCP.providers);
+        # fresh list per call so tests never share mount state.
+        "providers": [],
     })()
     return ProxyManager(mcp, {})
 

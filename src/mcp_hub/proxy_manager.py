@@ -854,8 +854,12 @@ class ProxyManager:
         # Cookie excluded — escape hatch is get_http_headers(include={"cookie"})).
         # Must be set BEFORE __aenter__; the old transport.forward_incoming_headers
         # attribute no longer exists in 4.x. Honored by HTTP/SSE, ignored by stdio.
+        # Fresh clients default _transport_options to None (4.x Client has
+        # no transport_options ctor param); never read it back here —
+        # autospec mocks lack the instance attr. The write below is honored
+        # by HTTP/SSE transports at connect time.
         client._transport_options = replace(
-            client._transport_options or TransportOptions(),
+            TransportOptions(),
             forward_incoming_headers=True,
         )
         # 接続確立（Client は reentrant: __aenter__ で接続、close で切断）
