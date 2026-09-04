@@ -8,8 +8,6 @@ through the SDK's stateless request path so tool calls still work.
 
 from __future__ import annotations
 
-from typing import Any
-
 from fastmcp.server.http import FastMCPStreamableHTTPSessionManager
 from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
 from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
@@ -21,10 +19,6 @@ class LenientSessionManager(FastMCPStreamableHTTPSessionManager):
     GET/DELETE with unknown session IDs still return 404 (a stateless GET
     would just hang an SSE stream). Only POST is made lenient.
     """
-
-    def __init__(self, *args: Any, session_idle_timeout: float | None = None, **kwargs: Any) -> None:
-        """Accept session_idle_timeout (4.x idle-expiry knob, default None)."""
-        super().__init__(*args, session_idle_timeout=session_idle_timeout, **kwargs)
 
     async def handle_request(self, scope, receive, send):
         if scope["method"] == "POST" and self._is_unknown_session(scope):
