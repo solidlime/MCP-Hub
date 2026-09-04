@@ -104,22 +104,56 @@ class TagFilterMiddleware(Middleware):
 
         return request_tags.get()
 
+    def _owner_from_prefixed(self, item: Any, backend_name: str) -> str | None:
+        """Attribute an unwrapped Proxy* component via its namespace prefix.
+
+        Tools/prompts are "{server}_{upstream}"; resources/templates are
+        "protocol://{server}/{path}". Matches against known servers only
+        (exact match, so underscores in server names are safe).
+        """
+        known = [s["name"] for s in self._pm.get_servers_info()]
+        name = getattr(item, "name", None)
+        if isinstance(name, str):
+            suffix = f"_{backend_name}"
+            if name.endswith(suffix) and name[: -len(suffix)] in known:
+                return name[: -len(suffix)]
+        uri = getattr(item, "uri", None) or getattr(item, "uri_template", None)
+        if uri is not None and "://" in backend_name:
+            proto, rest = backend_name.split("://", 1)
+            for server_name in known:
+                if str(uri) == f"{proto}://{server_name}/{rest}":
+                    return server_name
+        return None
+
     def _filter_items(self, items: Sequence[Any], tags: list[str]) -> list[Any]:
         """Keep items whose parent server's tags intersect with *tags*.
 
-        Items without a ``_server`` attribute (local hub tools) always pass.
+        4.x attribution (shim-isolated): unwrapped ProxyTool/Prompt keep the
+        upstream name in ``_backend_name`` (ProxyResource: ``_backend_uri``,
+        templates: ``_backend_uri_template``); mount() wraps them as
+        FastMCPProvider* which keeps ``_server`` -> the mounted proxy instead.
+        Items with neither marker are local hub components and always pass.
         """
         from .state import tags_match
 
         kept: list[Any] = []
         for item in items:
+            backend_name = getattr(item, "_backend_name", None)
+            if backend_name is None:
+                backend_name = getattr(item, "_backend_uri", None)
+            if backend_name is None:
+                backend_name = getattr(item, "_backend_uri_template", None)
             server = getattr(item, "_server", None)
-            if server is None:
+            if backend_name is None and server is None:
                 # Local tool / prompt / resource — always include
                 kept.append(item)
                 continue
 
-            server_name = self._pm.proxy_to_name(id(server))
+            if server is not None:
+                server_name = self._pm.proxy_to_name(id(server))
+            else:
+                # Unwrapped Proxy* component: attribute via namespace prefix.
+                server_name = self._owner_from_prefixed(item, str(backend_name))
             if server_name is None:
                 # Unknown server — include (safety valve)
                 kept.append(item)
