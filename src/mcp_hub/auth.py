@@ -9,9 +9,8 @@ from starlette.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
 
-# Used for path matching (handles /admin/api/health and /admin/api/health/)
+# 厳密なヘルスエンドポイントのみ免除（未定義の /health/* は塞ぐ）
 EXEMPT_PATHS = {"/admin/api/health", "/admin/api/health/"}
-EXEMPT_PATH_PREFIXES = ("/admin/api/health/",)
 
 
 def get_api_key() -> str | None:
@@ -30,14 +29,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if not request.url.path.startswith("/admin/api/"):
             return await call_next(request)
 
-        # Exact match for /admin/api/health (and /admin/api/health/)
-        # Prefix match for sub-paths like /admin/api/health/status
+        # Exact match for /admin/api/health (and /admin/api/health/) only
         path = request.url.path
         if path in EXEMPT_PATHS:
             return await call_next(request)
-        for prefix in EXEMPT_PATH_PREFIXES:
-            if path.startswith(prefix):
-                return await call_next(request)
 
         expected = get_api_key()
         if expected is None:

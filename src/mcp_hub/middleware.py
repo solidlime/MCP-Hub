@@ -8,7 +8,6 @@ fastmcp の Middleware.on_call_tool をオーバーライドし、tools/call の
 from __future__ import annotations
 
 import json
-import logging
 import time
 import traceback
 from typing import TYPE_CHECKING, Any
@@ -20,8 +19,6 @@ from .state import LogEntry, app_state
 
 if TYPE_CHECKING:
     import mcp.types as mt
-
-logger = logging.getLogger(__name__)
 
 # meta モードのローカルツール名
 _META_TOOL_EXECUTE = "execute_tool"

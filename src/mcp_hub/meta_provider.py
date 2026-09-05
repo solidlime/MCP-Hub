@@ -348,10 +348,15 @@ class ToolIndex:
 
     def _semantic_search(self, query: str, top_k: int) -> list[dict]:
         """Dense retrieval via embedding cosine similarity."""
-        query_vec = np.array(  # type: ignore[name-defined]
-            list(self._embedder.embed([query])),  # type: ignore[union-attr]
-            dtype=np.float32,  # type: ignore[union-attr]
-        ).squeeze(0)
+        try:
+            query_vec = np.array(  # type: ignore[name-defined]
+                list(self._embedder.embed([query])),  # type: ignore[union-attr]
+                dtype=np.float32,  # type: ignore[union-attr]
+            ).squeeze(0)
+        except Exception:
+            # 再構築時と同等: 警告して空結果→search() が BM25 にフォールバック
+            logger.warning("Embedding query failed, falling back to BM25", exc_info=True)
+            return []
         # L2-normalize query (bge-small produces normalized docs already)
         norm = np.linalg.norm(query_vec)  # type: ignore[name-defined]
         if norm > 0:

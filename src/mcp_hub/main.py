@@ -47,7 +47,28 @@ _bootstrap.setup_env()
 logger = logging.getLogger(__name__)
 
 # 設定
-PORT = int(os.environ.get("MCP_HUB_PORT", "26263"))
+_DEFAULT_PORT = 26263
+
+
+def _get_port() -> int:
+    """MCP_HUB_PORT を検証して返す。不正値は警告+既定値フォールバック。"""
+    raw = os.environ.get("MCP_HUB_PORT", str(_DEFAULT_PORT))
+    try:
+        port = int(raw)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid MCP_HUB_PORT=%r — falling back to %d", raw, _DEFAULT_PORT
+        )
+        return _DEFAULT_PORT
+    if not 1 <= port <= 65535:
+        logger.warning(
+            "MCP_HUB_PORT=%d out of range — falling back to %d", port, _DEFAULT_PORT
+        )
+        return _DEFAULT_PORT
+    return port
+
+
+PORT = _get_port()
 HOST = os.environ.get("MCP_HUB_HOST", "0.0.0.0")
 
 
@@ -136,7 +157,7 @@ async def lifespan(app: FastAPI):
     logger.info("Loaded config: %d servers", len(config.servers))
 
     # ログレベルを設定ファイルから適用
-    if config.log_level:
+    if config.log_level and isinstance(config.log_level, str):
         logging.getLogger().setLevel(config.log_level.upper())
 
     registry = JsonStore()

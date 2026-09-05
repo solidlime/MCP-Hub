@@ -40,7 +40,12 @@ class FullInfoMiddleware(Middleware):
         registry = app_state.registry
         if registry is None:
             return set()
-        data = getattr(registry, "_data", None) or {}
+        try:
+            # _data は陳腐化しうるためファイルから再読込（同期のためロックなし読み）
+            data = registry._do_read()
+        except Exception:
+            logger.warning("full_info_tools の再読込に失敗、キャッシュ参照にフォールバック", exc_info=True)
+            data = getattr(registry, "_data", None) or {}
         entries = data.get("full_info_tools") or []
         return {e for e in entries if isinstance(e, str)}
 

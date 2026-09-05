@@ -60,8 +60,21 @@ def _parse_config(filepath: Path) -> HubConfig:
         raise ValueError(f"Unsupported config version: {version}")
 
     log_level = raw.get("log_level", "info")
+    if not isinstance(log_level, str) or not log_level:
+        logger.warning("Invalid log_level=%r — falling back to 'info'", log_level)
+        log_level = "info"
     embedding_model = raw.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+    if not isinstance(embedding_model, str) or not embedding_model:
+        logger.warning(
+            "Invalid embedding_model=%r — falling back to default", embedding_model
+        )
+        embedding_model = DEFAULT_EMBEDDING_MODEL
     use_embeddings = raw.get("use_embeddings", True)
+    if not isinstance(use_embeddings, bool):
+        logger.warning(
+            "Invalid use_embeddings=%r — falling back to True", use_embeddings
+        )
+        use_embeddings = True
     raw_servers = raw.get("mcpServers", raw.get("servers", {}))
 
     if not isinstance(raw_servers, dict):

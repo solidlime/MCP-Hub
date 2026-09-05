@@ -5,12 +5,13 @@
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any
 from urllib.parse import urljoin
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .config import DEFAULT_EMBEDDING_MODEL
 from .state import app_state
@@ -26,6 +27,12 @@ from .validators import (
 )
 
 logger = logging.getLogger(__name__)
+
+_ALLOWED_MANAGERS: tuple[str, ...] = ("pip", "uv", "npm")
+_PIP_PKG_RE = re.compile(r"^[A-Za-z0-9_.\-]+(\[[A-Za-z0-9_.\-,]+\])?(==[A-Za-z0-9_.\-*+]+)?$")
+_NPM_PKG_RE = re.compile(r"^(@[A-Za-z0-9_.\-~]+\/)?[A-Za-z0-9_.\-~]+(@[A-Za-z0-9_.\-~^]+)?$")
+_EXTRAS_DIR = "/home/mcp-hub/pip-extras"
+_install_sem = asyncio.Semaphore(1)
 
 
 # --- Schemas ---
@@ -63,7 +70,12 @@ class CallToolRequest(BaseModel):
 
 
 class InstallRequest(BaseModel):
-    command: str
+    model_config = ConfigDict(extra="allow")
+
+    # Optional にして handler 側で検証する。旧 {command: str} 形式を
+    # pydantic の 422 より先に 400 + 移行メッセージで拒否するため。
+    manager: str | None = None
+    packages: list[str] | None = None
 
 
 # --- Router ---
@@ -520,39 +532,62 @@ async def list_server_resource_templates(name: str):
 
 @router.post("/tools/install")
 async def install_dependency(body: InstallRequest):
-    """Run a dependency install command (pip, npm, etc.).
+    """Install packages via pip/uv/npm only (no shell).
 
-    Installed packages persist in the Docker mounted volume.
-    pip/uv pip commands are auto-wrapped with --target for persistence.
+    Request: {"manager": "pip"|"uv"|"npm", "packages": [...]}.
+    pip/uv are pinned to --target <EXTRAS_DIR>; extra flags rejected.
     """
     import os
 
-    EXTRAS_DIR = "/home/mcp-hub/pip-extras"
-    command = body.command.strip()
+    extra = getattr(body, "model_extra", None) or {}
+    if "command" in extra:
+        raise HTTPException(
+            400,
+            detail="旧形式 {command: str} は廃止。{manager: pip|uv|npm, packages: string[]} で送ってください",
+        )
 
-    if not command:
-        raise HTTPException(400, detail="Command is required")
+    manager: str | None = body.manager
+    if manager is None or body.packages is None:
+        raise HTTPException(422, detail="manager と packages は必須です")
+    if manager not in _ALLOWED_MANAGERS:
+        raise HTTPException(400, detail=f"manager は {list(_ALLOWED_MANAGERS)} のいずれかである必要があります")
 
-    # Auto-wrap pip/uv pip install commands to target the persistent extras dir
-    if command.startswith("pip install") or command.startswith("uv pip install"):
-        parts = command.split(" ", 2)
-        if len(parts) >= 3:
-            command = f"{parts[0]} {parts[1]} --target {EXTRAS_DIR} {parts[2]}"
+    packages = body.packages
+    if not isinstance(packages, list) or not packages:
+        raise HTTPException(400, detail="packages は1件以上の文字列リストである必要があります")
+
+    pattern = _NPM_PKG_RE if manager == "npm" else _PIP_PKG_RE
+    for pkg in packages:
+        if not isinstance(pkg, str) or not pkg or pkg.startswith("-") or not pattern.match(pkg):
+            raise HTTPException(400, detail=f"Invalid package: {pkg!r}")
+
+    if manager == "pip":
+        argv = ["pip", "install", "--target", _EXTRAS_DIR, *packages]
+    elif manager == "uv":
+        argv = ["uv", "pip", "install", "--target", _EXTRAS_DIR, *packages]
+    else:
+        argv = ["npm", "install", *packages]
 
     # Ensure EXTRAS_DIR exists
-    os.makedirs(EXTRAS_DIR, exist_ok=True)
-
-    logger.info("Running install command: %s", command)
+    os.makedirs(_EXTRAS_DIR, exist_ok=True)
 
     try:
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(), timeout=120.0
-        )
+        async with _install_sem:
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=120.0
+                )
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                finally:
+                    await process.wait()
+                raise HTTPException(504, detail="Install command timed out (120s)")
 
         return {
             "success": process.returncode == 0,
@@ -560,8 +595,8 @@ async def install_dependency(body: InstallRequest):
             "stdout": stdout.decode("utf-8", errors="replace"),
             "stderr": stderr.decode("utf-8", errors="replace"),
         }
-    except asyncio.TimeoutError:
-        raise HTTPException(504, detail="Install command timed out (120s)")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception("Install command failed")
         raise HTTPException(500, detail=str(e))

@@ -15,11 +15,12 @@ ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
 # Pattern: $() subshell execution (BLOCKED)
 _DOLLAR_SUBSHELL = re.compile(r"\$\(.*\)")
 
-# Pattern: ${VAR} or ${VAR:-default} (ALLOWED — env var template)
-_DOLLAR_TEMPLATE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?::-.*?)?\}")
-
 # Forbidden characters in command: shell metacharacters
 _FORBIDDEN_COMMAND_CHARS = frozenset(";&|`<>")
+
+# Forbidden characters in args: shell metacharacters, minus '&'
+# ('&' allowed — URL query strings (?a=1&b=2) are legitimate argv; no shell)
+_FORBIDDEN_ARGS_CHARS = frozenset(";|`<>")
 
 # Env var names that look like credentials (matched against upper-cased keys)
 _CREDENTIAL_ENV_RE = re.compile(r"(TOKEN|API[_-]?KEY|SECRET|PASSWORD|AUTH)")
@@ -71,6 +72,11 @@ def validate_args(args: list[str]) -> list[str]:
             raise ValidationError(f"Arg {i} must be a string")
         if len(arg) > MAX_ARG_LENGTH:
             raise ValidationError(f"Arg {i} too long (max {MAX_ARG_LENGTH} chars)")
+        if _DOLLAR_SUBSHELL.search(arg):
+            raise ValidationError(f"Arg {i} contains subshell execution: $()")
+        for ch in arg:
+            if ch in _FORBIDDEN_ARGS_CHARS:
+                raise ValidationError(f"Arg {i} contains forbidden character: '{ch}'")
     return args
 
 
@@ -80,14 +86,17 @@ def validate_url(url: str) -> str:
         raise ValidationError("URL must be a non-empty string")
     if len(url) > MAX_URL_LENGTH:
         raise ValidationError(f"URL too long (max {MAX_URL_LENGTH} chars)")
-    try:
-        parsed = urlparse(url)
-    except Exception as e:
-        raise ValidationError(f"Invalid URL: {e}") from e
+    if any(c.isspace() for c in url):
+        raise ValidationError("URL must not contain whitespace")
+    parsed = urlparse(url)
     if parsed.scheme.lower() not in ALLOWED_URL_SCHEMES:
         raise ValidationError(
             f"URL scheme '{parsed.scheme}' not allowed. Use http:// or https://"
         )
+    if not parsed.netloc:
+        raise ValidationError("URL must include a host")
+    if "@" in parsed.netloc:
+        raise ValidationError("URL must not include userinfo")
     return url
 
 

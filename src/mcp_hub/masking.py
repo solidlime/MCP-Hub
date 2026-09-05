@@ -24,6 +24,14 @@ _PRIVATE_KEY = re.compile(
     r"-----BEGIN [^-]*?PRIVATE KEY-----.*?-----END [^-]*?PRIVATE KEY-----",
     re.DOTALL,
 )
+# 著名サービス発行のトークン形式（sk-/Bearer 以外）。プレーンな URL や
+# 短い ID には触れないよう、接頭辞・形式が明確なものに限定する。
+_GENERIC_SECRET = re.compile(
+    r"(ghp_[A-Za-z0-9]{8,}|gho_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{10,}"
+    r"|glpat-[A-Za-z0-9_\-]{8,}|xox[bpas]-[A-Za-z0-9\-]{8,}"
+    r"|AIza[0-9A-Za-z_\-]{10,}|AKIA[0-9A-Z]{16}"
+    r"|eyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]{5,})"
+)
 
 _ARG_MAX_LEN = 500
 _TEXT_MAX_LEN = 500
@@ -39,7 +47,12 @@ def _mask_scalar(value: Any) -> Any:
     """str 値に機密パターンが含まれる場合 *** に置換。"""
     if not isinstance(value, str):
         return value
-    if _SK_TOKEN.search(value) or _BEARER.search(value) or _PRIVATE_KEY.search(value):
+    if (
+        _SK_TOKEN.search(value)
+        or _BEARER.search(value)
+        or _PRIVATE_KEY.search(value)
+        or _GENERIC_SECRET.search(value)
+    ):
         return "***"
     return value
 
@@ -52,11 +65,17 @@ def _mask_sensitive_value(value: Any) -> Any:
     """
     if not isinstance(value, str):
         return "***"
-    if not (_SK_TOKEN.search(value) or _BEARER.search(value) or _PRIVATE_KEY.search(value)):
+    if not (
+        _SK_TOKEN.search(value)
+        or _BEARER.search(value)
+        or _PRIVATE_KEY.search(value)
+        or _GENERIC_SECRET.search(value)
+    ):
         return "***"
     masked = _SK_TOKEN.sub("sk-***", value)
     masked = _BEARER.sub(r"\1***", masked)
     masked = _PRIVATE_KEY.sub("***", masked)
+    masked = _GENERIC_SECRET.sub("***", masked)
     return masked
 
 
@@ -84,4 +103,5 @@ def mask_text(text: str, max_len: int = _TEXT_MAX_LEN) -> str:
     masked = _SK_TOKEN.sub("sk-***", text)
     masked = _BEARER.sub(r"\1***", masked)
     masked = _PRIVATE_KEY.sub("***", masked)
+    masked = _GENERIC_SECRET.sub("***", masked)
     return masked[:max_len]

@@ -529,3 +529,47 @@ class TestV2Contracts:
         from mcp.client.streamable_http import StreamableHTTPTransport
 
         assert StreamableHTTPTransport._handle_post_request.__name__ == "_patched_handle_post_request"
+
+
+class TestInstall:
+    """POST /admin/api/tools/install — structured manager/packages only."""
+
+    def test_legacy_command_rejected_400(self, client):
+        r = client.post("/admin/api/tools/install", json={"command": "pip install foo"})
+        assert r.status_code == 400
+        assert "manager" in r.json()["detail"] or "packages" in r.json()["detail"]
+
+    def test_injection_package_rejected_400(self, client):
+        for bad in ("foo; rm -rf ~", "foo && rm -rf ~", "--extra-index-url http://evil", "-e ."):
+            r = client.post(
+                "/admin/api/tools/install",
+                json={"manager": "pip", "packages": [bad]},
+            )
+            assert r.status_code == 400, bad
+
+    def test_valid_pip_calls_exec_without_shell(self, client, monkeypatch):
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"err")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            calls["kwargs"] = kwargs
+            return FakeProc()
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        r = client.post(
+            "/admin/api/tools/install",
+            json={"manager": "pip", "packages": ["yt-dlp"]},
+        )
+        assert r.status_code == 200
+        assert r.json()["success"] is True
+        assert calls["argv"][:3] == ["pip", "install", "--target"]
+        assert "yt-dlp" in calls["argv"]
+        assert "command" not in str(calls.get("kwargs", {}))

@@ -80,6 +80,10 @@ class ProxyManager:
         self._rebuild_complete.set()  # initially not rebuilding
         # Concurrency cap for tool calls (prevents DoS via unlimited process/connection spawn)
         _max_calls = int(os.environ.get("MCP_HUB_MAX_CONCURRENT_CALLS", "50"))
+        if _max_calls < 1:
+            # 0/負は Semaphore を枯渇させるため 1 に正規化
+            logger.warning("MCP_HUB_MAX_CONCURRENT_CALLS=%d は不正のため 1 に正規化", _max_calls)
+            _max_calls = 1
         self._call_semaphore = asyncio.Semaphore(_max_calls)
         self._tool_cache: dict[str, tuple[float, list[Any]]] = {}  # server_name -> (timestamp, tools)
         self._health_failures: dict[str, int] = {}  # server_name -> consecutive health-check failures
@@ -574,7 +578,7 @@ class ProxyManager:
         if tools:
             # 空リストでは上書きしない（probe が空を返しても最後の既知ツールを保持）
             self._tool_cache[name] = (now, tools)
-        self._tool_counts[name] = len(tools)
+            self._tool_counts[name] = len(tools)
         return tools
 
     def _record_health_failure(self, name: str, reason: str, max_failures: int) -> bool:

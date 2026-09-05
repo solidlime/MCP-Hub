@@ -2124,6 +2124,10 @@
             return div.innerHTML;
         }
 
+        function escapeAttr(text) {
+            return String(text ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+        }
+
         function getServerTags(server) {
             return (server.config && server.config.tags) || [];
         }
@@ -2134,16 +2138,6 @@
 
         function getServerStatus(server) {
             return server.status || 'unknown';
-        }
-
-        // Tag color index based on hash
-        function tagColorIndex(tag) {
-            let hash = 0;
-            for (let i = 0; i < tag.length; i++) {
-                hash = ((hash << 5) - hash) + tag.charCodeAt(i);
-                hash |= 0;
-            }
-            return (Math.abs(hash) % 5) + 1;
         }
 
         // ============================================================
@@ -2296,16 +2290,16 @@
                     ${tags.length > 0 ? `
                     <div class="server-tags">
                         ${tags.map(tag => `
-                            <span class="tag-chip" data-tag="${escapeHtml(tag)}">
+                            <span class="tag-chip" data-tag="${escapeAttr(tag)}">
                                 ${escapeHtml(tag)}
-                                <span class="tag-remove" onclick="removeTag('${server.name}', '${escapeHtml(tag)}')" title="タグを削除" aria-label="タグ ${escapeHtml(tag)} を削除">✕</span>
+                                <span class="tag-remove" data-action="remove-tag" data-server="${escapeAttr(server.name)}" data-tag="${escapeAttr(tag)}" title="タグを削除" aria-label="タグ ${escapeAttr(tag)} を削除">✕</span>
                             </span>
                         `).join('')}
-                        <button class="tag-add-btn" onclick="startAddTag('${server.name}', this)" aria-label="タグを追加" title="タグを追加">＋</button>
+                        <button class="tag-add-btn" data-action="add-tag" data-server="${escapeAttr(server.name)}" aria-label="タグを追加" title="タグを追加">＋</button>
                     </div>
                     ` : `
                     <div class="server-tags">
-                        <button class="tag-add-btn" onclick="startAddTag('${server.name}', this)" aria-label="タグを追加" title="タグを追加">＋</button>
+                        <button class="tag-add-btn" data-action="add-tag" data-server="${escapeAttr(server.name)}" aria-label="タグを追加" title="タグを追加">＋</button>
                     </div>
                     `}
 
@@ -2325,9 +2319,8 @@
                                         <div class="tool-description">${escapeHtml(tool.description || '説明なし')}</div>
                                     </div>
                                     <div class="tool-action">
-                                        <button class="btn btn-sm btn-secondary"
-                                                onclick="openToolModal('${server.name}', '${escapeHtml(tool.name)}')"
-                                                aria-label="ツール ${escapeHtml(tool.name)} を実行">
+                                        <button class="btn btn-sm btn-secondary" data-action="open-tool" data-server="${escapeAttr(server.name)}" data-tool="${escapeAttr(tool.name)}"
+                                                aria-label="ツール ${escapeAttr(tool.name)} を実行">
                                             実行
                                         </button>
                                     </div>
@@ -2760,6 +2753,22 @@
                 showToast(error.message, 'error');
             }
         }
+
+        // Delegated server-card actions (FIX-3: replaces inline onclick; dataset carries raw values)
+        document.addEventListener('click', (e) => {
+            const el = e.target.closest('#serversList [data-action]');
+            if (!el) return;
+            const action = el.dataset.action;
+            if (action === 'remove-tag') {
+                e.stopPropagation();
+                removeTag(el.dataset.server, el.dataset.tag);
+            } else if (action === 'add-tag') {
+                e.stopPropagation();
+                startAddTag(el.dataset.server, el);
+            } else if (action === 'open-tool') {
+                openToolModal(el.dataset.server, el.dataset.tool);
+            }
+        });
 
         // ============================================================
         // CONNECTION INFO

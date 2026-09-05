@@ -31,7 +31,19 @@ class JsonStore:
         """Actual file read (no lock). Caller must handle synchronization."""
         if not self._path.exists():
             return {"version": 1, "log_level": "info", "mcpServers": {}}
-        return json.loads(self._path.read_text(encoding="utf-8"))
+        try:
+            return json.loads(self._path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            logger.warning(
+                "Corrupt config %s (%s) — starting with defaults", self._path, e
+            )
+            try:
+                backup = self._path.with_suffix(".corrupt.bak")
+                backup.write_bytes(self._path.read_bytes())
+                logger.warning("Backed up corrupt config to %s", backup)
+            except OSError as be:
+                logger.warning("Could not back up corrupt config: %s", be)
+            return {"version": 1, "log_level": "info", "mcpServers": {}}
 
     async def _read(self) -> dict:
         """Thread-safe read from file. Protected by lock."""
@@ -60,8 +72,14 @@ class JsonStore:
                 tmp.close()
                 os.replace(tmp.name, self._path)
             except Exception:
-                tmp.close()
-                os.unlink(tmp.name)
+                try:
+                    if not tmp.closed:
+                        tmp.close()
+                finally:
+                    try:
+                        os.unlink(tmp.name)
+                    except OSError:
+                        pass
                 raise
 
         await asyncio.to_thread(_do)

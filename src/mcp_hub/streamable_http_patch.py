@@ -21,8 +21,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from typing import TYPE_CHECKING
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx2
 
@@ -41,10 +42,65 @@ logger = logging.getLogger(__name__)
 # Maximum poll attempts and delay between polls
 MAX_POLL_ATTEMPTS = 20
 POLL_DELAY_SECONDS = 1.0
+# Bounded exponential backoff cap for poll interval
+POLL_MAX_DELAY_SECONDS = 5.0
+
+# Headers never forwarded to the poll URL (auth leak guard).
+# _prepare_headers() real body is accept/content-type/mcp-session-id/
+# mcp-protocol-version only, but per-message metadata or client defaults
+# may carry auth — strip case-insensitively as defense in depth.
+_SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "x-api-key"})
+
+# URL-unit single-flight: suppress duplicate concurrent polls to same URL
+_poll_in_flight: set[str] = set()
+_poll_in_flight_lock = threading.Lock()
 
 # Reference to original method for restore
 _original_handle_post_request = StreamableHTTPTransport._handle_post_request
 _patch_applied = False
+
+
+def _sanitize_poll_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Return poll headers without auth material (case-insensitive)."""
+    return {k: v for k, v in headers.items() if k.lower() not in _SENSITIVE_HEADERS}
+
+
+def _resolve_poll_url(base_url: str, location: str) -> str | None:
+    """Allow relative Location only. Return joined URL or None to reject."""
+    loc = (location or "").strip()
+    if not loc:
+        return None
+    parsed_loc = urlparse(loc)
+    # Absolute URL / scheme change / protocol-relative → reject
+    if parsed_loc.scheme or parsed_loc.netloc or loc.startswith("//"):
+        logger.warning("Rejecting non-relative Location header: %r", location)
+        return None
+    joined = urljoin(base_url, loc)
+    # Defense in depth: joined target must stay on same scheme+host
+    base = urlparse(base_url)
+    target = urlparse(joined)
+    if base.scheme != target.scheme or base.netloc != target.netloc:
+        logger.warning("Rejecting off-host Location header: %r", location)
+        return None
+    return joined
+
+
+def _poll_delay(attempt: int) -> float:
+    """Bounded exponential backoff: base * 2**attempt, capped."""
+    return min(POLL_DELAY_SECONDS * (2**attempt), POLL_MAX_DELAY_SECONDS)
+
+
+def _try_acquire_poll(poll_url: str) -> bool:
+    with _poll_in_flight_lock:
+        if poll_url in _poll_in_flight:
+            return False
+        _poll_in_flight.add(poll_url)
+        return True
+
+
+def _release_poll(poll_url: str) -> None:
+    with _poll_in_flight_lock:
+        _poll_in_flight.discard(poll_url)
 
 
 async def _patched_handle_post_request(
@@ -52,6 +108,11 @@ async def _patched_handle_post_request(
 ) -> None:
     """Patched _handle_post_request: handles 202 Accepted with polling."""
     headers = self._prepare_headers()
+    # Preserve per-message headers (e.g. protocol version) on initial POST,
+    # mirroring the original _handle_post_request.
+    _meta = getattr(ctx, "metadata", None)
+    if _meta is not None and getattr(_meta, "headers", None):
+        headers.update(_meta.headers)
     message = ctx.session_message.message
     is_initialization = self._is_initialization_request(message)
 
@@ -68,56 +129,75 @@ async def _patched_handle_post_request(
                 logger.debug("Received 202 Accepted (no Location header) — giving up")
                 return
 
-            # Resolve relative Location URLs against the server base URL
-            poll_url = urljoin(self.url, location)
+            # Relative Location only — absolute/different-host/scheme change rejected
+            poll_url = _resolve_poll_url(self.url, location)
+            if poll_url is None:
+                return
             logger.debug("Received 202 Accepted, polling %s", poll_url)
 
-            for attempt in range(MAX_POLL_ATTEMPTS):
-                await asyncio.sleep(POLL_DELAY_SECONDS)
-                try:
-                    # Poll with empty POST — never re-send the original request body
-                    # (which would re-execute tools/call, etc.)
-                    poll_resp = await ctx.client.post(
-                        poll_url,
-                        headers=headers,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Poll attempt %d/%d failed for %s",
-                        attempt + 1, MAX_POLL_ATTEMPTS, poll_url,
-                        exc_info=True,
-                    )
-                    continue
+            # Single-flight per URL: suppress duplicate concurrent polls
+            if not _try_acquire_poll(poll_url):
+                logger.warning("Duplicate poll suppressed for %s", poll_url)
+                return
+            # Strip auth material from poll headers (never forward credentials)
+            poll_headers = _sanitize_poll_headers(headers)
+            try:
+                for attempt in range(MAX_POLL_ATTEMPTS):
+                    await asyncio.sleep(_poll_delay(attempt))
+                    try:
+                        # Poll with empty POST — never re-send the original request body
+                        # (which would re-execute tools/call, etc.)
+                        poll_resp = await ctx.client.post(
+                            poll_url,
+                            headers=poll_headers,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Poll attempt %d/%d failed for %s",
+                            attempt + 1, MAX_POLL_ATTEMPTS, poll_url,
+                            exc_info=True,
+                        )
+                        continue
 
-                if poll_resp.status_code == 200:
-                    # Got the final result — process it like a normal response
-                    logger.debug("Poll successful after %d attempts", attempt + 1)
-                    # Extract session ID from final response if initialization
-                    if is_initialization:
-                        self._maybe_extract_session_id_from_response(poll_resp)
-                    # Process the response like the original code does
-                    await _process_response(
-                        self, poll_resp, ctx, message, is_initialization,
-                    )
-                    return
-                elif poll_resp.status_code == 202:
-                    logger.debug(
-                        "Still processing (attempt %d/%d)",
-                        attempt + 1, MAX_POLL_ATTEMPTS,
-                    )
-                    continue
+                    if poll_resp.status_code == 200:
+                        # Got the final result — process it like a normal response
+                        logger.debug("Poll successful after %d attempts", attempt + 1)
+                        # Extract session ID from final response if initialization
+                        if is_initialization:
+                            self._maybe_extract_session_id_from_response(poll_resp)
+                        # Process the response like the original code does
+                        await _process_response(
+                            self, poll_resp, ctx, message, is_initialization,
+                        )
+                        return
+                    elif poll_resp.status_code == 202:
+                        logger.debug(
+                            "Still processing (attempt %d/%d)",
+                            attempt + 1, MAX_POLL_ATTEMPTS,
+                        )
+                        continue
+                    elif 400 <= poll_resp.status_code < 500:
+                        # Client error: stop immediately, never raise (no client hang)
+                        logger.warning(
+                            "Poll returned client error %d for %s — stopping",
+                            poll_resp.status_code, poll_url,
+                        )
+                        return
+                    else:
+                        # 5xx/other: retry until budget exhausted, then give up
+                        logger.warning(
+                            "Poll returned status %d for %s (attempt %d/%d)",
+                            poll_resp.status_code, poll_url,
+                            attempt + 1, MAX_POLL_ATTEMPTS,
+                        )
+                        continue
                 else:
                     logger.warning(
-                        "Poll returned unexpected status %d for %s",
-                        poll_resp.status_code, poll_url,
+                        "Polling exhausted (%d attempts) for %s",
+                        MAX_POLL_ATTEMPTS, poll_url,
                     )
-                    poll_resp.raise_for_status()
-                    return
-            else:
-                logger.warning(
-                    "Polling exhausted (%d attempts) for %s",
-                    MAX_POLL_ATTEMPTS, poll_url,
-                )
+            finally:
+                _release_poll(poll_url)
             return
         # ── END PATCH ──
 

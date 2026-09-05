@@ -86,16 +86,29 @@ def _ensure_fastembed():
     logger.info("[bootstrap] Installing fastembed to %s...", EXTRAS_DIR)
     os.makedirs(EXTRAS_DIR, exist_ok=True)
     uv_bin = os.path.join(BIN_DIR, "uv")
-    subprocess.run(
-        [uv_bin, "pip", "install", "--target", EXTRAS_DIR, "fastembed"],
-        check=True,
-        env={**os.environ, "VIRTUAL_ENV": os.environ.get("VIRTUAL_ENV", "/opt/venv")},
-    )
+    try:
+        subprocess.run(
+            [uv_bin, "pip", "install", "--target", EXTRAS_DIR, "fastembed"],
+            check=True,
+            env={**os.environ, "VIRTUAL_ENV": os.environ.get("VIRTUAL_ENV", "/opt/venv")},
+        )
+    except (subprocess.CalledProcessError, OSError) as e:
+        # 起動は継続し、呼び出し側は BM25 フォールバックで動作する
+        logger.warning(
+            "[bootstrap] fastembed install failed (%s) — continuing with BM25 fallback",
+            e,
+        )
+        return
     logger.info("[bootstrap] fastembed installed.")
 
 
+# NOTE: tarball URLs は https 固定。checksum/署名検証なしのため、
+# TODO: ハッシュ固定 (SHA256 pin) + 署名検証の導入を検討する。
+# 現状署名基盤がないため過剰実装しない。
 def _download_and_extract(url, dest, strip_components=0, files=None):
     """Download tarball and extract to dest. Supports .tar.xz and .tar.gz."""
+    if not url.startswith("https://"):
+        raise ValueError(f"Refusing non-https download: {url}")
     tmp = tempfile.NamedTemporaryFile(suffix=".tar", delete=False)
     try:
         urllib.request.urlretrieve(url, tmp.name)

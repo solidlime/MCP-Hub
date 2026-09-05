@@ -8,9 +8,13 @@ through the SDK's stateless request path so tool calls still work.
 
 from __future__ import annotations
 
+import logging
+
 from fastmcp.server.http import FastMCPStreamableHTTPSessionManager
 from mcp.server.streamable_http import MCP_SESSION_ID_HEADER
 from mcp.shared.inbound import MCP_PROTOCOL_VERSION_HEADER
+
+logger = logging.getLogger(__name__)
 
 
 class LenientSessionManager(FastMCPStreamableHTTPSessionManager):
@@ -38,4 +42,10 @@ class LenientSessionManager(FastMCPStreamableHTTPSessionManager):
         session_id = headers.get(MCP_SESSION_ID_HEADER.encode())
         if not session_id:
             return False  # 新規 initialize → 従来の stateful パス
-        return session_id.decode() not in self._server_instances
+        try:
+            text = session_id.decode()
+        except UnicodeDecodeError:
+            # 不正バイトは 500 にせず置換デコードで不明扱いに落とす
+            logger.warning("不正バイトの session id を受信: %r", session_id)
+            text = session_id.decode(errors="replace")
+        return text not in self._server_instances
