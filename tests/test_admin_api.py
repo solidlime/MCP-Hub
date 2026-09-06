@@ -4,6 +4,7 @@ Tests CRUD endpoints, PATCH update, enable/disable, metrics, connection info.
 """
 import pytest
 from fastapi.testclient import TestClient
+from mcp_hub import admin_router
 from mcp_hub.main import create_app
 from mcp_hub.state import app_state
 
@@ -547,7 +548,7 @@ class TestInstall:
             )
             assert r.status_code == 400, bad
 
-    def test_valid_pip_calls_exec_without_shell(self, client, monkeypatch):
+    def test_valid_pip_calls_exec_without_shell(self, client, monkeypatch, tmp_path):
         import asyncio as _asyncio
 
         calls: dict = {}
@@ -564,6 +565,8 @@ class TestInstall:
             return FakeProc()
 
         monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        # 本物の /home/mcp-hub/pip-extras に触れない (GHランナーは /home に書けない)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
         r = client.post(
             "/admin/api/tools/install",
             json={"manager": "pip", "packages": ["yt-dlp"]},
@@ -573,3 +576,4 @@ class TestInstall:
         assert calls["argv"][:3] == ["pip", "install", "--target"]
         assert "yt-dlp" in calls["argv"]
         assert "command" not in str(calls.get("kwargs", {}))
+        assert str(tmp_path / "pip-extras") in calls["argv"]
