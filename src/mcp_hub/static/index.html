@@ -1884,9 +1884,14 @@
                 <div class="setting-group">
                     <label class="setting-label">📦 依存関係のインストール</label>
                     <div class="setting-row">
-                        <input type="text" id="installCommand" class="setting-input"
-                               placeholder="pip install yt-dlp"
-                               style="flex:1; max-width:none;">
+                        <select id="installManager" class="setting-input" style="max-width:96px; flex-shrink:0;" aria-label="パッケージマネージャー">
+                            <option value="pip">pip</option>
+                            <option value="uv">uv</option>
+                            <option value="npm">npm</option>
+                        </select>
+                        <input type="text" id="installPackages" class="setting-input"
+                               placeholder="yt-dlp requests"
+                               style="flex:1; max-width:none; margin-left:8px;">
                         <button id="installBtn" class="btn btn-primary"
                                 style="width:80px; flex-shrink:0; margin-left:8px;"
                                 onclick="runInstallCommand()">Install</button>
@@ -2067,6 +2072,24 @@
                 return response.json();
             },
 
+            async getResources(name) {
+                const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}/resources`);
+                if (!response.ok) throw new Error('リソース一覧の取得に失敗しました');
+                return response.json();
+            },
+
+            async getPrompts(name) {
+                const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}/prompts`);
+                if (!response.ok) throw new Error('プロンプト一覧の取得に失敗しました');
+                return response.json();
+            },
+
+            async getTemplates(name) {
+                const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}/resource-templates`);
+                if (!response.ok) throw new Error('テンプレート一覧の取得に失敗しました');
+                return response.json();
+            },
+
             async getSettings() {
                 const response = await fetch('/admin/api/settings');
                 if (!response.ok) throw new Error('設定の取得に失敗しました');
@@ -2168,7 +2191,7 @@
             bar.style.display = 'flex';
             chipsContainer.innerHTML = allTags.map(tag => {
                 const active = activeTagFilters.has(tag) ? 'active' : '';
-                return `<button class="tag-filter-chip ${active}" onclick="toggleTagFilter('${escapeHtml(tag)}')" aria-pressed="${active ? 'true' : 'false'}">${escapeHtml(tag)}</button>`;
+                return `<button class="tag-filter-chip ${active}" data-action="toggle-tag-filter" data-tag="${escapeAttr(tag)}" aria-pressed="${active ? 'true' : 'false'}">${escapeHtml(tag)}</button>`;
             }).join('');
 
             clearBtn.style.display = activeTagFilters.size > 0 ? 'inline-flex' : 'none';
@@ -2242,15 +2265,15 @@
             ].filter(Boolean).join(' ');
 
             return `
-                <div class="${cardClasses}" data-server="${server.name}" role="listitem">
+                <div class="${cardClasses}" data-server="${escapeAttr(server.name)}" role="listitem">
                     <div class="server-status-badge ${status}" aria-label="ステータス: ${statusLabel}">
                         <span class="status-dot" aria-hidden="true"></span>
                         <span>${statusLabel}</span>
                     </div>
 
-                    <div class="server-header" onclick="toggleServer('${server.name}')"
+                    <div class="server-header" data-action="toggle-server" data-server="${escapeAttr(server.name)}"
                          role="button" tabindex="0" aria-expanded="${expandedServers.has(server.name)}"
-                         aria-label="サーバー ${escapeHtml(server.name)} の詳細を表示">
+                         aria-label="サーバー ${escapeAttr(server.name)} の詳細を表示">
                         <div>
                             <div class="server-name">${escapeHtml(server.name)}</div>
                             <div class="server-type">
@@ -2262,8 +2285,8 @@
                     <div class="toggle-wrapper">
                         <label class="toggle-switch" title="${disabled ? '有効にする' : '無効にする'}">
                             <input type="checkbox" ${disabled ? '' : 'checked'}
-                                   onchange="toggleServerEnabled('${server.name}', this.checked)"
-                                   aria-label="サーバー ${escapeHtml(server.name)} の有効/無効切替">
+                                   data-action="toggle-enabled" data-server="${escapeAttr(server.name)}"
+                                   aria-label="サーバー ${escapeAttr(server.name)} の有効/無効切替">
                             <span class="toggle-track"></span>
                             <span class="toggle-thumb"></span>
                         </label>
@@ -2278,8 +2301,8 @@
                         <label class="toggle-switch ${state === 'partial' ? 'indeterminate' : ''}"
                                title="${state === 'all' ? 'フル公開を解除' : '全ツールをフル公開'}">
                             <input type="checkbox" ${state === 'all' ? 'checked' : ''}
-                                   onchange="toggleFullInfoServer('${escapeHtml(server.name)}', this.checked)"
-                                   aria-label="サーバー ${escapeHtml(server.name)} の全ツールフル公開切替">
+                                   data-action="toggle-fullinfo-server" data-server="${escapeAttr(server.name)}"
+                                   aria-label="サーバー ${escapeAttr(server.name)} の全ツールフル公開切替">
                             <span class="toggle-track"></span>
                             <span class="toggle-thumb"></span>
                         </label>
@@ -2327,8 +2350,8 @@
                                     <span class="full-info-toggle" ${metaMode === true ? '' : 'style="display:none"'}>
                                         <label class="toggle-switch toggle-switch-sm" title="ツールをフル公開（メタOFF）">
                                             <input type="checkbox" ${fullInfoTools.includes(server.name + '_' + tool.name) ? 'checked' : ''}
-                                                   onchange="toggleFullInfoTool('${escapeHtml(server.name)}', '${escapeHtml(tool.name)}', this.checked)"
-                                                   aria-label="ツール ${escapeHtml(tool.name)} のフル公開切替">
+                                                   data-action="toggle-fullinfo-tool" data-server="${escapeAttr(server.name)}" data-tool="${escapeAttr(tool.name)}"
+                                                   aria-label="ツール ${escapeAttr(tool.name)} のフル公開切替">
                                             <span class="toggle-track"></span>
                                             <span class="toggle-thumb"></span>
                                         </label>
@@ -2337,33 +2360,39 @@
                                 </div>
                             `).join('') : (server.tools === undefined && status === 'connecting') ? '<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem; display: flex; align-items: center; gap: 6px;"><span class="loading-spinner" style="width:12px;height:12px;"></span> ツールを検出中...</div>' : '<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem;">ツールがありません</div>'}
                         </div>
-                        <div class="connection-section" id="conn-${server.name}" style="display: none;">
+                        <div class="connection-section" id="conn-${escapeAttr(server.name)}" style="display: none;">
                             <div class="conn-label">接続情報</div>
                             <div class="connection-url-row">
-                                <input type="text" class="connection-url-input" id="conn-url-${server.name}" readonly aria-label="接続URL">
+                                <input type="text" class="connection-url-input" id="conn-url-${escapeAttr(server.name)}" readonly aria-label="接続URL">
                             </div>
-                            <div id="conn-header-${server.name}" class="connection-header-code" style="display: none;"></div>
+                            <div id="conn-header-${escapeAttr(server.name)}" class="connection-header-code" style="display: none;"></div>
                         </div>
+                        <div class="server-extra" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+                            <button class="btn btn-sm btn-ghost" data-action="show-resources" data-server="${escapeAttr(server.name)}">リソース</button>
+                            <button class="btn btn-sm btn-ghost" data-action="show-prompts" data-server="${escapeAttr(server.name)}">プロンプト</button>
+                            <button class="btn btn-sm btn-ghost" data-action="show-templates" data-server="${escapeAttr(server.name)}">テンプレート</button>
+                        </div>
+                        <pre class="server-extra-output" style="display:none;white-space:pre-wrap;font-size:11px;max-height:160px;overflow-y:auto;margin:8px 0 0;"></pre>
                     </div>
 
                     <div class="server-actions">
-                        <button class="btn btn-sm btn-secondary" onclick="testServerConnection('${server.name}')"
-                                aria-label="サーバー ${escapeHtml(server.name)} の接続テスト">
+                        <button class="btn btn-sm btn-secondary" data-action="test-connection" data-server="${escapeAttr(server.name)}"
+                                aria-label="サーバー ${escapeAttr(server.name)} の接続テスト">
                             <span aria-hidden="true">🔌</span>
                             <span>テスト</span>
                         </button>
-                        <button class="btn btn-sm btn-ghost" onclick="showConnectionInfo('${server.name}')"
+                        <button class="btn btn-sm btn-ghost" data-action="show-connection" data-server="${escapeAttr(server.name)}"
                                 aria-label="接続URLをクリップボードにコピー">
                             <span aria-hidden="true">🔗</span>
                             <span>接続URL</span>
                         </button>
-                        <button class="btn btn-sm btn-ghost" onclick="openEditModal('${server.name}')"
+                        <button class="btn btn-sm btn-ghost" data-action="open-edit" data-server="${escapeAttr(server.name)}"
                                 aria-label="サーバー設定を編集">
                             <span aria-hidden="true">✏️</span>
                             <span>編集</span>
                         </button>
-                        <button class="btn btn-sm btn-danger" onclick="confirmDeleteServer('${server.name}')"
-                                aria-label="サーバー ${escapeHtml(server.name)} を削除">
+                        <button class="btn btn-sm btn-danger" data-action="confirm-delete" data-server="${escapeAttr(server.name)}"
+                                aria-label="サーバー ${escapeAttr(server.name)} を削除">
                             <span aria-hidden="true">🗑️</span>
                             <span>削除</span>
                         </button>
@@ -2377,7 +2406,7 @@
             if (!server) return;
 
             const container = document.getElementById('serversList');
-            const existingCard = container.querySelector(`[data-server="${name}"]`);
+            const existingCard = container.querySelector(`[data-server="${CSS.escape(name)}"]`);
             if (!existingCard) return;
 
             const tempDiv = document.createElement('div');
@@ -2521,17 +2550,19 @@
             const current = sel.value;
             const names = [...new Set(serverList.map(s => s.name))].sort();
             sel.innerHTML = '<option value="">すべてのサーバー</option>' +
-                names.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+                names.map(n => `<option value="${escapeAttr(n)}">${escapeHtml(n)}</option>`).join('');
             sel.value = current;
         }
 
         async function testServerConnection(name) {
-            const card = document.querySelector(`[data-server="${name}"]`);
-            const btn = card.querySelector('.server-actions .btn-secondary');
+            const card = document.querySelector(`#serversList [data-server="${CSS.escape(name)}"]`);
+            const btn = card?.querySelector('.server-actions .btn-secondary');
 
             try {
-                btn.disabled = true;
-                btn.innerHTML = '<span class="loading-spinner"></span> テスト中...';
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerHTML = '<span class="loading-spinner"></span> テスト中...';
+                }
 
                 const result = await API.testServer(name);
 
@@ -2636,7 +2667,8 @@
         }
 
         function toggleServer(name) {
-            const card = document.querySelector(`[data-server="${name}"]`);
+            const card = document.querySelector(`#serversList [data-server="${CSS.escape(name)}"]`);
+            if (!card) return;
             const header = card.querySelector('.server-header');
             const isExpanded = card.classList.toggle('expanded');
             header.setAttribute('aria-expanded', isExpanded.toString());
@@ -2754,8 +2786,12 @@
             }
         }
 
-        // Delegated server-card actions (FIX-3: replaces inline onclick; dataset carries raw values)
+        // Delegated actions (FIX-3b: no inline handlers with name interpolation; dataset carries raw values)
         document.addEventListener('click', (e) => {
+            const tagChip = e.target.closest('#tagFilterBar [data-action="toggle-tag-filter"]');
+            if (tagChip) { toggleTagFilter(tagChip.dataset.tag); return; }
+            const editRm = e.target.closest('[data-action="remove-edit-tag"]');
+            if (editRm) { removeEditTag(editRm.dataset.tag); return; }
             const el = e.target.closest('#serversList [data-action]');
             if (!el) return;
             const action = el.dataset.action;
@@ -2767,6 +2803,43 @@
                 startAddTag(el.dataset.server, el);
             } else if (action === 'open-tool') {
                 openToolModal(el.dataset.server, el.dataset.tool);
+            } else if (action === 'toggle-server') {
+                toggleServer(el.dataset.server);
+            } else if (action === 'test-connection') {
+                e.stopPropagation();
+                testServerConnection(el.dataset.server);
+            } else if (action === 'show-connection') {
+                e.stopPropagation();
+                showConnectionInfo(el.dataset.server);
+            } else if (action === 'open-edit') {
+                e.stopPropagation();
+                openEditModal(el.dataset.server);
+            } else if (action === 'confirm-delete') {
+                e.stopPropagation();
+                confirmDeleteServer(el.dataset.server);
+            } else if (action === 'show-resources' || action === 'show-prompts' || action === 'show-templates') {
+                e.stopPropagation();
+                showServerExtra(action.replace('show-', ''), el.dataset.server, el);
+            }
+        });
+        document.addEventListener('change', (e) => {
+            const el = e.target.closest('#serversList [data-action]');
+            if (!el) return;
+            if (el.dataset.action === 'toggle-enabled') {
+                e.stopPropagation();
+                toggleServerEnabled(el.dataset.server, el.checked);
+            } else if (el.dataset.action === 'toggle-fullinfo-server') {
+                e.stopPropagation();
+                toggleFullInfoServer(el.dataset.server, el.checked);
+            } else if (el.dataset.action === 'toggle-fullinfo-tool') {
+                e.stopPropagation();
+                toggleFullInfoTool(el.dataset.server, el.dataset.tool, el.checked);
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-action="toggle-server"]')) {
+                e.preventDefault();
+                toggleServer(e.target.dataset.server);
             }
         });
 
@@ -2813,6 +2886,24 @@
                 showToast('接続URLをコピーしました', 'success');
             } catch {
                 showToast('クリップボードへのコピーに失敗しました', 'error');
+            }
+        }
+
+        async function showServerExtra(kind, name, btnEl) {
+            const card = btnEl.closest('.server-card');
+            const out = card?.querySelector('.server-extra-output');
+            if (!out) return;
+            out.style.display = 'block';
+            out.textContent = '読込中...';
+            try {
+                const data = kind === 'resources' ? await API.getResources(name)
+                    : kind === 'prompts' ? await API.getPrompts(name)
+                    : await API.getTemplates(name);
+                const list = data.resources ?? data.prompts ?? data.resource_templates ?? [];
+                out.textContent = list.length === 0 ? 'なし' : JSON.stringify(list, null, 2);
+            } catch (error) {
+                out.textContent = '取得に失敗しました';
+                showToast(error.message, 'error');
             }
         }
 
@@ -3087,7 +3178,15 @@
             editTags.forEach(tag => {
                 const chip = document.createElement('span');
                 chip.className = 'edit-tag-chip';
-                chip.innerHTML = `${escapeHtml(tag)} <span class="edit-tag-remove" onclick="removeEditTag('${escapeHtml(tag)}')" aria-label="タグ ${escapeHtml(tag)} を削除">✕</span>`;
+                const label = document.createElement('span');
+                label.textContent = tag + ' ';
+                const rm = document.createElement('span');
+                rm.className = 'edit-tag-remove';
+                rm.dataset.action = 'remove-edit-tag';
+                rm.dataset.tag = tag;
+                rm.setAttribute('aria-label', `タグ ${tag} を削除`);
+                rm.textContent = '✕';
+                chip.append(label, rm);
                 container.insertBefore(chip, input);
             });
         }
@@ -3467,13 +3566,14 @@
         }
 
         async function runInstallCommand() {
-            const input = document.getElementById('installCommand');
+            const manager = document.getElementById('installManager').value;
+            const input = document.getElementById('installPackages');
             const btn = document.getElementById('installBtn');
             const output = document.getElementById('installOutput');
-            const command = input.value.trim();
+            const packages = input.value.trim().split(/\s+/).filter(Boolean);
 
-            if (!command) {
-                output.textContent = 'コマンドを入力してください';
+            if (packages.length === 0) {
+                output.textContent = 'パッケージを入力してください（例: yt-dlp requests）';
                 output.style.display = 'block';
                 output.style.color = '#e74c3c';
                 return;
@@ -3489,9 +3589,14 @@
                 const resp = await fetch('/admin/api/tools/install', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({command: command})
+                    body: JSON.stringify({manager, packages})
                 });
-                const data = await resp.json();
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) {
+                    output.textContent = `❌ 失敗 (${resp.status}): ${data.detail || 'インストールに失敗しました'}`;
+                    output.style.color = '#e74c3c';
+                    return;
+                }
 
                 const status = data.success ? '✅ 成功' : '❌ 失敗';
                 const out = [status + ` (exit: ${data.returncode})`];

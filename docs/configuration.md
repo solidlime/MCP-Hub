@@ -106,6 +106,8 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `MCP_HUB_API_KEY` | (未設定) | 設定すると管理 API に X-API-Key 認証が有効になる |
 | `MCP_HUB_HEALTH_INTERVAL` | `60` | ヘルスチェックの間隔（秒）。0以下で無効化 |
 | `MCP_HUB_HEALTH_TIMEOUT` | `25` | ヘルスチェックのタイムアウト（秒）。202 ポーリング対応サーバー（EDINET 等）は tools/list に最大 20 秒かかるため、10 秒以下だと毎回ヘルスチェック失敗 → 切断になる。20 秒以上を推奨 |
+| `MCP_HUB_HEALTH_MAX_FAILURES` | `3` | ヘルスチェックの連続失敗許容回数（実装: `proxy_manager.py:426,639`） |
+| `MCP_HUB_LIST_TOOLS_TIMEOUT` | `10.0` | `list_tools` 集約のタイムアウト（秒。実装: `proxy_manager.py:425`） |
 | `MCP_HUB_RETRY_MAX` | `3` | サーバー接続の最大リトライ回数 |
 | `MCP_HUB_RETRY_DELAY` | `1.0` | リトライ間隔のベース delay（秒）。指数バックオフ適用 |
 | `MCP_HUB_MAX_CONCURRENT_CALLS` | `50` | 同時ツール呼び出しの最大数（DoS 対策セマフォ） |
@@ -115,6 +117,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `MCP_HUB_CONNECT_TIMEOUT` | `30.0` | 起動時の接続確認 `list_tools()` のタイムアウト（秒）。WebUI の Hub 設定「⏱️ 接続タイムアウト」からも設定可能（保存値が env より優先） |
 | `MCP_HUB_RECOVERY_COOLDOWN` | `300.0` | ヘルスチェックで死んだサーバーへの自動再接続試行の最小間隔（秒）。ヘルスチェック間隔（デフォルト 60s）より長く設定すること |
 | `MCP_HUB_EMBEDDING` | `1` | `0` に設定するとセマンティック検索を強制無効化（ハードキル）。`use_embeddings` 設定や Web UI トグルより優先され、ランタイム設定で再有効化できない |
+| `MCP_HUB_SESSION_IDLE_TIMEOUT` | (未設定) | アップストリームセッションのアイドル有効期限（秒）。未設定時は SDK 既定（期限なし）を維持（実装: `main.py:75-84`） |
 
 ### `MCP_HUB_RESEED=1` の動作
 

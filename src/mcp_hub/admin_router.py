@@ -197,11 +197,43 @@ async def get_embedding_model():
     return {"embedding_model": data.get("embedding_model", DEFAULT_EMBEDDING_MODEL)}
 
 
+def _validate_embedding_model(value: Any) -> str:
+    """埋め込みモデル名の最小検証。HF「org/model」形式は通し、空・パス/URL混入のみ拒否。"""
+    if not isinstance(value, str) or not value.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="embedding_model は空でない文字列である必要があります",
+        )
+    v = value.strip()
+    if len(v) > 256:
+        raise HTTPException(
+            status_code=422,
+            detail="embedding_model が長すぎます（最大 256 文字）",
+        )
+    if any(c.isspace() or ord(c) < 0x20 or ord(c) == 0x7F for c in v):
+        raise HTTPException(
+            status_code=422,
+            detail="embedding_model に空白・制御文字は使えません",
+        )
+    if "://" in v or "\\" in v or ".." in v or v.startswith("/") or v.startswith("."):
+        raise HTTPException(
+            status_code=422,
+            detail="embedding_model にパス・URL は使えません（'org/model' 形式で指定）",
+        )
+    return v
+
+
 @router.patch("/settings/embedding-model")
 async def update_embedding_model(body: dict):
     registry = _get_registry()
-    if "embedding_model" in body:
-        await registry.set_embedding_model(str(body["embedding_model"]))
+    if "embedding_model" not in body:
+        raise HTTPException(
+            status_code=400,
+            detail="embedding_model が必要です。例: {'embedding_model': "
+            "'sentence-transformers/all-MiniLM-L6-v2'}",
+        )
+    model = _validate_embedding_model(body["embedding_model"])
+    await registry.set_embedding_model(model)
     data = await registry._read()
     return {"embedding_model": data.get("embedding_model", DEFAULT_EMBEDDING_MODEL)}
 
@@ -226,7 +258,11 @@ async def metrics():
     servers = await registry.list_servers()
 
     uptime = time.time() - app_state.start_time
-    total_tools = sum(len(tools) for tools in (await pm.list_tools()).values())
+    # metrics の fan-out を避ける: 上流への list_tools() は呼ばず、キャッシュ済みカウントを使う
+    try:
+        total_tools = sum(getattr(pm, "_tool_counts", {}).values())
+    except Exception:
+        total_tools = 0
 
     return {
         "uptime_seconds": round(uptime, 1),
@@ -393,8 +429,12 @@ async def patch_server(name: str, body: PatchServerRequest):
             merged_config["command"] = validate_command(merged_config["command"])
             if "args" in merged_config:
                 merged_config["args"] = validate_args(merged_config["args"])
-            if "env" in merged_config:
-                merged_config["env"] = validate_env(merged_config["env"])
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    # env は URL サーバーでも検証する (BLOCKED 拒否。bearer 導出用に URL 側も env を持つため)
+    if "env" in merged_config:
+        try:
+            merged_config["env"] = validate_env(merged_config["env"])
         except ValidationError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
     if "headers" in merged_config and merged_config["headers"]:

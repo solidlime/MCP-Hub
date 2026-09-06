@@ -37,7 +37,7 @@ POST /mcp?tags=web,local
 
 クエリパラメーターよりヘッダーが優先されます。タグフィルタリングは OR 論理で動作し、指定されたタグのいずれかを持つサーバーのツール・リソース・プロンプトのみが返ります。
 
-#### 内部リソース: `hub://servents`
+#### 内部リソース: `hub://servers`
 
 接続中の全サーバーの JSON スナップショットを返す内部 MCP リソースです。
 
@@ -188,9 +188,13 @@ X-API-Key: your-api-key-here
 {
   "meta_mode": true,
   "full_info_tools": ["fetch_fetch"],
+  "client_timeout": null,
+  "connect_timeout": null,
   "use_embeddings": true
 }
 ```
+
+`client_timeout` / `connect_timeout` は未設定時 `null` を返します（実装: `admin_router.py:128-138`）。設定値は `proxy_manager.py` で `MCP_HUB_CLIENT_TIMEOUT`（既定 `180.0`）/ `MCP_HUB_CONNECT_TIMEOUT`（既定 `30.0`）より優先されます。
 
 #### `PATCH /admin/api/settings`
 
@@ -200,6 +204,16 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 ```json
 {
   "meta_mode": false
+}
+```
+
+タイムアウトを変更する場合（`0 < 値 <= 300` の数値または `null` でクリア、不正値は `422`。実装: `admin_router.py:174-182`）：
+
+**Request Body:**
+```json
+{
+  "client_timeout": 180.0,
+  "connect_timeout": 30.0
 }
 ```
 
@@ -217,6 +231,8 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 {
   "meta_mode": true,
   "full_info_tools": ["fetch_fetch", "filesystem_read_file"],
+  "client_timeout": 180.0,
+  "connect_timeout": 30.0,
   "use_embeddings": true
 }
 ```
@@ -455,10 +471,11 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 
 ### ツール操作
 
-#### `POST /tools/install`
+#### `POST /admin/api/tools/install`
 
 依存パッケージのインストールコマンドを実行します（pip, npm, uv 等）。
 インストールされたパッケージは Docker ボリュームに永続化されます。
+ベースパス `/admin/api` 配下（実装: `admin_router.py` の `APIRouter(prefix="/admin/api")` + `@router.post("/tools/install")`、UI `index.html:3489` の `fetch('/admin/api/tools/install')` が正）。
 
 **Request Body:**
 ```json

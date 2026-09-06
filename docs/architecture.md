@@ -69,20 +69,24 @@ LLM クライアントは単一のエンドポイント (`/mcp`) に接続する
 3. **ヘルスモニタリング**: 定期的なヘルスチェックと障害サーバーの自動リカバリ
 4. **ツール一覧・呼び出し**: 全サーバーのツール一覧取得とツール呼び出しのディスパッチ
 
-**接続方式（`_create_proxy`）：**
+**接続方式（`_create_proxy`）：実態は `create_proxy()` ヘルパー呼び出しではなく `FastMCPProxy` の直構築（実装: `proxy_manager.py:814-894`）：**
 
 ```python
-if url:
-    # パスに /sse を含む → SSETransport
-    # それ以外 → StreamableHttpTransport
-    headers = config.get("headers")
-    transport = SSETransport(url=url, headers=headers)  # または
-    transport = StreamableHttpTransport(url=url, headers=headers)
-    client = Client(transport=transport)
-    proxy = create_proxy(client, name=name)
-else:  # command
-    transport = StdioTransport(command=command, args=args, env=env)
-    proxy = create_proxy(transport, name=name)
+# url の場合
+transport = SSETransport(url=url, headers=headers)  # パスに /sse を含む場合
+# transport = StreamableHttpTransport(url=url, headers=headers)  # それ以外
+client = Client(transport=transport, timeout=self._client_timeout())
+await client.__aenter__()  # 接続確立して同一セッション再利用
+proxy = FastMCPProxy(
+    client_factory=self._make_client_factory(name, client),
+    name=name,
+    provider_error_strategy="raise",
+)
+# command の場合
+transport = StdioTransport(command=command, args=args, env=env)
+client = Client(transport=transport)
+await client.__aenter__()
+proxy = FastMCPProxy(client_factory=..., name=name, ...)
 ```
 
 **3 つのトランスポート対応：**

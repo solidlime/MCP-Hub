@@ -84,6 +84,16 @@ def _parse_config(filepath: Path) -> HubConfig:
     for name, cfg in raw_servers.items():
         if not isinstance(cfg, dict):
             continue
+        if not isinstance(name, str) or not name.strip():
+            logger.warning("Skipping server with invalid empty name: %r", name)
+            continue
+        if (
+            "/" in name
+            or "\\" in name
+            or any(ord(c) < 0x20 or ord(c) == 0x7F for c in name)
+        ):
+            logger.warning("Skipping server with invalid name: %r", name)
+            continue
         if cfg.get("disabled"):
             logger.info("Skipping disabled server '%s'", name)
             continue
