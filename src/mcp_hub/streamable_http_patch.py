@@ -32,7 +32,15 @@ from mcp.client.streamable_http import (
 )
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCRequest, JSONRPCMessage
-from mcp_types import ErrorData, INVALID_REQUEST, JSONRPCError
+from mcp_types import (
+    ErrorData,
+    INTERNAL_ERROR,
+    INVALID_REQUEST,
+    JSONRPCError,
+    METHOD_NOT_FOUND,
+    jsonrpc_message_adapter,
+)
+from pydantic import ValidationError
 
 if TYPE_CHECKING:
     from mcp.client.streamable_http import RequestContext
@@ -201,19 +209,46 @@ async def _patched_handle_post_request(
             return
         # ── END PATCH ──
 
-        # Original logic for non-202 responses (unchanged)
-        if response.status_code == 404:
+        # ── PATCHED: Handle >=400 by surfacing a JSON-RPC error on the read
+        # stream. Ported verbatim from upstream mcp SDK streamable_http.py
+        # 342-373. Rationale: the SDK's connect-time probe (negotiate_auto)
+        # expects an MCPError from server/discover 4xx rejections to trigger
+        # the legacy initialize fallback; raise_for_status() would leak an
+        # httpx2.HTTPStatusError past the probe and kill the whole connection
+        # (regression: Exa/Mapbox reject server/discover with HTTP 400).
+        if response.status_code >= 400:
             if isinstance(message, JSONRPCRequest):
-                # 2.x: _send_session_terminated_error is gone — inline the
-                # Session-terminated error send (SessionMessage + JSONRPCError).
-                error_data = ErrorData(code=INVALID_REQUEST, message="Session terminated")
-                session_message = SessionMessage(
-                    JSONRPCError(jsonrpc="2.0", id=message.id, error=error_data)
-                )
+                # A spec-correct server may return the JSON-RPC error in the
+                # body at a non-2xx status (e.g. 400 for INVALID_PARAMS, 404
+                # for METHOD_NOT_FOUND). Surface that error rather than the
+                # status-derived stand-in below.
+                if response.headers.get("content-type", "").lower().startswith("application/json"):
+                    try:
+                        body = await response.aread()
+                        parsed = jsonrpc_message_adapter.validate_json(body, by_name=False)
+                        if isinstance(parsed, JSONRPCError):
+                            # The server may have set `id: null` (request rejected before its
+                            # id was parsed); use this request's id so correlation works.
+                            reply = JSONRPCError(jsonrpc="2.0", id=message.id, error=parsed.error)
+                            await ctx.read_stream_writer.send(SessionMessage(reply))
+                            return
+                    except (httpx2.StreamError, ValidationError):
+                        pass
+                    logger.debug("Non-2xx body was not a JSON-RPC error; using fallback")
+                if response.status_code == 404:
+                    if self.session_id is None:
+                        # No session yet → 404 is the HTTP-level spelling of
+                        # METHOD_NOT_FOUND (gateway / legacy server doesn't know
+                        # this method); "Session terminated" would be a lie here.
+                        error_data = ErrorData(code=METHOD_NOT_FOUND, message="Not Found")
+                    else:
+                        error_data = ErrorData(code=INVALID_REQUEST, message="Session terminated")
+                else:
+                    error_data = ErrorData(code=INTERNAL_ERROR, message="Server returned an error response")
+                session_message = SessionMessage(JSONRPCError(jsonrpc="2.0", id=message.id, error=error_data))
                 await ctx.read_stream_writer.send(session_message)
             return
 
-        response.raise_for_status()
         await _process_response(self, response, ctx, message, is_initialization)
 
 
