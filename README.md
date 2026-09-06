@@ -9,12 +9,15 @@ MCP Hub を使うと、`filesystem`、`brave-search`、`github` などの MCP �
 - 🔌 **サーバーを束ねる**: stdio 起動のサーバーも、HTTP で動くリモートサーバーも、まとめて管理
 - 🏷️ **タグでフィルタ**: 用途別にタグ付けして、必要なツールだけを公開
 - 🖥️ **管理画面付き**: ブラウザからサーバーの追加・編集（名前変更含む）・状態確認ができる
-- 📦 **モジュール後付けインストール**: WebUI から `pip install` せずに Python モジュールを追加可能
+- 📦 **モジュール後付けインストール**: WebUI から pip / uv / npm を指定してモジュールを追加可能（シェル実行なしの構造化 API でバリデーション済み）
 - 🔍 **Progressive Discovery**: ツールが増えすぎても賢く検索（デフォルト有効）
 - ⭐ **フル公開ツール**: Meta モードでも特定ツールだけ通常公開（`full_info_tools`、WebUI のトグルで切替）
 - 📋 **ツールログ**: ツール呼び出し・サーバー接続イベントを WebUI のログタブで確認（機密情報はマスク）
+- 🛡️ **セキュリティハードニング**: 入力バリデーション・SSRF/シェルインジェクション対策・HostOriginGuard・管理API認証（詳細は [セキュリティ](docs/security.md)）
 
 ## クイックスタート
+
+要件: Python 3.12+（内部で `fastmcp>=4.0,<5.0` を使用）
 
 ```bash
 pip install mcp-hub
@@ -97,6 +100,8 @@ docker build -t mcp-hub .
 docker run -p 26263:26263 -v $(pwd)/data:/app/data mcp-hub
 ```
 
+`docker compose up` でも起動できます（`ghcr.io/solidlime/mcp-hub:latest` イメージ使用・PUID/PGID 自動検出対応）。compose ファイルは docker.sock をマウントするため、実行環境の信頼性に注意してください。
+
 ## パフォーマンス
 
 MCP Hub の Progressive Discovery（メタモード）は、全プロトコルで **100% のツール呼び出し成功率** を達成しながら、AI に送るツール定義を大幅に削減します。
@@ -113,6 +118,8 @@ MCP Hub の Progressive Discovery（メタモード）は、全プロトコル�
 | **合計** | | **19** | **100% (21/21)** | **100% (21/21)** |
 
 > stdio / SSE / Streamable HTTP の全プロトコルで Meta ON/OFF 両方とも 100% 成功。
+>
+> この表は LLM 実呼び出しベンチマークで再現できます: `OPENROUTER_API_KEY=sk-or-... python scripts/benchmark_toolcall.py --trials 3`（LLM: `deepseek/deepseek-v4-flash-0731`、Meta ON/OFF 各3試行、exa は `EXA_API_KEY` 設定時のみ計測）。
 
 ### ツール定義サイズ
 
@@ -133,6 +140,22 @@ MCP Hub の Progressive Discovery（メタモード）は、全プロトコル�
 | `MCP_HUB_API_KEY` | （なし） | 設定すると管理APIに認証がかかる |
 | `MCP_HUB_RESEED` | （なし） | `1` でDBクリア＋設定から再シード |
 | `MCP_HUB_LOG` | `text` | `json` で構造化ログ出力 |
+| `MCP_HUB_HEALTH_INTERVAL` | `60` | ヘルスチェック間隔（秒。`0` 以下で無効化） |
+| `MCP_HUB_HEALTH_TIMEOUT` | `25` | ヘルスチェックのタイムアウト（秒。20秒以上を推奨） |
+| `MCP_HUB_HEALTH_MAX_FAILURES` | `3` | 連続失敗の許容回数 |
+| `MCP_HUB_RETRY_MAX` | `3` | サーバー接続の最大リトライ回数 |
+| `MCP_HUB_RETRY_DELAY` | `1.0` | リトライ間隔のベース遅延（秒。指数バックオフ） |
+| `MCP_HUB_LIST_TOOLS_TIMEOUT` | `10.0` | `list_tools` 集約のタイムアウト（秒） |
+| `MCP_HUB_LIST_TOOLS_RETRY_DELAY` | `0.3` | `list_tools` リトライの遅延（秒） |
+| `MCP_HUB_CALL_TOOL_TIMEOUT` | `30` | ツール呼び出しのタイムアウト（秒） |
+| `MCP_HUB_CLIENT_TIMEOUT` | `180.0` | アップストリーム読み取りタイムアウト（秒。WebUI設定が優先） |
+| `MCP_HUB_CONNECT_TIMEOUT` | `30.0` | 起動時接続確認のタイムアウト（秒。WebUI設定が優先） |
+| `MCP_HUB_MAX_CONCURRENT_CALLS` | `50` | 同時ツール呼び出しの最大数 |
+| `MCP_HUB_RECOVERY_COOLDOWN` | `300.0` | 死んだサーバーへの再接続試行の最小間隔（秒） |
+| `MCP_HUB_EMBEDDING` | `1` | `0` でセマンティック検索を強制無効化 |
+| `MCP_HUB_SESSION_IDLE_TIMEOUT` | （なし） | 上流セッションのアイドル有効期限（秒。未設定で期限なし） |
+
+詳細は [設定リファレンス](docs/configuration.md) を参照してください。
 
 ## ドキュメント
 
