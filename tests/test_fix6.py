@@ -1,5 +1,6 @@
 """FIX-6 regression tests: one compact test per fix (fails before, passes after)."""
 import asyncio
+import time
 
 import numpy as np
 import pytest
@@ -56,12 +57,15 @@ def test_empty_list_tools_preserves_cached_counts():
     from types import SimpleNamespace
     pm = _make_pm()
     proxy = SimpleNamespace(list_tools=AsyncMock(return_value=[]))
-    pm._tool_cache = {"srv": (0.0, ["a", "b", "c"])}
+    # 期限切れキャッシュ (time.monotonic は boot 相対。絶対値 0.0 は GHランナー等
+    # uptime<60s の環境では「新鮮」判定になり、環境依存フレーキーの元)
+    stale_ts = time.monotonic() - 61.0
+    pm._tool_cache = {"srv": (stale_ts, ["a", "b", "c"])}
     pm._tool_counts = {"srv": 3}
     tools = asyncio.run(pm.list_tools_for_server("srv", proxy))
     assert tools == []
     assert pm._tool_counts == {"srv": 3}
-    assert pm._tool_cache == {"srv": (0.0, ["a", "b", "c"])}
+    assert pm._tool_cache == {"srv": (stale_ts, ["a", "b", "c"])}
 
 
 def test_masks_generic_secret_token_values():
