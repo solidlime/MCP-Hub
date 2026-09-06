@@ -72,7 +72,6 @@ class ProxyManager:
         self._status: dict[str, str] = {}
         self._tool_counts: dict[str, int] = {}
         self._lock = asyncio.Lock()
-        self._rebuilding: bool = False  # Protected by self._lock
         self._refreshing: set[str] = set()  # Protected by self._lock
         self._health_task: asyncio.Task | None = None
         self._on_change_callbacks: list[Callable] = []
@@ -568,7 +567,6 @@ class ProxyManager:
 
     async def list_tools_for_server(self, name: str, proxy: FastMCPProxy, cache_ttl: float = 60.0) -> list[Any]:
         """List tools with caching. Returns cached result if within TTL."""
-        import time
         now = time.monotonic()
         if name in self._tool_cache:
             ts, tools = self._tool_cache[name]
@@ -917,7 +915,6 @@ class ProxyManager:
         # (middleware/http_app 構築元) するため FastMCP(providers=[...]) での
         # 差し替えはしない。local_provider は公開 property。
         # _server_instances には触らない (shutdown terminate 専用)。
-        self._rebuilding = True
         self._rebuild_complete.clear()
         try:
             mounted = self.mcp.providers
@@ -928,5 +925,4 @@ class ProxyManager:
             for srv_name, proxy in self._proxies.items():
                 self.mcp.mount(proxy, namespace=srv_name)
         finally:
-            self._rebuilding = False
             self._rebuild_complete.set()

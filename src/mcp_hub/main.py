@@ -93,7 +93,6 @@ class MCPDispatcher:
         self._normal_sm = normal_sm
         self._meta_sm = meta_sm
         self._cached_meta_mode: bool | None = None
-        self._last_active_side: str | None = None
         import asyncio
         self._cleanup_task = asyncio.create_task(self._session_cleanup_loop())
         self._shutdown = False
