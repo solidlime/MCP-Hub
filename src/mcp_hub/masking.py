@@ -33,7 +33,7 @@ _GENERIC_SECRET = re.compile(
     r"|eyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]{5,})"
 )
 
-_ARG_MAX_LEN = 500
+_ARG_MAX_LEN = 2000
 _TEXT_MAX_LEN = 500
 _TRACEBACK_MAX_LEN = 4000
 
@@ -92,7 +92,7 @@ def _mask_recursive(obj: Any) -> Any:
 
 
 def mask_args(args: dict | list | Any) -> str:
-    """引数を JSON 化し、マスク→500字トランケーションして返す。"""
+    """引数を JSON 化し、マスク→2000字トランケーションして返す。"""
     masked = _mask_recursive(args)
     text = json.dumps(masked, ensure_ascii=False, default=str)
     return text[:_ARG_MAX_LEN]

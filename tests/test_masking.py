@@ -1,6 +1,6 @@
 """Masking utility tests."""
 
-from mcp_hub.masking import mask_args, mask_text
+from mcp_hub.masking import _ARG_MAX_LEN, mask_args, mask_text
 
 
 class TestMaskArgs:
@@ -28,9 +28,9 @@ class TestMaskArgs:
         out = mask_args({"url": "https://example.com", "method": "GET"})
         assert "https://example.com" in out
 
-    def test_truncates_to_500(self):
-        out = mask_args({"big": "x" * 2000})
-        assert len(out) <= 500
+    def test_truncates_to_arg_max_len(self):
+        out = mask_args({"big": "x" * 5000})
+        assert len(out) <= _ARG_MAX_LEN
 
 
 class TestMaskText:

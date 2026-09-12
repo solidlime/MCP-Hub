@@ -1626,10 +1626,13 @@
                     <option value="success">success</option>
                     <option value="error">error</option>
                     <option value="timeout">timeout</option>
+                    <option value="started">started</option>
                     <option value="connected">connected</option>
                     <option value="disconnected">disconnected</option>
                     <option value="spawn_failed">spawn_failed</option>
                     <option value="recovered">recovered</option>
+                    <option value="tags_updated">tags_updated</option>
+                    <option value="renamed">renamed</option>
                 </select>
                 <input type="text" id="logSearchInput" placeholder="検索 (ツール名 / 引数 / エラー)" aria-label="検索">
                 <button class="btn" onclick="loadLogs()">更新</button>
@@ -1920,6 +1923,7 @@
         let currentMainTab = 'servers';
         let logPollingActive = false;
         let logPollingTimer = null;
+        const logOpenDetails = new Set(); // 開いた詳細行の entry.id（ポーリング再描画でも保持）
         let currentTool = null;
         let currentServer = null;
         let editingServer = null;
@@ -2491,7 +2495,7 @@
             const server = document.getElementById('logServerFilter').value;
             const status = document.getElementById('logStatusFilter').value;
             const q = document.getElementById('logSearchInput').value.trim();
-            const data = await API.getLogs({ type, server, status, q, limit: 100 });
+            const data = await API.getLogs({ type, server, status, q, limit: 500 });
             renderLogs(data.entries || []);
         }
 
@@ -2512,7 +2516,7 @@
             empty.style.display = 'none';
             for (const entry of entries) {
                 const tr = document.createElement('tr');
-                const hasDetail = entry.error || entry.traceback;
+                const hasDetail = entry.error || entry.traceback || (entry.args && entry.args.length > 80);
                 tr.innerHTML = `
                     <td>${escapeHtml(fmtLogTime(entry.ts))}</td>
                     <td>${entry.type === 'server_event' ? 'イベント' : 'ツール'}</td>
@@ -2521,13 +2525,17 @@
                     <td><span class="log-status ${escapeHtml(entry.status)}">${escapeHtml(entry.status)}</span></td>
                     <td>${entry.duration_ms != null ? escapeHtml(entry.duration_ms + ' ms') : '—'}</td>
                     <td class="log-args">${entry.args ? escapeHtml(entry.args.slice(0, 80)) + (entry.args.length > 80 ? '…' : '') : '—'}</td>
-                    <td>${hasDetail ? '<button class="log-detail-btn" onclick="toggleLogDetail(this)">詳細</button>' : ''}</td>
+                    <td>${hasDetail ? `<button class="log-detail-btn" data-id="${entry.id}" onclick="toggleLogDetail(this)">${logOpenDetails.has(entry.id) ? '閉じる' : '詳細'}</button>` : ''}</td>
                 `;
                 if (hasDetail) {
                     const detail = document.createElement('tr');
                     detail.className = 'log-detail-row';
-                    detail.style.display = 'none';
-                    detail.innerHTML = `<td colspan="8"><pre>${escapeHtml([entry.error, entry.traceback].filter(Boolean).join('\n\n'))}</pre></td>`;
+                    detail.style.display = logOpenDetails.has(entry.id) ? '' : 'none';
+                    const detailSections = [];
+                    if (entry.args) detailSections.push('【引数】\n' + entry.args);
+                    if (entry.error) detailSections.push('【エラー】\n' + entry.error);
+                    if (entry.traceback) detailSections.push('【トレースバック】\n' + entry.traceback);
+                    detail.innerHTML = `<td colspan="8"><pre>${escapeHtml(detailSections.join('\n\n'))}</pre></td>`;
                     tbody.appendChild(tr);
                     tbody.appendChild(detail);
                 } else {
@@ -2542,6 +2550,10 @@
                 const visible = detailRow.style.display !== 'none';
                 detailRow.style.display = visible ? 'none' : '';
                 btn.textContent = visible ? '詳細' : '閉じる';
+                if (btn.dataset.id !== undefined) {
+                    if (visible) logOpenDetails.delete(Number(btn.dataset.id));
+                    else logOpenDetails.add(Number(btn.dataset.id));
+                }
             }
         }
 

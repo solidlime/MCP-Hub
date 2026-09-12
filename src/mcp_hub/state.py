@@ -41,7 +41,7 @@ class LogEntry:
     tool: str            # ツール名（server_event では "-"）
     status: str          # success|error|timeout|started|connected|disconnected|spawn_failed|recovered|removed|updated
     duration_ms: float | None = None
-    args: str | None = None        # マスク済み・最大500字（tool_call のみ）
+    args: str | None = None        # マスク済み・最大2000字（tool_call のみ）
     error: str | None = None       # エラー概要・最大500字（マスク適用済み）
     traceback: str | None = None   # 例外トレースバック・最大4000字（マスク適用済み）
     id: int = 0                    # 単調増加シーケンス（append_log が付与）
