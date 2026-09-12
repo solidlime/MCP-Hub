@@ -64,7 +64,7 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
 
 | ツール | 説明 |
 |---|---|
-| `search_tools(query, top_k=10)` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。結果に `tags`（サーバータグ配列）を含む |
+| `search_tools(query, top_k=10)` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。結果に `tags`（サーバータグ配列）を含む。出力はコンパクト化: `description` は200字で切断、`inputSchema` は第1結果（最良一致）のみ付与 — 別ツールのスキーマが必要ならクエリを絞って再検索する |
 | `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行。互換のため `{"arguments": {...}}` に `server` / `tool_name` / `arguments` を折り畳んだ形式（LLM が生成しがちなフラット呼び出し）も受け付ける。サーバー名の大文字小文字は case-insensitive に解決される |
 | `list_upstream_tools()` | 全アップストリームツールをサーバー別に一覧表示 |
 
