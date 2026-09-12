@@ -227,17 +227,6 @@ class TestMetaIntegration:
         # At least one of file_read/file_write should be in results
         assert "file_read" in names or "file_write" in names
 
-    def test_search_tools_compact_output(self, client):
-        """inputSchema rides only on the first result (compact output)."""
-        parsed = _call_tool(
-            client, "search_tools", {"query": "file", "top_k": 3}, "s6"
-        )
-        data = json.loads(_get_text_content(parsed))
-        results = data["results"]
-        assert len(results) >= 1
-        assert "inputSchema" in results[0]
-        assert all("inputSchema" not in r for r in results[1:])
-
     def test_execute_tool(self, client):
         """execute_tool dispatches to proxy_manager.call_tool and returns result."""
         parsed = _call_tool(

@@ -522,10 +522,6 @@ class MetaTools:
     async def search_tools(self, query: str, top_k: int = 10) -> str:
         """Search upstream tools. Always call FIRST before execute_tool.
 
-        Compact output: description is truncated to 200 chars, and
-        inputSchema is included only for the first (best) result —
-        refine the query and search again to see another tool's schema.
-
         Args:
             query: What you want to do (e.g. "read files", "search web")
             top_k: Max results (default 10)
@@ -541,14 +537,9 @@ class MetaTools:
                     "hint": "Try broader keywords or check server connections.",
                 },
                 ensure_ascii=False,
+                indent=2,
             )
-        for i, r in enumerate(results):
-            desc = r.get("description") or ""
-            if len(desc) > 200:
-                r["description"] = desc[:200] + "…"
-            if i > 0:
-                r.pop("inputSchema", None)
-        return json.dumps({"results": results}, ensure_ascii=False)
+        return json.dumps({"results": results}, ensure_ascii=False, indent=2)
 
     async def execute_tool(
         self,
@@ -748,10 +739,6 @@ def create_meta_app(
     @mcp.tool()
     async def search_tools(query: str, top_k: int = 10) -> str:
         """Search upstream tools. Always call FIRST before execute_tool.
-
-        Compact output: description truncated to 200 chars; inputSchema is
-        on the first result only — search again with a narrower query to
-        see another tool's schema.
 
         Args:
             query: What you want to do (e.g. "read files", "search web")
