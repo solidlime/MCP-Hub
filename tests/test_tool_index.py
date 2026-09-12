@@ -2,9 +2,24 @@
 ToolIndex unit tests — embedding-based search with BM25 fallback.
 """
 
+import numpy as np
 import pytest
 from mcp_hub.config import DEFAULT_EMBEDDING_MODEL
 from mcp_hub.meta_provider import ToolIndex, resolve_embedding_model, _HAS_FASTEMBED
+
+
+class _FixedEmbedder:
+    """Fake embedder returning a fixed query vector for every embed() call.
+
+    Doc embeddings are injected directly onto the index; only the query
+    embedding path calls this (mirrors the _Boom pattern in test_fix6.py).
+    """
+
+    def __init__(self, query_vec):
+        self._query_vec = query_vec
+
+    def embed(self, texts):
+        return [self._query_vec for _ in texts]
 
 
 @pytest.fixture
@@ -67,13 +82,14 @@ class TestToolIndex:
         assert len(results) <= 2
 
     async def test_search_no_match(self, index):
-        """Query for a nonsense string. With embeddings: returns results
-        (low similarity). With BM25 fallback: returns empty (correct)."""
+        """Nonsense query returns no results.
+
+        Intentional contract change: weak-positive semantic hits below
+        _SEMANTIC_FLOOR are discarded and BM25 finds no lexical match, so an
+        empty result set is now valid. The old "embeddings always return
+        something" contract is gone."""
         results = index.search("zzz_xyzzy_nonexistent_12345")
-        if index._embeddings is not None:
-            assert len(results) >= 1  # embeddings always return something
-        else:
-            assert len(results) == 0  # BM25 correctly finds no match
+        assert results == []
 
 
 class TestIdentifierPromotion:
@@ -109,17 +125,18 @@ class TestIdentifierPromotion:
         return idx
 
     async def test_search_identifier_match_ranked_by_shared_tokens(self, memory_corpus_index):
-        """Exact name match (3 shared tokens) outranks loose partial hits
-        (1 token) regardless of document order; score = shared token count."""
+        """A selective exact name match outranks loose partial hits regardless
+        of document order; promoted score is the summed IDF of shared name
+        tokens (no fixed token count). Loose hits may arrive via promotion or
+        the BM25 tail."""
         results = memory_corpus_index.search("create memory record memory_create", top_k=10)
         names = [r["name"] for r in results]
         assert names[0] == "memory_create"
         assert names.index("memory_create") < names.index("memory_delete")
         assert names.index("memory_create") < names.index("memory_stats")
         scores = {r["name"]: r["score"] for r in results}
-        assert scores["memory_create"] == 3.0
-        assert scores["memory_delete"] == 1.0
-        assert scores["memory_stats"] == 1.0
+        assert scores["memory_create"] > scores["memory_delete"]
+        assert scores["memory_create"] > scores["memory_stats"]
 
     async def test_search_identifier_match_not_buried_by_top_k(self, index):
         """A hostile underlying ranking that puts the name-matched tool beyond
@@ -151,8 +168,9 @@ class TestIdentifierPromotion:
         assert names.count("brave_web_search") == 1
 
     async def test_search_exact_overflows_top_k_sorted_by_strength(self):
-        """When identifier matches exceed top_k, the top entries follow shared
-        token count (desc), not insertion order."""
+        """Identifier matches that exceed top_k follow summed IDF (desc), not
+        insertion order. The generic "file" token alone (df > 25% of names) no
+        longer promotes, so the file_i tools stay unranked."""
         docs = [
             {
                 "name": f"file_{i}",
@@ -179,13 +197,103 @@ class TestIdentifierPromotion:
         idx = ToolIndex()
         await idx.rebuild(docs)
         idx._use_embeddings = False
-        # Insertion order puts file_1 first; shared-token ranking must win.
+        # Insertion order puts file_1 first; IDF ranking must win.
         results = idx.search("file read write", top_k=5)
         assert len(results) <= 5
         names = [r["name"] for r in results]
-        assert names[0] == "file_read_write"  # 3 shared tokens
-        assert names[1] == "read_write"        # 2 shared tokens
-        assert results[0]["score"] > results[1]["score"] > results[2]["score"]
+        assert names[0] == "file_read_write"  # selective: file + read + write
+        assert names[1] == "read_write"        # selective: read + write
+        assert results[0]["score"] > results[1]["score"]
+        # "file" alone is generic → file_N are not promoted or BM25-surfaced.
+        assert "file_1" not in names
+
+
+class TestSearchPrecision:
+    """Precision rework: IDF-gated promotion, semantic/BM25 floors, RRF fusion."""
+
+    async def test_generic_token_does_not_promote(self):
+        """A token shared by many names (generic "get") must not promote a
+        tool to the front; a keyword-relevant tool wins."""
+        docs = [
+            {"name": "get_user", "description": "", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "get_post", "description": "", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "get_comment", "description": "", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "account_details", "description": "", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "delete_file", "description": "", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "list_items", "description": "", "server": "s", "inputSchema": {}, "tags": []},
+        ]
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        idx._use_embeddings = False
+        results = idx.search("get account details", top_k=10)
+        assert results[0]["name"] == "account_details"
+        assert not results[0]["name"].startswith("get_")
+
+    async def test_rrf_fusion_prefers_tool_in_both_lists(self):
+        """A tool present in both semantic and BM25 candidate lists outranks
+        tools present in only one list (Reciprocal Rank Fusion)."""
+        docs = [
+            {"name": "alpha_gadget", "description": "a", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "beta_semantic", "description": "b", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "gamma_gadget", "description": "c", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "delta_other", "description": "d", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "epsilon_thing", "description": "e", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "zeta_tool", "description": "f", "server": "s", "inputSchema": {}, "tags": []},
+        ]
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        # Query (1,0); alpha cos 0.9, beta cos 0.8, the rest 0 (below floor).
+        idx._embeddings = np.array(
+            [[0.9, 0.4358899], [0.8, 0.6], [0.0, 1.0], [0.0, 1.0], [0.0, 1.0], [0.0, 1.0]],
+            dtype=np.float32,
+        )
+        idx._embedder = _FixedEmbedder([1.0, 0.0])
+        idx._use_embeddings = True
+        # BM25 lexical hits: alpha_gadget + gamma_gadget (query "gadget").
+        results = idx.search("gadget", top_k=10)
+        names = [r["name"] for r in results]
+        assert names[0] == "alpha_gadget"  # in BOTH lists
+        assert "beta_semantic" in names    # semantic-only
+        assert "gamma_gadget" in names     # BM25-only
+        scores = {r["name"]: r["score"] for r in results}
+        assert scores["alpha_gadget"] > scores["beta_semantic"]
+        assert scores["alpha_gadget"] > scores["gamma_gadget"]
+
+    async def test_semantic_floor_discards_weak_hits(self):
+        """Semantic candidates below _SEMANTIC_FLOOR are dropped: with a weak
+        embedder and a lexically non-matching query, results are empty."""
+        docs = [
+            {"name": f"tool_{i}", "description": "", "server": "s", "inputSchema": {}, "tags": []}
+            for i in range(3)
+        ]
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        idx._embeddings = np.array([[0.05, 0.9987492]] * 3, dtype=np.float32)
+        idx._embedder = _FixedEmbedder([1.0, 0.0])  # cos ≈ 0.05 for every doc
+        idx._use_embeddings = True
+        assert idx.search("zzz_semanticonly", top_k=10) == []
+
+    async def test_bm25_relative_floor_trims_tail(self):
+        """Only BM25 hits within _BM25_REL_FLOOR of the best survive: three
+        docs share a query token but only the dominant one is returned."""
+        docs = [{"name": "primary", "description": "alpha beta", "server": "s", "inputSchema": {}, "tags": []}]
+        docs += [
+            {"name": f"low_{i}", "description": "alpha " + "filler " * 20, "server": "s", "inputSchema": {}, "tags": []}
+            for i in range(2)
+        ]
+        docs += [
+            {"name": f"other_{i}", "description": "unrelated text", "server": "s", "inputSchema": {}, "tags": []}
+            for i in range(5)
+        ]
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        idx._use_embeddings = False
+        results = idx.search("alpha beta", top_k=10)
+        names = [r["name"] for r in results]
+        # primary + low_0 + low_1 all contain a query token; the relative floor
+        # keeps only the dominant hit.
+        assert len(results) == 1
+        assert names == ["primary"]
 
 
 class TestTokenizer:

@@ -6,6 +6,7 @@ Exposes 3 tools instead of all child server tools.
 import asyncio
 import json
 import logging
+import math
 import os
 import re
 from collections.abc import Awaitable, Callable
@@ -64,6 +65,13 @@ def resolve_embedding_model(model: str, supported: set[str] | None) -> str:
     return model
 
 
+# Search tunables (see ToolIndex.search for the contract these enforce).
+_SEMANTIC_FLOOR = 0.30  # min cosine to keep a semantic candidate
+_BM25_REL_FLOOR = 0.25  # keep BM25 hits within 25% of the best hit
+_RRF_K = 60  # Reciprocal Rank Fusion dampening constant
+_RRF_CANDIDATES = 20  # per-ranker candidate depth feeding RRF
+
+
 class ToolIndex:
     """Embedding-based semantic search over proxied tools, with BM25 fallback.
 
@@ -86,6 +94,8 @@ class ToolIndex:
         ] = []  # [{server, name, description, inputSchema, tags}, ...]
         self._bm25: BM25Okapi | None = None
         self._corpus: list[list[str]] = []
+        self._name_tokens: list[set[str]] = []
+        self._name_idf: dict[str, float] = {}
         self._embedder: "TextEmbedding | None" = None  # type: ignore[name-defined]
         self._embeddings: "np.ndarray | None" = None  # type: ignore[name-defined]
         # Runtime setting (WebUI 編集可、デフォルト ON) に加え、
@@ -245,6 +255,17 @@ class ToolIndex:
             self._corpus = [self._build_doc_tokens(d) for d in documents]
             self._bm25 = BM25Okapi(self._corpus) if self._corpus else None
 
+            # Name-token IDF: drives selective name-match promotion in search().
+            self._name_tokens = [set(self._tokenize(d["name"])) for d in documents]
+            df: dict[str, int] = {}
+            for name_tokens in self._name_tokens:
+                for token in name_tokens:
+                    df[token] = df.get(token, 0) + 1
+            n_docs = len(documents)
+            self._name_idf = (
+                {t: math.log(n_docs / c) for t, c in df.items()} if n_docs else {}
+            )
+
             # Compute embeddings if fastembed is available
             if self._use_embeddings and documents:
                 try:
@@ -273,20 +294,29 @@ class ToolIndex:
         """Search tools by keyword or semantic query.
 
         Contract:
-        - Identifier matches (tools whose name shares a token with the query)
-          are promoted to the front, ranked by shared token count (descending).
-        - Underlying semantic/BM25 results follow as tail.
-        - score is the shared token count for promoted entries, and the
-          ranker's real score otherwise.
-        - top_k truncation applies after promotion, so an exact name match is
-          never buried by ranking or truncation.
+        - Name-match promotion: a tool whose *name* shares at least one
+          selective token with the query is promoted to the front. Selective
+          means the token is rare across tool names — its IDF must be at least
+          log(N / max(1, N // 4)), i.e. it appears in ≤ ~25% of names. Generic
+          tokens (e.g. "get", "file") present in many names do not promote.
+          Promoted entries are ranked by summed IDF of the shared tokens
+          (desc, stable ties); their ``score`` is that IDF sum, rounded to 4
+          decimals. Promotion is truncated to top_k first, so an exact name
+          match is never buried.
+        - Tail ranking with embeddings available is Reciprocal Rank Fusion
+          (RRF, k=60) of the floor-filtered semantic candidates
+          (cosine ≥ ``_SEMANTIC_FLOOR``) and BM25 candidates (score ≥
+          ``_BM25_REL_FLOOR`` × best). Each fused entry's ``score`` is its RRF
+          score, rounded to 4 decimals. Without embeddings (unavailable,
+          embed() raised, or ``set_use_embeddings(False)``) the tail is
+          BM25-only.
+        - Floors and RRF knobs are tunable module constants
+          (``_SEMANTIC_FLOOR``, ``_BM25_REL_FLOOR``, ``_RRF_K``,
+          ``_RRF_CANDIDATES``).
 
-        Uses embedding-based semantic search when fastembed is available,
-        otherwise falls back to BM25 keyword search.
-
-        When semantic search returns no results (e.g. all scores ≤ 0 due to
-        language mismatch), automatically
-        falls back to BM25 which supports multilingual input.
+        Known limitation: the tokenizer is ASCII-only and the default embedder
+        is English-centric, so Japanese queries may return few or empty
+        results. Multilingual support is deferred.
 
         Returns list of {server, name, description, tags, inputSchema, score}.
 
@@ -298,38 +328,43 @@ class ToolIndex:
         if not self._documents:
             return []
         query_tokens = set(self._tokenize(query))
+        n_docs = len(self._documents)
+        # A name token promotes only if it is selective (df ≤ ~25% of names).
+        min_idf = math.log(n_docs / max(1, n_docs // 4))
 
-        # Identifier matches: rank by shared token count (desc) so the tool whose
-        # name literally matches the query outranks loose partial hits. score =
-        # shared token count expresses "name-match strength".
+        # Identifier matches: rank by summed IDF of shared name tokens (desc).
+        # Generic tokens shared by many names have low IDF and are filtered by
+        # min_idf, so junk partial hits no longer reach the front.
         exact = []
-        for doc in self._documents:
-            shared = len(set(self._tokenize(doc["name"])) & query_tokens)
-            if shared > 0:
-                # 明示的 dict 構築: {**doc,...} では doc に余計なキーが
-                # あった時に promotion 経路だけ結果形状がずれる。
-                exact.append(
-                    {
-                        "server": doc["server"],
-                        "name": doc["name"],
-                        "description": doc.get("description", ""),
-                        "tags": doc.get("tags", []),
-                        "inputSchema": doc.get("inputSchema", {}),
-                        "score": float(shared),
-                    }
-                )
+        for i, doc in enumerate(self._documents):
+            shared = self._name_tokens[i] & query_tokens
+            if not shared:
+                continue
+            if max(self._name_idf.get(t, 0.0) for t in shared) < min_idf:
+                continue
+            weighted = sum(self._name_idf.get(t, 0.0) for t in shared)
+            # 明示的 dict 構築: {**doc,...} では doc に余計なキーが
+            # あった時に promotion 経路だけ結果形状がずれる。
+            exact.append(
+                {
+                    "server": doc["server"],
+                    "name": doc["name"],
+                    "description": doc.get("description", ""),
+                    "tags": doc.get("tags", []),
+                    "inputSchema": doc.get("inputSchema", {}),
+                    "score": round(weighted, 4),
+                }
+            )
         exact.sort(
             key=lambda d: d["score"], reverse=True
         )  # stable: ties keep doc order
 
         if self._use_embeddings and self._embeddings is not None:
-            results = self._semantic_search(query, top_k)
-            if not results:
-                logger.info(
-                    "Semantic search returned 0 results, falling back to BM25 for query: %s",
-                    query,
-                )
-                results = self._bm25_search(query, top_k)
+            candidates = max(top_k, _RRF_CANDIDATES)
+            results = self._rrf_fuse(
+                self._semantic_search(query, candidates),
+                self._bm25_search(query, candidates),
+            )
         else:
             results = self._bm25_search(query, top_k)
 
@@ -345,6 +380,35 @@ class ToolIndex:
             if len(merged) >= top_k:
                 break
         return merged
+
+    @staticmethod
+    def _rrf_fuse(*candidate_lists: list[dict]) -> list[dict]:
+        """Reciprocal Rank Fusion of ranked result lists.
+
+        Rank is 1-based within each list; an entry present in multiple lists
+        accumulates 1/(_RRF_K + rank) from each. Output ``score`` is the summed
+        RRF score (rounded to 4 decimals), ordered descending.
+        """
+        fused: dict[tuple[str, str], dict] = {}
+        for ranked in candidate_lists:
+            for rank, item in enumerate(ranked, start=1):
+                key = (item["server"], item["name"])
+                entry = fused.get(key)
+                if entry is None:
+                    entry = {
+                        "server": item["server"],
+                        "name": item["name"],
+                        "description": item.get("description", ""),
+                        "tags": item.get("tags", []),
+                        "inputSchema": item.get("inputSchema", {}),
+                        "score": 0.0,
+                    }
+                    fused[key] = entry
+                entry["score"] += 1.0 / (_RRF_K + rank)
+        out = sorted(fused.values(), key=lambda d: d["score"], reverse=True)
+        for entry in out:
+            entry["score"] = round(entry["score"], 4)
+        return out
 
     def _semantic_search(self, query: str, top_k: int) -> list[dict]:
         """Dense retrieval via embedding cosine similarity."""
@@ -368,8 +432,8 @@ class ToolIndex:
         results = []
         for idx in ranked[:top_k]:
             score = float(scores[idx])
-            if score <= 0.0:
-                break  # Remaining scores are ≤ 0 (sorted descending) — stop
+            if score < _SEMANTIC_FLOOR:
+                break  # Remaining scores are ≤ this (sorted descending) — stop
             doc = docs[idx]
             results.append(
                 {
@@ -391,9 +455,13 @@ class ToolIndex:
         scores = self._bm25.get_scores(tokens)
         docs = self._documents
         ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
+        best = float(scores[ranked[0]]) if ranked else 0.0
         results = []
         for idx in ranked[:top_k]:
-            if scores[idx] <= 0:
+            score = float(scores[idx])
+            # Keep positive hits within _BM25_REL_FLOOR of the best hit;
+            # ranked is descending so the first miss ends the scan.
+            if score <= 0 or score < best * _BM25_REL_FLOOR:
                 break
             doc = docs[idx]
             results.append(
@@ -403,7 +471,7 @@ class ToolIndex:
                     "description": doc.get("description", ""),
                     "tags": doc.get("tags", []),
                     "inputSchema": doc.get("inputSchema", {}),
-                    "score": round(float(scores[idx]), 4),
+                    "score": round(score, 4),
                 }
             )
         # Small-corpus fallback: when N ≤ 5 and BM25 produces negative IDF
