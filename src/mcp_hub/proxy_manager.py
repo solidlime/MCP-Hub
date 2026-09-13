@@ -56,6 +56,10 @@ _proxy_providers.default_proxy_roots_handler = _resilient_default_roots
 RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
 
 
+class StaleConnectError(RuntimeError):
+    """接続中に世代が変わった（削除/再登録/改名）ことを示す。_create_proxy が送出する。"""
+
+
 class ProxyManager:
     """プロキシサーバーのライフサイクル管理。
 
@@ -70,6 +74,7 @@ class ProxyManager:
         self._clients: dict[str, Client] = {}  # 接続済み upstream Client（session 再利用のため保持）
         self._server_configs: dict[str, dict] = {}
         self._status: dict[str, str] = {}
+        self._generations: dict[str, int] = {}
         self._tool_counts: dict[str, int] = {}
         self._lock = asyncio.Lock()
         self._refreshing: set[str] = set()  # Protected by self._lock
@@ -120,7 +125,9 @@ class ProxyManager:
             return float(db)
         return float(os.environ.get("MCP_HUB_CONNECT_TIMEOUT", "30.0"))
 
-    async def _connect_server(self, name: str, config: dict) -> "FastMCPProxy | None":
+    async def _connect_server(
+        self, name: str, config: dict, expected_gen: int | None = None
+    ) -> "FastMCPProxy | None":
         """Create proxy + mount with retry. Call OUTSIDE asyncio.Lock.
         Returns proxy on success, None on exhaustion."""
         max_retries, base_delay = self._retry_env()
@@ -137,7 +144,9 @@ class ProxyManager:
                     await prev_client.close()
                     prev_client = None
                 try:
-                    proxy, client = await self._create_proxy(name, config)
+                    proxy, client = await self._create_proxy(
+                        name, config, expected_gen=expected_gen
+                    )
                     prev_client = client
                     self.mcp.mount(proxy, namespace=name)
                     prev_client = None  # 成功: client は保持対象から外す（finally が close しないように）
@@ -152,6 +161,9 @@ class ProxyManager:
                         await asyncio.sleep(delay)
                     else:
                         logger.error("Exhausted %d retries for %s", max_retries, name)
+                except StaleConnectError:
+                    # 世代不一致 — リトライせず即伝播（呼び出し元が破棄判断する）
+                    raise
                 except Exception:
                     # Non-retryable error — don't retry
                     logger.exception("Non-retryable error connecting %s", name)
@@ -171,8 +183,10 @@ class ProxyManager:
         registering the proxy — avoids mounting broken proxies that would
         trigger cascading rebuild_index failures or SSE reconnection loops."""
         client: Client | None = None
+        async with self._lock:
+            gen = self._generations.get(name)
         try:
-            proxy, client = await self._create_proxy(name, config)
+            proxy, client = await self._create_proxy(name, config, expected_gen=gen)
             # Verify the proxy actually works before registering.
             # A broken server (e.g. URL endpoint returning 405) fails here
             # and is left for the health monitor to recover at its own pace.
@@ -181,41 +195,69 @@ class ProxyManager:
             if tools:
                 self._tool_cache[name] = (time.monotonic(), tools)
             self._tool_counts[name] = len(tools)
+            zombie = False
+            leaked = None
             async with self._lock:
-                if name not in self._server_configs:
-                    return  # リネーム/削除済み — ゾンビ復活を防ぐ
-                self.mcp.mount(proxy, namespace=name)
-                self._proxies[name] = proxy
-                self._status[name] = "connected"
+                if name not in self._server_configs or self._generations.get(name) != gen:
+                    # リネーム/削除済み — ゾンビ復活を防ぐ。
+                    # 自分が登録した client のみ回収する（他タスクの client を盗まない）
+                    zombie = True
+                    self._tool_cache.pop(name, None)
+                    self._tool_counts.pop(name, None)
+                    if self._clients.get(name) is client:
+                        leaked = self._clients.pop(name)
+                else:
+                    self.mcp.mount(proxy, namespace=name)
+                    self._proxies[name] = proxy
+                    self._status[name] = "connected"
+            if leaked is not None:
+                await leaked.close()  # ロック外で close（デッドロック回避）
+            if zombie:
+                return
             logger.info("Server %s connected (background)", name)
             # Notify listeners so meta index can rebuild
             await self._notify_change(name, "connected", {"tool_count": len(tools)})
+        except StaleConnectError:
+            # 世代不一致 — client は _create_proxy 内で close・未登録済み。静かに破棄
+            return
         except asyncio.TimeoutError:
             logger.warning("Server %s connection timed out — health monitor will retry", name)
+            leaked = None
             if client is not None:
                 async with self._lock:
                     if self._clients.get(name) is client:
-                        self._clients.pop(name, None)
-                        await client.close()  # 自分が登録した client のみ close
-            async with self._lock:
-                self._status[name] = "error"
-            await self._notify_change(name, "spawn_failed", {"error": "Connection timed out"})
+                        leaked = self._clients.pop(name, None)
+            if leaked is not None:
+                await leaked.close()  # 自分が登録した client のみ close（ロック外）
+            # 世代が変わっていたらステータス上書きは行わない — 新しいライフサイクルが所有している
+            if (leaked is not None or client is None) and name in self._server_configs and self._generations.get(name) == gen:
+                async with self._lock:
+                    self._status[name] = "error"
+            # 世代が変わっていれば幽霊の spawn_failed 通知は出さない
+            if name in self._server_configs and self._generations.get(name) == gen:
+                await self._notify_change(name, "spawn_failed", {"error": "Connection timed out"})
         except Exception:
             logger.warning(
                 "Server %s failed initial connection — health monitor will retry",
                 name, exc_info=True,
             )
+            leaked = None
             if client is not None:
                 async with self._lock:
                     if self._clients.get(name) is client:
-                        self._clients.pop(name, None)
-                        await client.close()  # 自分が登録した client のみ close
-            async with self._lock:
-                self._status[name] = "error"
-            await self._notify_change(name, "spawn_failed", {
-                "error": "Connection failed",
-                "detail": traceback.format_exc()[:500],
-            })
+                        leaked = self._clients.pop(name, None)
+            if leaked is not None:
+                await leaked.close()  # 自分が登録した client のみ close（ロック外）
+            # 世代が変わっていたらステータス上書きは行わない — 新しいライフサイクルが所有している
+            if (leaked is not None or client is None) and name in self._server_configs and self._generations.get(name) == gen:
+                async with self._lock:
+                    self._status[name] = "error"
+            # 世代が変わっていれば幽霊の spawn_failed 通知は出さない
+            if name in self._server_configs and self._generations.get(name) == gen:
+                await self._notify_change(name, "spawn_failed", {
+                    "error": "Connection failed",
+                    "detail": traceback.format_exc()[:500],
+                })
 
     async def load_all(self) -> None:
         """DB から全サーバーをバックグラウンドで読み込んでマウント。
@@ -235,6 +277,8 @@ class ProxyManager:
             config = srv["config"]
             async with self._lock:
                 self._server_configs[name] = config
+                # 起動時の接続を最初の refresh/unregister で無効化できるよう世代を進める
+                self._bump_generation(name)
             if config.get("disabled"):
                 async with self._lock:
                     self._status[name] = "disabled"
@@ -256,6 +300,7 @@ class ProxyManager:
         await self.registry.add_server(name, config)
         async with self._lock:
             self._server_configs[name] = config
+            self._bump_generation(name)
 
         if config.get("disabled"):
             async with self._lock:
@@ -281,6 +326,7 @@ class ProxyManager:
             client = self._clients.pop(name, None)
             self._server_configs.pop(name, None)
             self._status.pop(name, None)
+            self._bump_generation(name)
             self._tool_counts.pop(name, None)
             self._tool_cache.pop(name, None)
             await self._rebuild_mounts()
@@ -302,6 +348,8 @@ class ProxyManager:
             self._refreshing.add(name)
             self._server_configs[name] = config
             self._status[name] = "disabled" if is_disabled else "connected"
+            self._bump_generation(name)  # 進行中の接続を無効化（この refresh の世代はその次）
+            gen = self._generations.get(name)
             old_proxy = self._proxies.pop(name, None)
             old_client = self._clients.pop(name, None)
             self._tool_cache.pop(name, None)
@@ -320,19 +368,33 @@ class ProxyManager:
             if not is_disabled:
                 # プロキシ生成（サブプロセス起動を含む可能性があるためロック外）
                 try:
-                    proxy, _client = await self._create_proxy(name, config)
+                    proxy, client = await self._create_proxy(name, config, expected_gen=gen)
+                    zombie = False
+                    leaked = None
                     async with self._lock:
-                        if name not in self._server_configs:
-                            return  # リネーム/削除済み — ゾンビ復活を防ぐ
-                        self._proxies[name] = proxy
-                        self.mcp.mount(proxy, namespace=name)
-                        self._status[name] = "connected"
+                        if name not in self._server_configs or self._generations.get(name) != gen:
+                            # リネーム/削除済み — ゾンビ復活を防ぐ。
+                            # 自分が登録した client のみ回収する（他タスクの client を盗まない）
+                            zombie = True
+                            if self._clients.get(name) is client:
+                                leaked = self._clients.pop(name)
+                        else:
+                            self._proxies[name] = proxy
+                            self.mcp.mount(proxy, namespace=name)
+                            self._status[name] = "connected"
+                    if leaked is not None:
+                        await leaked.close()  # ロック外で close（デッドロック回避）
+                    if zombie:
+                        return
                     logger.info("Refreshed server %s", name)
                     refreshed = True
+                except StaleConnectError:
+                    logger.debug("Refresh for %s discarded (generation changed)", name)
                 except Exception:
                     logger.exception("Failed to refresh server %s", name)
-                    async with self._lock:
-                        self._status[name] = "error"
+                    if name in self._server_configs and self._generations.get(name) == gen:
+                        async with self._lock:
+                            self._status[name] = "error"
 
             # Callbacks outside lock — they may perform IO (rebuild_index calls list_tools)
             # "updated" fires only when the proxy was actually regenerated (refreshed).
@@ -369,6 +431,8 @@ class ProxyManager:
                 raise ValueError(f"Server '{new_name}' already exists")
             proxy = self._proxies.pop(old_name, None)
             client = self._clients.pop(old_name, None)
+            self._bump_generation(old_name)
+            self._bump_generation(new_name)
             status = self._status.pop(old_name, "unknown")
             tc = self._tool_counts.pop(old_name, None)
             cache = self._tool_cache.pop(old_name, None)
@@ -376,6 +440,7 @@ class ProxyManager:
             if proxy is not None:
                 self._proxies[new_name] = proxy  # 接続維持
                 await self._rebuild_mounts()
+            stale_client = self._clients.pop(new_name, None)  # 進行中 connect の残骸なら回収
             if client is not None:
                 self._clients[new_name] = client  # 接続維持
             self._server_configs[new_name] = config
@@ -384,6 +449,11 @@ class ProxyManager:
                 self._tool_counts[new_name] = tc
             if cache is not None:
                 self._tool_cache[new_name] = cache  # キャッシュ移動で再列挙回避
+        if stale_client is not None and stale_client is not client:
+            try:
+                await stale_client.close()
+            except Exception:
+                logger.debug("Renamed-over stale client close raised", exc_info=True)
         await self._notify_change(new_name, "renamed", {"old_name": old_name})
         async with self._lock:
             self._refreshing.discard(old_name)
@@ -674,7 +744,7 @@ class ProxyManager:
                 if name in self._refreshing:
                     continue  # skip — refresh_server is handling it
                 current_config = self._server_configs.get(name)
-                old_client = self._clients.get(name)
+                gen = self._generations.get(name)
             if not current_config:
                 continue
             last_fail = self._last_recovery_fail.get(name)
@@ -685,9 +755,12 @@ class ProxyManager:
                 continue
             try:
                 new_proxy = await asyncio.wait_for(
-                    self._connect_server(name, current_config),
+                    self._connect_server(name, current_config, expected_gen=gen),
                     timeout=self._connect_timeout(),
                 )
+            except StaleConnectError:
+                logger.debug("Recovery connect for %s aborted (generation changed)", name)
+                continue  # 次のサーバーへ（ステータス・通知とも触らない）
             except asyncio.TimeoutError:
                 logger.warning(
                     "Recovery connect for %s timed out after %.1fs",
@@ -701,6 +774,13 @@ class ProxyManager:
                 if name in self._refreshing:
                     # refresh_server took over during our IO — discard
                     logger.debug("Server %s being refreshed concurrently, discarding recovery", name)
+                    # _connect_server が先行 mount した死体プロキシを providers から除去
+                    await self._rebuild_mounts()
+                    continue
+                if self._generations.get(name) != gen:
+                    logger.debug("Server %s recovery discarded (generation changed)", name)
+                    # _connect_server が先行 mount した死体プロキシを providers から除去
+                    await self._rebuild_mounts()
                     continue
                 if new_proxy is not None:
                     self._proxies[name] = new_proxy
@@ -712,8 +792,6 @@ class ProxyManager:
                     await self._notify_change(name, "spawn_failed", {"error": "Recovery failed"})
             if recovered:
                 self._last_recovery_fail.pop(name, None)
-                if old_client is not None:
-                    await old_client.close()  # 旧接続を破棄（new_proxy に置換済みなので安全）
                 self._health_failures.pop(name, None)
                 await self._notify_change(name, "recovered", None)
 
@@ -728,6 +806,7 @@ class ProxyManager:
             async with self._lock:
                 if name in self._refreshing:
                     continue  # skip — refresh_server is handling it
+                gen = self._generations.get(name)
             last_fail = self._last_recovery_fail.get(name)
             if last_fail is not None and (time.monotonic() - last_fail) < self._recovery_cooldown():
                 logger.debug("Recovery for %s skipped (cooldown)", name)
@@ -736,9 +815,12 @@ class ProxyManager:
             logger.info("Attempting recovery for %s (never connected)", name)
             try:
                 new_proxy = await asyncio.wait_for(
-                    self._connect_server(name, config),
+                    self._connect_server(name, config, expected_gen=gen),
                     timeout=self._connect_timeout(),
                 )
+            except StaleConnectError:
+                logger.debug("Recovery connect for %s aborted (generation changed)", name)
+                continue  # 次のサーバーへ（ステータス・通知とも触らない）
             except asyncio.TimeoutError:
                 logger.warning(
                     "Recovery connect for %s timed out after %.1fs",
@@ -752,6 +834,13 @@ class ProxyManager:
                 if name in self._refreshing:
                     # refresh_server took over during our IO — discard
                     logger.debug("Server %s being refreshed concurrently, discarding init recovery", name)
+                    # _connect_server が先行 mount した死体プロキシを providers から除去
+                    await self._rebuild_mounts()
+                    continue
+                if self._generations.get(name) != gen:
+                    logger.debug("Server %s recovery discarded (generation changed)", name)
+                    # _connect_server が先行 mount した死体プロキシを providers から除去
+                    await self._rebuild_mounts()
                     continue
                 if new_proxy is not None:
                     self._proxies[name] = new_proxy
@@ -809,7 +898,17 @@ class ProxyManager:
             except Exception:
                 logger.warning("Failed to close upstream client", exc_info=True)
 
-    async def _create_proxy(self, name: str, config: dict) -> tuple[FastMCPProxy, Client]:
+    def _bump_generation(self, name: str) -> None:
+        """世代を進める（呼び出し側は self._lock を保持していること）。
+
+        _generations は pop しない（bump のみ）。unregister で消すと
+        再登録時に 1 に戻り、進行中タスクの capture と衝突して無効化する。
+        """
+        self._generations[name] = self._generations.get(name, 0) + 1
+
+    async def _create_proxy(
+        self, name: str, config: dict, expected_gen: int | None = None
+    ) -> tuple[FastMCPProxy, Client]:
         """config から FastMCPProxy を生成。env変数はここで展開する。
 
         素の fastmcp Client を接続確立（__aenter__）してから FastMCPProxy に
@@ -871,8 +970,12 @@ class ProxyManager:
             # CancelledError（recovery の wait_for タイムアウト等）でも close を
             # 保証。BaseException で捕まえないと誰も close せず、stdio サーバーの
             # サブプロセスが孤児として蓄積する（Client.close → transport close
-            # で kill される）。
-            await client.close()
+            # で kill される）。close 自体の例外は握り潰して元例外を優先する
+            # （接続済みセッションの切断失敗が元の失敗原因を隠さないように）。
+            try:
+                await client.close()
+            except Exception:
+                logger.debug("Client cleanup after failed connect raised", exc_info=True)
             raise
         try:
             # 4.x: FastMCPProxy builds ProxyProvider(client_factory) internally;
@@ -888,7 +991,28 @@ class ProxyManager:
         except Exception:
             await client.close()  # FastMCPProxy 生成失敗時のリーク防止
             raise
-        self._clients[name] = client  # 登録は維持
+        displaced = None
+        stale = False
+        async with self._lock:
+            if expected_gen is not None and self._generations.get(name) != expected_gen:
+                # 世代不一致 — 接続中に削除/再登録/改名された。publish せず破棄
+                stale = True
+            else:
+                # 差し替え後の旧 client を回収（dict から消えると close_all の対象外になるため）。
+                # 「closer は必ず先に pop」の不変条件により、dict 内の client は誰にも close されていない
+                displaced = self._clients.pop(name, None)
+                self._clients[name] = client
+        if stale:
+            try:
+                await client.close()
+            except Exception:
+                logger.debug("Stale connect cleanup for %s raised", name, exc_info=True)
+            raise StaleConnectError(name)
+        if displaced is not None and displaced is not client:
+            try:
+                await displaced.close()  # 差し替えられた旧 client の回収
+            except Exception:
+                logger.debug("Displaced client close raised for %s", name, exc_info=True)
         return proxy, client
 
     def _make_client_factory(self, name: str, client: Any) -> Callable[[], Any]:

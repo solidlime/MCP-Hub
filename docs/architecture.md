@@ -278,7 +278,7 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
 
 終了
   │
-  ├─ dispatcher.shutdown() → セッションクリーンアップタスク停止
+  ├─ dispatcher.shutdown() → no-op フック（アイドルセッション失効は SDK の session_idle_timeout が管理）
   ├─ health_monitor 停止
   └─ FastMCP の lifespan 終了
 ```

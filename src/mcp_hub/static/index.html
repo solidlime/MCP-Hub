@@ -2030,7 +2030,8 @@
                     method: 'POST'
                 });
                 const data = await response.json();
-                if (!response.ok) throw new Error(data.error || '接続テストに失敗しました');
+                if (!response.ok) throw new Error(data.detail || data.error || '接続テストに失敗しました');
+                if (data.success === false) throw new Error(data.error || data.detail || '接続テストに失敗しました');
                 return data;
             },
 
@@ -2146,9 +2147,7 @@
         // ============================================================
         function escapeHtml(text) {
             if (!text) return '';
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+            return String(text).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
         }
 
         function escapeAttr(text) {
@@ -3165,8 +3164,11 @@
             }
 
             // Mode switch: clear opposite fields
-            if (editMode === 'command' && server.config.url) diffed.url = undefined;
-            if (editMode === 'url' && server.config.command) diffed.command = undefined;
+            // url/command は null でクリア。args/headers は非Optionalのため null 不可(422)。空配列/空オブジェクトでクリア
+            if (editMode === 'command' && server.config.url) diffed.url = null;
+            if (editMode === 'url' && server.config.command) diffed.command = null;
+            if (editMode === 'command' && server.config.headers && Object.keys(server.config.headers).length > 0) diffed.headers = {};
+            if (editMode === 'url' && server.config.args && server.config.args.length > 0) diffed.args = [];
 
             // Tags
             const oldTags = getServerTags(server);

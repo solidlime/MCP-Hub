@@ -93,36 +93,12 @@ class MCPDispatcher:
         self._normal_sm = normal_sm
         self._meta_sm = meta_sm
         self._cached_meta_mode: bool | None = None
-        import asyncio
-        self._cleanup_task = asyncio.create_task(self._session_cleanup_loop())
-        self._shutdown = False
 
     def invalidate_cache(self):
         self._cached_meta_mode = None
 
     async def shutdown(self):
-        """Cancel background cleanup task. Call during lifespan cleanup."""
-        self._shutdown = True
-        if hasattr(self, '_cleanup_task'):
-            self._cleanup_task.cancel()
-            try:
-                await self._cleanup_task
-            except asyncio.exceptions.CancelledError:
-                pass
-
-    async def _session_cleanup_loop(self):
-        """Cadence/shutdown hook for session hygiene.
-
-        4.x: idle expiry is owned by the SDK (session_idle_timeout= on SM
-        construction). _cleanup_stale no longer exists, so this loop only
-        sleeps until shutdown — kept as the lifecycle hook.
-        """
-        import asyncio
-        while not self._shutdown:
-            try:
-                await asyncio.sleep(300)
-            except asyncio.CancelledError:
-                break
+        """Lifespan cleanup hook. Idle session expiry is owned by the SDK."""
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":

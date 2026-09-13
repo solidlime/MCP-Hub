@@ -123,6 +123,10 @@ class TestValidateHeaders:
         with pytest.raises(ValidationError):
             validate_headers({"X-CRLF\r\nHeader": "value"})
 
+    def test_control_chars_in_value_blocked(self):
+        with pytest.raises(ValidationError):
+            validate_headers({"Authorization": "Bearer tok\r\nX-Injected: evil"})
+
     def test_null_byte_in_key_blocked(self):
         with pytest.raises(ValidationError):
             validate_headers({"X-\x00-Malicious": "value"})

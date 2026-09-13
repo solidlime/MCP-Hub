@@ -66,6 +66,8 @@ class TestEventFiring:
         events = []
         pm.on_change(lambda name, event, detail=None: events.append((name, event)))
 
+        # 実フロー（load_all/register_server）では呼び出し前に必ず設定される
+        pm._server_configs["fetch"] = {"command": "uvx", "args": []}
         with patch.object(pm, "_create_proxy", AsyncMock(side_effect=RuntimeError("no such command"))):
             asyncio.run(pm._connect_and_mount("fetch", {"command": "uvx", "args": []}))
 

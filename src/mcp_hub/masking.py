@@ -14,7 +14,7 @@ from typing import Any
 # キー名部分一致で値全体をマスク
 SENSITIVE_KEY_HINTS = (
     "api_key", "apikey", "token", "secret", "password", "passwd",
-    "auth", "credential", "key",
+    "auth", "credential",
 )
 
 # 値そのもののパターン

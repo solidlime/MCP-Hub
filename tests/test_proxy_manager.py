@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from mcp_hub.proxy_manager import ProxyManager
+from mcp_hub.proxy_manager import ProxyManager, StaleConnectError
 
 
 class _MockProxy:
@@ -185,7 +185,7 @@ class TestConnectMountRaceGuard:
 
         pm.mcp.mount = fake_mount
 
-        async def fake_create_proxy(name, config):
+        async def fake_create_proxy(name, config, expected_gen=None):
             return _MockProxy(name), AsyncMock()
 
         with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
@@ -207,7 +207,7 @@ class TestConnectMountRaceGuard:
 
         pm.mcp.mount = fake_mount
 
-        async def fake_create_proxy(name, config):
+        async def fake_create_proxy(name, config, expected_gen=None):
             # Phase 1 と Phase 2 の間にリネーム/削除された状態を再現
             pm._server_configs.pop(name, None)
             return _MockProxy("m"), AsyncMock()
@@ -352,7 +352,7 @@ class TestClientCleanup:
         pm._rebuild_mounts = AsyncMock()
         pm._notify_change = AsyncMock()
 
-        async def fake_create_proxy(name, config):
+        async def fake_create_proxy(name, config, expected_gen=None):
             pm._clients[name] = new_client  # 実装と同じく新 client を登録
             return _MockProxy("srv"), new_client
 
@@ -385,7 +385,7 @@ class TestClientCleanup:
             async def list_tools(self):
                 raise RuntimeError("boom")
 
-        async def fake_create_proxy(name, config):
+        async def fake_create_proxy(name, config, expected_gen=None):
             return _BrokenProxy(), client
 
         with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
@@ -408,7 +408,7 @@ class TestClientCleanup:
             async def list_tools(self):
                 raise RuntimeError("boom")
 
-        async def fake_create_proxy(name, config):
+        async def fake_create_proxy(name, config, expected_gen=None):
             return _BrokenProxy(), my_client
 
         with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
@@ -547,7 +547,7 @@ class TestRecoveryResilience:
     def test_recovery_connect_timeout_records_failure_and_keeps_error(self):
         pm = self._manager_with_server()
 
-        async def slow_connect(name, config):
+        async def slow_connect(name, config, expected_gen=None):
             await asyncio.sleep(5)  # connect が応答しない（ブラックホール型）
 
         pm._connect_server = slow_connect
@@ -566,7 +566,7 @@ class TestRecoveryResilience:
 
         connect_called = []
 
-        async def fake_connect(name, config):
+        async def fake_connect(name, config, expected_gen=None):
             connect_called.append(name)
             return _MockProxy(name)
 
@@ -601,3 +601,82 @@ class TestRecoveryResilience:
 
         _ts, cached = pm._tool_cache["srv"]
         assert cached == [tool]  # 最後の既知ツールが保持される
+
+
+class TestGenerationOwnership:
+    """世代管理: 差し替え時の旧 client 回収と、世代不一致の接続破棄。"""
+
+    def test_republish_closes_displaced_client(self):
+        """実 _create_proxy の publish で旧 client が close され _clients が差し替わる。"""
+        pm = _make_manager()
+        old_client = AsyncMock()
+        pm._clients = {"map": old_client}
+
+        with patch("mcp_hub.proxy_manager.FastMCPProxy", _MockProxyFactory("m")), \
+             patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
+            _proxy, client = asyncio.run(pm._create_proxy("map", {
+                "url": "https://example.com/mcp",
+            }))
+
+        old_client.close.assert_awaited_once()  # 差し替えられた旧 client は回収される
+        assert pm._clients["map"] is client
+        assert client is client_cls.return_value  # 新 client は close されない
+        client.close.assert_not_awaited()
+
+    def test_real_create_proxy_discards_stale_generation(self):
+        """expected_gen が現世代と不一致なら publish せず、client を close して raise。"""
+        pm = _make_manager()
+        pm._generations = {"map": 2}
+
+        with patch("mcp_hub.proxy_manager.FastMCPProxy", _MockProxyFactory("m")), \
+             patch("mcp_hub.proxy_manager.Client", autospec=True) as client_cls:
+            with pytest.raises(StaleConnectError):
+                asyncio.run(pm._create_proxy("map", {
+                    "url": "https://example.com/mcp",
+                }, expected_gen=1))
+
+        client_cls.return_value.close.assert_awaited_once()
+        assert "map" not in pm._clients  # publish しない
+
+    def test_stale_generation_discards_connect(self):
+        """_connect_and_mount は StaleConnectError で status/通知とも触らない。"""
+        pm = _make_manager()
+        cfg = {"url": "http://x"}
+        pm._server_configs = {"a": cfg}
+        pm._generations = {"a": 5}
+        pm._notify_change = AsyncMock()
+
+        async def fake_create_proxy(name, config, expected_gen=None):
+            raise StaleConnectError(name)
+
+        with patch.object(pm, "_create_proxy", side_effect=fake_create_proxy):
+            asyncio.run(pm._connect_and_mount("a", cfg))
+
+        assert pm._status.get("a") != "error"
+        assert "a" not in pm._proxies
+        pm._notify_change.assert_not_awaited()  # connected / spawn_failed とも出さない
+
+    def test_recovery_does_not_close_new_client(self):
+        """recovery 成功時、旧/新 client とも health monitor 側では close しない。"""
+        pm = _make_manager()
+        old_client = AsyncMock()
+        new_client = AsyncMock()
+        pm._proxies = {"srv": _MockProxy("srv")}
+        pm._server_configs = {"srv": {"url": "http://x"}}
+        pm._status = {"srv": "error"}
+        pm._clients = {"srv": old_client}
+        pm._notify_change = AsyncMock()
+
+        async def fake_connect(name, config, expected_gen=None):
+            # 実 _create_proxy の publish 相当（旧 client 差し替え）。
+            # close の所有権は _create_proxy 側にあり、recovery は触らない。
+            pm._clients[name] = new_client
+            return _MockProxy(name)
+
+        pm._connect_server = fake_connect
+        asyncio.run(pm._health_check())
+
+        assert pm._status["srv"] == "connected"
+        old_client.close.assert_not_awaited()
+        new_client.close.assert_not_awaited()
+        assert pm._clients["srv"] is new_client

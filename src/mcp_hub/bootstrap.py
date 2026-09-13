@@ -1,6 +1,7 @@
 """Bootstrap persistent optional dependencies on first container startup."""
 import logging
 import os
+import platform
 import subprocess
 import sys
 import tarfile
@@ -14,9 +15,16 @@ EXTRAS_DIR = os.path.join(PERSIST_DIR, "pip-extras")
 BIN_DIR = os.path.join(PERSIST_DIR, "bin")
 
 NODE_VERSION = "22.23.1"
-NODE_URL = f"https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-linux-x64.tar.xz"
 UV_VERSION = "0.11.29"
-UV_URL = f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz"
+
+# ネイティブ配布物は x86_64/aarch64 のみ提供。未対応アーキは x64 既定にフォールバック
+_MACHINE = platform.machine().lower()
+_NODE_ARCH = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64"}
+_UV_ARCH = {"x86_64": "x86_64", "amd64": "x86_64", "aarch64": "aarch64", "arm64": "aarch64"}
+if _MACHINE not in _NODE_ARCH:
+    logger.warning("[bootstrap] Unknown arch %r — defaulting to x64", _MACHINE)
+NODE_URL = f"https://nodejs.org/dist/v{NODE_VERSION}/node-v{NODE_VERSION}-linux-{_NODE_ARCH.get(_MACHINE, 'x64')}.tar.xz"
+UV_URL = f"https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/uv-{_UV_ARCH.get(_MACHINE, 'x86_64')}-unknown-linux-gnu.tar.gz"
 
 
 def setup_path():
@@ -129,15 +137,16 @@ def _download_and_extract(url, dest, strip_components=0, files=None):
 def _extract(tf, dest, strip_components, files):
     """Extract members from an open tarfile, optionally filtering and stripping."""
     if files is None:
-        members = tf.getmembers()
-        for m in members:
+        filtered = []
+        for m in tf.getmembers():
             if strip_components > 0:
                 parts = m.name.split("/", strip_components)
                 if len(parts) > strip_components:
                     m.name = parts[strip_components]
                 else:
                     continue
-        tf.extractall(dest, members=members, filter="data")
+            filtered.append(m)
+        tf.extractall(dest, members=filtered, filter="data")
     else:
         members = []
         for m in tf.getmembers():

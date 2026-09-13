@@ -28,6 +28,12 @@ class TestMaskArgs:
         out = mask_args({"url": "https://example.com", "method": "GET"})
         assert "https://example.com" in out
 
+    def test_innocent_key_substring_not_masked(self):
+        # bare "key" hint removed: keys merely containing "key" stay intact
+        out = mask_args({"monkey_port": 8080, "keyboard_layout": "us"})
+        assert '"monkey_port": 8080' in out
+        assert '"keyboard_layout": "us"' in out
+
     def test_truncates_to_arg_max_len(self):
         out = mask_args({"big": "x" * 5000})
         assert len(out) <= _ARG_MAX_LEN
