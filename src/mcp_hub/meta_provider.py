@@ -22,11 +22,21 @@ from .state import tags_match as _tags_match
 
 try:
     from fastembed import TextEmbedding
-    import numpy as np
 
     _HAS_FASTEMBED = True
 except ImportError:
     _HAS_FASTEMBED = False
+
+# numpy は fastembed と別に束縛する（CI は fastembed 無しでも rank_bm25 経由で
+# numpy が入り、テストが _FixedEmbedder を注入するため）。fastembed の try 内で
+# 一緒に import すると fastembed 欠落時に np も未定義になり NameError で BM25 に
+# 落ちて CI だけ失敗する（実際起きた）。
+try:
+    import numpy as np
+
+    _HAS_NUMPY = True
+except ImportError:
+    _HAS_NUMPY = False
 
 logger = logging.getLogger(__name__)
 
@@ -412,6 +422,9 @@ class ToolIndex:
 
     def _semantic_search(self, query: str, top_k: int) -> list[dict]:
         """Dense retrieval via embedding cosine similarity."""
+        if not _HAS_NUMPY:
+            # numpy 無しでは意味検索不能 — search() が BM25 にフォールバック
+            return []
         try:
             query_vec = np.array(  # type: ignore[name-defined]
                 list(self._embedder.embed([query])),  # type: ignore[union-attr]

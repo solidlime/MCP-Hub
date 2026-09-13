@@ -5,6 +5,7 @@ ToolIndex unit tests — embedding-based search with BM25 fallback.
 import numpy as np
 import pytest
 from mcp_hub.config import DEFAULT_EMBEDDING_MODEL
+import mcp_hub.meta_provider as _mp
 from mcp_hub.meta_provider import ToolIndex, resolve_embedding_model, _HAS_FASTEMBED
 
 
@@ -272,6 +273,20 @@ class TestSearchPrecision:
         idx._embedder = _FixedEmbedder([1.0, 0.0])  # cos ≈ 0.05 for every doc
         idx._use_embeddings = True
         assert idx.search("zzz_semanticonly", top_k=10) == []
+
+    async def test_semantic_search_returns_empty_without_numpy(self, monkeypatch):
+        """numpy 未束績環境（fastembed 無しの CI 等）でも NameError で落ちず
+        BM25 フォールバックが効く。CI だけ失敗した回帰の固定。"""
+        idx = ToolIndex()
+        await idx.rebuild([
+            {"name": "tool_a", "description": "gadget", "server": "s", "inputSchema": {}, "tags": []},
+        ])
+        idx._embeddings = np.array([[1.0, 0.0]], dtype=np.float32)
+        idx._embedder = _FixedEmbedder([1.0, 0.0])
+        idx._use_embeddings = True
+        monkeypatch.setattr(_mp, "_HAS_NUMPY", False)
+        results = idx.search("gadget", top_k=5)
+        assert [r["name"] for r in results] == ["tool_a"]  # BM25 のみで成立
 
     async def test_bm25_relative_floor_trims_tail(self):
         """Only BM25 hits within _BM25_REL_FLOOR of the best survive: three
