@@ -132,6 +132,28 @@ class TestPatchUpdate:
         assert len(calls) == 1  # tags 以外の更新は refresh_server を呼ぶ
         assert calls[0][0] == "sleepy2"
 
+    def test_patch_args_without_command_validates(self, client, monkeypatch):
+        """command 無し（URL）サーバーへの args PATCH も必ず validate_args を通る。"""
+        client.post("/admin/api/servers", json={
+            "name": "url-args", "config": {"url": "http://localhost:9999"}
+        })
+        pm = app_state.proxy_manager
+
+        async def fake_refresh(name, config):
+            pass
+
+        monkeypatch.setattr(pm, "refresh_server", fake_refresh)
+        # 不正 args → 422（command が無くても検証される）
+        r = client.patch("/admin/api/servers/url-args", json={"args": ["a;b"]})
+        assert r.status_code == 422
+        assert "forbidden character" in r.json()["detail"]
+        # version ピン（< / >）は正当入力 → 200
+        r2 = client.patch(
+            "/admin/api/servers/url-args", json={"args": ["--with", "mcp<2.0.0"]}
+        )
+        assert r2.status_code == 200
+        assert r2.json()["config"]["args"] == ["--with", "mcp<2.0.0"]
+
 
 
 class TestPatchRename:

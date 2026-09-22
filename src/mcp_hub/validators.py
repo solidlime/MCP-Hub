@@ -18,9 +18,13 @@ _DOLLAR_SUBSHELL = re.compile(r"\$\(.*\)")
 # Forbidden characters in command: shell metacharacters
 _FORBIDDEN_COMMAND_CHARS = frozenset(";&|`<>")
 
-# Forbidden characters in args: shell metacharacters, minus '&'
-# ('&' allowed — URL query strings (?a=1&b=2) are legitimate argv; no shell)
-_FORBIDDEN_ARGS_CHARS = frozenset(";|`<>")
+# Forbidden characters in args: shell metacharacters.
+# args is passed to stdio exec without a shell, so '<' / '>' are not
+# redirections and '&' is not a job-control operator: version range pins
+# ('pkg<2.0.0', 'pkg>=1,<2') and URL query strings ('?a=1&b=2') are
+# legitimate argv. '$()' subshell, ';', '|', '`' stay blocked as defense
+# in depth — no shell should ever see these args.
+_FORBIDDEN_ARGS_CHARS = frozenset(";|`")
 
 # Env var names that look like credentials (matched against upper-cased keys)
 _CREDENTIAL_ENV_RE = re.compile(r"(TOKEN|API[_-]?KEY|SECRET|PASSWORD|AUTH)")
@@ -62,7 +66,10 @@ def validate_command(command: str) -> str:
 
 
 def validate_args(args: list[str]) -> list[str]:
-    """Validate argument list. Env var templates are allowed."""
+    """Validate argument list. Env var templates are allowed.
+
+    Control characters (CR/LF/NUL and other C0) are rejected.
+    """
     if not isinstance(args, list):
         raise ValidationError("Args must be a list")
     if len(args) > MAX_ARGS_COUNT:
@@ -72,6 +79,8 @@ def validate_args(args: list[str]) -> list[str]:
             raise ValidationError(f"Arg {i} must be a string")
         if len(arg) > MAX_ARG_LENGTH:
             raise ValidationError(f"Arg {i} too long (max {MAX_ARG_LENGTH} chars)")
+        if re.search(r"[\r\n\x00-\x1f]", arg):
+            raise ValidationError(f"Arg {i} contains control characters")
         if _DOLLAR_SUBSHELL.search(arg):
             raise ValidationError(f"Arg {i} contains subshell execution: $()")
         for ch in arg:

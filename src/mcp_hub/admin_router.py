@@ -427,8 +427,12 @@ async def patch_server(name: str, body: PatchServerRequest):
     if "command" in merged_config and merged_config["command"]:
         try:
             merged_config["command"] = validate_command(merged_config["command"])
-            if "args" in merged_config:
-                merged_config["args"] = validate_args(merged_config["args"])
+        except ValidationError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+    # args は command の有無に関わらず必ず検証する（URL サーバーへの args PATCH も対象）
+    if "args" in merged_config:
+        try:
+            merged_config["args"] = validate_args(merged_config["args"])
         except ValidationError as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
     # env は URL サーバーでも検証する (BLOCKED 拒否。bearer 導出用に URL 側も env を持つため)
