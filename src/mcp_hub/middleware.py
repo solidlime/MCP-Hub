@@ -10,9 +10,12 @@ from __future__ import annotations
 import json
 import time
 import traceback
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.tools.base import Tool, ToolResult
+from mcp.types import TextContent
 
 from .masking import _TRACEBACK_MAX_LEN, mask_args, mask_text
 from .state import LogEntry, app_state
@@ -74,6 +77,28 @@ class ToolLogMiddleware(Middleware):
     def __init__(self, proxy_manager) -> None:
         super().__init__()
         self._pm = proxy_manager
+
+    async def on_list_tools(
+        self,
+        context: MiddlewareContext[mt.ListToolsRequest],
+        call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
+    ) -> Sequence[Tool]:
+        """wire 直前: wrap-result マーカー付き outputSchema のみ落とす。
+
+        FastMCP は `-> str` 等の非オブジェクト返しを wrap-result で包み、
+        content と structuredContent.result に同一内容を二重で載せる。
+        その wrap ツール（x-fastmcp-wrap-result）だけ outputSchema を外して
+        on_call_tool の structured_content 除去と対を取る。マーカー無しの
+        schema（Proxy 経由の上流 schema 等）は保持し、
+        mcp/client/session.py:validate_tool_result の RuntimeError を防ぐ。
+        """
+        tools = await call_next(context)
+        out: list[Tool] = []
+        for t in tools:
+            if isinstance(t.output_schema, dict) and t.output_schema.get("x-fastmcp-wrap-result"):
+                t = t.model_copy(update={"output_schema": None})
+            out.append(t)
+        return out
 
     async def on_call_tool(
         self,
@@ -142,6 +167,28 @@ class ToolLogMiddleware(Middleware):
             args=mask_args(arguments),
             error=mask_text(error_text) if error_text else None,
         ))
+
+        # wire 直前: 完全二重化した structured_content のみ除く。
+        # wrap-result ツールは FastMCP が content と structuredContent.result
+        # に同一内容を載せるため応答が2倍になる。判定は
+        # 「単一 TextContent と structured_content が完全一致」の形状条件に
+        # 加え、fastmcp/tools/base.py:430 が wrap 時に必ず付与する真正印
+        # meta={"fastmcp": {"wrap_result": True}} を AND で要求する
+        # （on_list_tools の x-fastmcp-wrap-result 判定と同じ判定源）。
+        # 形状だけの上流 schema（マーカー無し）は素通しし、下流 SDK
+        # クライアントの outputSchema 検証 RuntimeError を防ぐ。
+        # content は _extract_json_error の JSON 判定入力なので一切触らない。
+        if (
+            isinstance(result, ToolResult)
+            and isinstance(result.meta, dict)
+            and isinstance(result.meta.get("fastmcp"), dict)
+            and result.meta["fastmcp"].get("wrap_result") is True
+            and len(result.content) == 1
+            and isinstance(result.content[0], TextContent)
+            and result.structured_content == {"result": result.content[0].text}
+        ):
+            result.structured_content = None
+            result._raw_mcp_result = None  # 原生 CallToolResult 直通の復元を無効化
         return result
 
 
