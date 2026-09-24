@@ -70,11 +70,12 @@ ENV APP_HOME=/opt/mcp-hub \
 WORKDIR ${APP_HOME}
 
 # Runtime deps: wget for gosu download, ca-certificates for HTTPS
+# git: pip の git+https:// URL からのパッケージインストールに必要
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-    ca-certificates wget \
+    ca-certificates wget git \
     libglib2.0-0 libnss3 libnspr4 \
     libatk1.0-0 libatk-bridge2.0-0 \
     libcups2 libdrm2 libdbus-1-3 libxkbcommon0 \
