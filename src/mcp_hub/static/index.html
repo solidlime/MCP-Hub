@@ -1524,6 +1524,61 @@
                 transition-duration: 0.01ms !important;
             }
         }
+
+        /* ============================================================
+           CATALOG MODAL
+           ============================================================ */
+        .catalog-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .catalog-card {
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            padding: 14px;
+            background: var(--bg-surface);
+        }
+        .catalog-card:hover {
+            background: var(--bg-hover);
+        }
+        .catalog-card-name {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 6px;
+        }
+        .catalog-card-desc {
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            line-height: 1.6;
+            margin-bottom: 8px;
+        }
+        .catalog-card-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .catalog-card-docs {
+            font-size: 0.75rem;
+            color: var(--accent-primary);
+            text-decoration: none;
+            margin-left: 4px;
+        }
+        .catalog-card-docs:hover {
+            text-decoration: underline;
+        }
+        .catalog-card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 10px;
+        }
+        .catalog-error {
+            font-size: 0.82rem;
+            color: var(--accent-red);
+        }
     </style>
 </head>
 <body>
@@ -1549,6 +1604,10 @@
                 <button class="btn btn-primary" onclick="openAddServerModal()" aria-label="MCP サーバーを追加">
                     <span aria-hidden="true">＋</span>
                     <span>サーバー追加</span>
+                </button>
+                <button class="btn btn-secondary" onclick="openCatalogModal()" aria-label="カタログから MCP サーバーを追加">
+                    <span aria-hidden="true">📋</span>
+                    <span>カタログから追加</span>
                 </button>
             </div>
         </header>
@@ -1606,6 +1665,9 @@
             </div>
             <button class="btn btn-primary" onclick="openAddServerModal()" aria-label="最初の MCP サーバーを追加">
                 最初のサーバーを追加
+            </button>
+            <button class="btn btn-secondary" onclick="openCatalogModal()" aria-label="カタログから最初の MCP サーバーを追加">
+                カタログから追加
             </button>
         </div>
         </section>
@@ -1739,6 +1801,20 @@
                 <button class="btn btn-primary" id="editSubmitBtn" onclick="submitEdit()">
                     保存
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Catalog Modal -->
+    <div id="catalogModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="catalogModalTitle">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title" id="catalogModalTitle">カタログから追加</h2>
+                <button class="modal-close" onclick="closeCatalogModal()" aria-label="閉じる">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="catalogError" class="catalog-error" style="display: none;" role="alert"></div>
+                <div id="catalogList" class="catalog-list" role="list" aria-label="カタログサーバー一覧"></div>
             </div>
         </div>
     </div>
@@ -2803,6 +2879,8 @@
             if (tagChip) { toggleTagFilter(tagChip.dataset.tag); return; }
             const editRm = e.target.closest('[data-action="remove-edit-tag"]');
             if (editRm) { removeEditTag(editRm.dataset.tag); return; }
+            const catalogAdd = e.target.closest('[data-action="add-catalog"]');
+            if (catalogAdd) { addFromCatalog(catalogAdd.dataset.catalogEntry); return; }
             const el = e.target.closest('#serversList [data-action]');
             if (!el) return;
             const action = el.dataset.action;
@@ -3301,6 +3379,88 @@
         // ============================================================
         function openAddServerModal() {
             openEditModal(null); // 追加モードで統一モーダルを開く
+        }
+
+        // ============================================================
+        // SERVER CATALOG
+        // ============================================================
+        async function openCatalogModal() {
+            document.getElementById('catalogError').style.display = 'none';
+            document.getElementById('catalogList').textContent = '';
+            document.getElementById('catalogModal').classList.add('active');
+
+            let catalog;
+            try {
+                const res = await fetch('/admin/static/catalog.json');
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                catalog = await res.json();
+            } catch (e) {
+                console.warn('カタログの取得に失敗しました:', e);
+                const errEl = document.getElementById('catalogError');
+                errEl.textContent = 'カタログの取得に失敗しました。しばらくしてからもう一度お試しください。';
+                errEl.style.display = 'block';
+                return;
+            }
+
+            const list = document.getElementById('catalogList');
+            const servers = Array.isArray(catalog.servers) ? catalog.servers : [];
+            list.innerHTML = servers.map(entry => {
+                const name = escapeAttr(entry.name || '');
+                const safeHref = /^https?:\/\//i.test(entry.docs_url || '') ? escapeAttr(entry.docs_url) : '';
+                return `<div class="catalog-card" role="listitem">
+                    <div class="catalog-card-name">${escapeHtml(entry.name)}</div>
+                    <div class="catalog-card-desc">${escapeHtml(entry.description)}</div>
+                    <div class="catalog-card-meta">
+                        ${(entry.tags || []).map(t => `<span class="tag-chip">${escapeHtml(t)}</span>`).join('')}
+                        ${safeHref ? `<a class="catalog-card-docs" href="${safeHref}" target="_blank" rel="noopener noreferrer" aria-label="${name} のドキュメントを開く">ドキュメント ↗</a>` : ''}
+                    </div>
+                    <div class="catalog-card-footer">
+                        <span></span>
+                        <button class="btn btn-sm btn-primary" data-action="add-catalog" data-catalog-entry="${name}" aria-label="${name} をカタログから追加">
+                            追加
+                        </button>
+                    </div>
+                </div>`;
+            }).join('');
+        }
+
+        function closeCatalogModal() {
+            document.getElementById('catalogModal').classList.remove('active');
+        }
+
+        async function addFromCatalog(entryName) {
+            let catalog;
+            try {
+                const res = await fetch('/admin/static/catalog.json');
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+                catalog = await res.json();
+            } catch (e) {
+                console.warn('カタログの取得に失敗しました:', e);
+                showToast('カタログの取得に失敗しました', 'error');
+                closeCatalogModal();
+                openEditModal(null);
+                return;
+            }
+            const entry = (catalog.servers || []).find(s => s.name === entryName);
+            if (!entry) {
+                showToast('カタログの取得に失敗しました', 'error');
+                closeCatalogModal();
+                openEditModal(null);
+                return;
+            }
+
+            closeCatalogModal();
+            openEditModal(null); // フォームがリセットされるため、この後にプリセットを投入
+
+            document.getElementById('editName').value = entry.name;
+            document.getElementById('editCommand').value = entry.command || '';
+            document.getElementById('editArgs').value = (entry.args || []).join('\n');
+            editTags = [...(entry.tags || [])];
+            renderEditTags();
         }
 
         // ============================================================

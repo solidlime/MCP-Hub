@@ -1,0 +1,12 @@
+{
+  "servers": [
+    {
+      "name": "j-quants-doc-mcp",
+      "description": "J-Quants API公式ドキュメントMCPサーバー（JPX）。エンドポイント検索・サンプルコード生成・FAQツールを提供。PyPI未登録のためGitHubから直接起動する。初回起動はgit cloneのため数十秒かかることがあります。",
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/J-Quants/j-quants-doc-mcp.git", "j-quants-doc-mcp"],
+      "tags": ["finance", "jpx", "docs"],
+      "docs_url": "https://jpx-jquants.com/ja/spec/mcp-server"
+    }
+  ]
+}

@@ -216,6 +216,20 @@ class TestPatchRename:
         assert body["config"]["tags"] == ["web"]
         assert "name" not in body["config"]
 
+class TestCatalog:
+    """GET /admin/static/catalog.json — カタログ配信の契約。"""
+
+    def test_catalog_served_with_required_keys(self, client):
+        r = client.get("/admin/static/catalog.json")
+        assert r.status_code == 200
+        servers = r.json()["servers"]
+        assert isinstance(servers, list)
+        assert servers  # カタログは空でない
+        for entry in servers:
+            for key in ("name", "command", "args", "tags", "docs_url"):
+                assert key in entry, f"{entry.get('name')}: missing {key}"
+
+
 class TestMetrics:
     def test_returns_metrics(self, client):
         r = client.get("/admin/api/metrics")
