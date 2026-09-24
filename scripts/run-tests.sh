@@ -19,14 +19,32 @@ cd "$(dirname "$0")/.."
 
 MEMLIMIT="${TEST_MEMLIMIT:-3G}"
 TIMEOUT="${TEST_TIMEOUT:-300}"
+
+# プロジェクト venv を優先（無ければ PATH の python3）
+if [ -x ".venv/bin/python" ]; then
+    PY="$(pwd)/.venv/bin/python"
+else
+    PY="python3"
+fi
 FAILED=0
 RAN=0
+
+# systemd-run が無い環境（コンテナ等）はフォールバックで直接実行する
+# （別プロセス化は維持されるためメモリ蓄積の主因は回避できる）
+if command -v systemd-run >/dev/null 2>&1; then
+    run_isolated() {
+        systemd-run --user --scope -p MemoryMax="$MEMLIMIT" -- "$@"
+    }
+else
+    run_isolated() {
+        "$@"
+    }
+fi
 
 # 単一ファイル指定があればそれだけ実行
 if [ -n "${TEST_FILE:-}" ]; then
     echo "=== $TEST_FILE ==="
-    systemd-run --user --scope -p MemoryMax="$MEMLIMIT" -- \
-        timeout "$TIMEOUT" python3 -m pytest "$TEST_FILE" -q -p no:cacheprovider
+    run_isolated timeout "$TIMEOUT" "$PY" -m pytest "$TEST_FILE" -q -p no:cacheprovider
     exit $?
 fi
 
@@ -34,8 +52,7 @@ for f in tests/test_*.py; do
     [ -f "$f" ] || continue
     echo "=== $f ==="
     RAN=$((RAN + 1))
-    if systemd-run --user --scope -p MemoryMax="$MEMLIMIT" -- \
-        timeout "$TIMEOUT" python3 -m pytest "$f" -q -p no:cacheprovider; then
+    if run_isolated timeout "$TIMEOUT" "$PY" -m pytest "$f" -q -p no:cacheprovider; then
         echo "PASS: $f"
     else
         echo "FAIL: $f"
