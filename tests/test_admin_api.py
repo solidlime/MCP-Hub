@@ -4,6 +4,7 @@ Tests CRUD endpoints, PATCH update, enable/disable, metrics, connection info.
 """
 import pytest
 from fastapi.testclient import TestClient
+
 from mcp_hub import admin_router
 from mcp_hub.main import create_app
 from mcp_hub.state import app_state
@@ -710,7 +711,7 @@ class TestInstall:
                 return 0
 
             async def communicate(self):
-                raise _asyncio.TimeoutError()
+                raise TimeoutError()
 
         async def fake_exec(*argv, **kwargs):
             return FakeProc()
@@ -871,6 +872,245 @@ class TestInstall:
             )
             assert r.status_code == 200, spec
             assert spec in calls["argv"], spec
+
+
+    # --- 自動ピン（git+URL 事前スキャン） ---
+
+    def test_auto_pin_on_fastmcp_import(self, client, monkeypatch, tmp_path):
+        """uv-tool + git+URL + fastmcp import 検出 → mcp<2 自動追加。"""
+        import asyncio as _asyncio
+
+        calls: dict = {}
+        scanned: list[str] = []
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            return FakeProc()
+
+        async def fake_scan(url):
+            scanned.append(url)
+            return True
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+        monkeypatch.setattr(
+            admin_router, "_git_source_has_fastmcp_import", fake_scan
+        )
+
+        spec = "git+https://github.com/J-Quants/j-quants-doc-mcp.git@v1.0#egg=x"
+        r = client.post(
+            "/admin/api/tools/install",
+            json={"manager": "uv-tool", "packages": [spec]},
+        )
+        assert r.status_code == 200
+        assert calls["argv"] == [
+            "uv", "tool", "install",
+            "--with", "mcp<2",
+            spec,
+        ]
+        assert r.json()["auto_constraints"] == ["mcp<2"]
+        assert "mcp.server.fastmcp import detected" in r.json()["auto_constraints_reason"]
+        # ref / fragment は除去した clone URL がスキャンに渡る
+        assert scanned == ["https://github.com/J-Quants/j-quants-doc-mcp.git"]
+
+    def test_auto_pin_pip_manager_appends_at_end(self, client, monkeypatch, tmp_path):
+        """pip + git+URL 検出 → argv 末尾に mcp<2 連結。"""
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            return FakeProc()
+
+        async def fake_scan(url):
+            return True
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+        monkeypatch.setattr(
+            admin_router, "_git_source_has_fastmcp_import", fake_scan
+        )
+
+        spec = "git+https://github.com/user/repo.git"
+        r = client.post(
+            "/admin/api/tools/install",
+            json={"manager": "pip", "packages": [spec]},
+        )
+        assert r.status_code == 200
+        assert calls["argv"] == [
+            "pip", "install", "--target", str(tmp_path / "pip-extras"),
+            spec, "mcp<2",
+        ]
+
+    def test_no_auto_pin_without_import(self, client, monkeypatch, tmp_path):
+        """検出なし → ピンなし・auto_constraints フィールドなし。"""
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            return FakeProc()
+
+        async def fake_scan(url):
+            return False
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+        monkeypatch.setattr(
+            admin_router, "_git_source_has_fastmcp_import", fake_scan
+        )
+
+        r = client.post(
+            "/admin/api/tools/install",
+            json={"manager": "uv-tool", "packages": ["git+https://github.com/u/r.git"]},
+        )
+        assert r.status_code == 200
+        assert calls["argv"] == ["uv", "tool", "install", "git+https://github.com/u/r.git"]
+        assert "auto_constraints" not in r.json()
+
+    def test_clone_failure_falls_through(self, client, monkeypatch, tmp_path):
+        """判定不能（clone 失敗等） → 自動ピンなしで通常インストール。"""
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            return FakeProc()
+
+        async def fake_scan(url):
+            return None
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+        monkeypatch.setattr(
+            admin_router, "_git_source_has_fastmcp_import", fake_scan
+        )
+
+        r = client.post(
+            "/admin/api/tools/install",
+            json={"manager": "uv-tool", "packages": ["git+https://github.com/u/r.git"]},
+        )
+        assert r.status_code == 200
+        assert calls["argv"] == ["uv", "tool", "install", "git+https://github.com/u/r.git"]
+
+    def test_explicit_constraints_not_overridden(self, client, monkeypatch, tmp_path):
+        """明示 constraints 指定時はスキャンせず上書きしない。"""
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            return FakeProc()
+
+        async def fake_scan(url):
+            raise AssertionError("scan must not run when constraints are explicit")
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+        monkeypatch.setattr(
+            admin_router, "_git_source_has_fastmcp_import", fake_scan
+        )
+
+        spec = "git+https://github.com/u/r.git"
+        r = client.post(
+            "/admin/api/tools/install",
+            json={
+                "manager": "uv-tool",
+                "packages": [spec],
+                "constraints": ["mcp>=1,<2"],
+            },
+        )
+        assert r.status_code == 200
+        assert calls["argv"] == [
+            "uv", "tool", "install", "--with", "mcp>=1,<2", spec,
+        ]
+
+    def test_git_clone_url_parsing(self):
+        """clone 用 URL 抽出: ref/fragment 除去・userinfo の @ は温存・非 git+ は None。"""
+        f = admin_router._git_clone_url
+        assert f("git+https://github.com/u/r.git") == "https://github.com/u/r.git"
+        assert (
+            f("git+https://github.com/u/r.git@v1.0#egg=m")
+            == "https://github.com/u/r.git"
+        )
+        assert (
+            f("git+https://user:pass@github.com/u/r.git")
+            == "https://user:pass@github.com/u/r.git"
+        )
+        assert f("https://github.com/u/r.git") is None
+        assert f("yt-dlp") is None
+
+    def test_git_source_scan_real_repo(self, tmp_path):
+        """統合: 実 git clone（file://）で import 検出 True/False/None。"""
+        import asyncio
+        import subprocess as sp
+
+        def make_repo(files: dict) -> str:
+            repo = tmp_path / f"repo{len(files)}"
+            repo.mkdir()
+            for rel, content in files.items():
+                p = repo / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(content)
+            sp.run(["git", "init", "-q", str(repo)], check=True)
+            sp.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+            sp.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+            sp.run(["git", "-C", str(repo), "add", "-A"], check=True)
+            sp.run(["git", "-C", str(repo), "commit", "-qm", "init"], check=True)
+            return f"file://{repo}"
+
+        url_with = make_repo({
+            "src/pkg/__init__.py": "",
+            "src/pkg/server.py": "from mcp.server.fastmcp import FastMCP\n",
+        })
+        url_without = make_repo({"src/pkg/server.py": "import json\n"})
+
+        async def run():
+            found = await admin_router._git_source_has_fastmcp_import(url_with)
+            clean = await admin_router._git_source_has_fastmcp_import(url_without)
+            broken = await admin_router._git_source_has_fastmcp_import(
+                tmp_path / "nonexistent"
+            )
+            return found, clean, broken
+
+        found, clean, broken = asyncio.run(run())
+        assert found is True
+        assert clean is False
+        assert broken is None
 
 
 class TestUninstall:

@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import time
 from typing import Any
 from urllib.parse import urljoin
@@ -19,13 +20,13 @@ from .config import DEFAULT_EMBEDDING_MODEL
 from .state import app_state
 from .validators import (
     ValidationError,
-    validate_command,
-    validate_url,
     validate_args,
+    validate_command,
     validate_env,
     validate_headers,
     validate_server_config,
     validate_server_name,
+    validate_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,19 @@ _CONSTRAINT_RE = re.compile(
 _EXTRAS_DIR = "/home/mcp-hub/pip-extras"
 _INSTALL_TIMEOUT = 300.0
 _install_sem = asyncio.Semaphore(1)
+
+# --- 事前ソーススキャン（git+URL → mcp<2 自動ピン） ---
+# mcp 2.x は mcp.server.fastmcp を削除したため、1.x API
+# (from mcp.server.fastmcp import FastMCP) で書かれたサーバーは
+# 解決で mcp>=2 を拾うと起動即死する。git+URL ソースを shallow
+# clone して import を検出したら、明示指定がなければ mcp<2 を自動適用する。
+_FASTMCP_IMPORT_RE = re.compile(
+    r"^\s*(?:from\s+mcp\.server\.fastmcp\s+import|import\s+mcp\.server\.fastmcp)\b",
+    re.MULTILINE,
+)
+_SCAN_CLONE_TIMEOUT = 60.0
+_SCAN_MAX_FILES = 2000
+_SCAN_MAX_BYTES = 2_000_000
 
 
 # --- Schemas ---
@@ -128,7 +142,7 @@ def _validate_timeout(value: Any, name: str) -> float | None:
         raise HTTPException(
             status_code=422,
             detail=f"{name} は 0 より大きく 300 以下の数値、または null である必要があります",
-        )
+        ) from None
     if not (0 < f <= 300):
         raise HTTPException(
             status_code=422,
@@ -238,7 +252,7 @@ def _validate_embedding_model(value: Any) -> str:
             status_code=422,
             detail="embedding_model に空白・制御文字は使えません",
         )
-    if "://" in v or "\\" in v or ".." in v or v.startswith("/") or v.startswith("."):
+    if "://" in v or "\\" in v or ".." in v or v.startswith(("/", ".")):
         raise HTTPException(
             status_code=422,
             detail="embedding_model にパス・URL は使えません（'org/model' 形式で指定）",
@@ -559,8 +573,8 @@ async def list_server_resources(name: str):
             {"uri": str(r.uri), "name": r.name, "description": r.description or ""}
             for r in resources
         ]}
-    except Exception:
-        raise HTTPException(502, detail=f"Failed to list resources from {name!r}")
+    except Exception as e:
+        raise HTTPException(502, detail=f"Failed to list resources from {name!r}") from e
 
 
 @router.get("/servers/{name}/prompts")
@@ -576,8 +590,8 @@ async def list_server_prompts(name: str):
             {"name": p.name, "description": p.description or ""}
             for p in prompts
         ]}
-    except Exception:
-        raise HTTPException(502, detail=f"Failed to list prompts from {name!r}")
+    except Exception as e:
+        raise HTTPException(502, detail=f"Failed to list prompts from {name!r}") from e
 
 
 @router.get("/servers/{name}/resource-templates")
@@ -593,8 +607,8 @@ async def list_server_resource_templates(name: str):
             {"uriTemplate": str(rt.uri_template), "name": rt.name, "description": rt.description or ""}
             for rt in templates
         ]}
-    except Exception:
-        raise HTTPException(502, detail=f"Failed to list resource templates from {name!r}")
+    except Exception as e:
+        raise HTTPException(502, detail=f"Failed to list resource templates from {name!r}") from e
 
 
 def _pkg_spec_ok(manager: str, pkg: str) -> bool:
@@ -676,14 +690,14 @@ async def _run_pkg_command(argv: list[str], op: str) -> dict:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(), timeout=_INSTALL_TIMEOUT
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             try:
                 process.kill()
             finally:
                 await process.wait()
             raise HTTPException(
                 504, detail=f"{op} command timed out ({int(_INSTALL_TIMEOUT)}s)"
-            )
+            ) from None
 
     return {
         "success": process.returncode == 0,
@@ -726,9 +740,115 @@ def _remove_extras_dirs(packages: list[str]) -> list[str]:
                 continue
             if os.path.islink(target) or not os.path.isdir(target):
                 continue
-            shutil.rmtree(target)
+            try:
+                shutil.rmtree(target)
+            except OSError:
+                logger.exception("Failed to remove %s", target)
+                continue
             removed.append(entry)
     return removed
+
+
+def _git_clone_url(spec: str) -> str | None:
+    """pip 形式の git+https 仕様から clone 用 URL を抽出する。
+
+    `git+https://host/repo.git@v1.0#egg=x` → `https://host/repo.git`。
+    ref (`@ref`) / fragment (`#...`) は除去するが、userinfo の `@`
+    (user:pass@host) は壊さないため、パス区切り `/' 以降の最初の
+    `@` のみを切断点とする。解釈不能なら None。
+    """
+    if not spec.startswith("git+"):
+        return None
+    url = spec[len("git+"):]
+    url = url.split("#", 1)[0]
+    scheme_sep = url.find("//")
+    slash = url.find("/", scheme_sep + 2) if scheme_sep != -1 else -1
+    at = url.find("@", slash + 1) if slash != -1 else -1
+    if at != -1:
+        url = url[:at]
+    return url or None
+
+
+def _scan_tree_for_fastmcp_import(root: str, url: str) -> bool | None:
+    """同期スキャン: True 検出 / False 検出なし / None 判定不能（大きすぎ）。
+
+    .py ファイルのみ対象。.git / node_modules / __pycache__ は除外。
+    """
+    checked = 0
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = [d for d in dirs if d not in (".git", "node_modules", "__pycache__")]
+        for fn in files:
+            if not fn.endswith(".py"):
+                continue
+            checked += 1
+            if checked > _SCAN_MAX_FILES:
+                logger.warning("Source scan too large (%s), giving up", url)
+                return None
+            path = os.path.join(dirpath, fn)
+            if os.path.islink(path):
+                continue  # 悪意ある repo 内 symlink で clone 外ファイルを開かない
+            try:
+                with open(path, "rb") as f:
+                    text = f.read(_SCAN_MAX_BYTES).decode("utf-8", errors="replace")
+            except OSError:
+                continue
+            if _FASTMCP_IMPORT_RE.search(text):
+                return True
+    return False
+
+
+async def _git_source_has_fastmcp_import(url: str) -> bool | None:
+    """shallow clone したソースに mcp.server.fastmcp import があるか。
+
+    True: 検出 / False: 検出なし / None: 判定不能（clone 失敗・タイム
+    アウト・異常に大きいリポジトリ）。判定不能時は呼び出し側が
+    通常インストールにフォールバックする（失敗させない）。
+    """
+    tmpdir: str | None = None
+    try:
+        tmpdir = tempfile.mkdtemp(prefix="mcphub-srcscan-")
+        proc = await asyncio.create_subprocess_exec(
+            "git", "clone", "--depth", "1", "--quiet", url, tmpdir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            await asyncio.wait_for(proc.communicate(), timeout=_SCAN_CLONE_TIMEOUT)
+        except TimeoutError:
+            try:
+                proc.kill()
+            finally:
+                await proc.wait()
+            logger.warning("Source scan clone timed out for %s", url)
+            return None
+        if proc.returncode != 0:
+            logger.warning("Source scan clone failed (rc=%s) for %s", proc.returncode, url)
+            return None
+
+        return await asyncio.to_thread(_scan_tree_for_fastmcp_import, tmpdir, url)
+    except Exception:
+        logger.exception("Source scan failed for %s", url)
+        return None
+    finally:
+        if tmpdir:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+async def _detect_auto_mcp_pin(packages: list[str]) -> tuple[list[str], str | None]:
+    """git+URL パッケージから mcp<2 自動ピンの要否を判定する。
+
+    戻り値: (ピンリスト, 理由)。検出なし・判定不能は ([], None)。
+    複数 git+URL のうち最初に検出された URL を理由に含める。
+    """
+    for spec in packages:
+        if not spec.startswith("git+"):
+            continue
+        url = _git_clone_url(spec)
+        if not url:
+            continue
+        if await _git_source_has_fastmcp_import(url):
+            return ["mcp<2"], f"mcp.server.fastmcp import detected in {url}"
+    return [], None
 
 
 @router.post("/tools/install")
@@ -745,6 +865,12 @@ async def install_dependency(body: InstallRequest):
     constraints（依存ピン、例 "mcp<2"）: uv-tool は各項を --with <spec>
     として packages の前に、pip/uv は argv 末尾に連結（--target は不変）。
     固定 argv・シェル無しは維持。npm は 400（非対応）。
+
+    自動ピン: 呼び出し側が constraints を明示せず、かつ git+URL 仕様を
+    含む場合、ソースを shallow clone して mcp.server.fastmcp (mcp 1.x
+    API) import を検出したら mcp<2 を自動適用する。検出結果はレスポンスの
+    auto_constraints / auto_constraints_reason に返す。判定不能
+    （clone 失敗等）時は自動ピンなしで通常インストールに続行する。
     """
     manager, packages = _validate_manager_packages(body)
 
@@ -753,6 +879,20 @@ async def install_dependency(body: InstallRequest):
         raise HTTPException(400, detail="npm は constraints 未対応です")
     if constraints:
         constraints = _validate_constraints(constraints)
+
+    # git+URL ソースの事前スキャン: 呼び出し側が明示していない場合のみ
+    # mcp<2 自動ピンを判定する（明示指定は上書きしない）。
+    auto_constraints: list[str] = []
+    auto_reason: str | None = None
+    if (
+        manager in ("pip", "uv", "uv-tool")
+        and not constraints
+        and any(p.startswith("git+") for p in packages)
+    ):
+        auto_constraints, auto_reason = await _detect_auto_mcp_pin(packages)
+        if auto_constraints:
+            constraints = auto_constraints
+            logger.info("Auto-pinning %s: %s", auto_constraints, auto_reason)
 
     if manager == "pip":
         argv = ["pip", "install", "--target", _EXTRAS_DIR, *packages, *constraints]
@@ -765,15 +905,24 @@ async def install_dependency(body: InstallRequest):
         argv = ["npm", "install", *packages]
 
     # Ensure EXTRAS_DIR exists
-    os.makedirs(_EXTRAS_DIR, exist_ok=True)
+    try:
+        os.makedirs(_EXTRAS_DIR, exist_ok=True)
+    except OSError:
+        logger.exception("Failed to create %s", _EXTRAS_DIR)
+        raise HTTPException(500, detail=f"Failed to create {_EXTRAS_DIR}") from None
 
     try:
-        return await _run_pkg_command(argv, "Install")
+        result = await _run_pkg_command(argv, "Install")
+        if auto_constraints:
+            result["auto_constraints"] = auto_constraints
+            if auto_reason:
+                result["auto_constraints_reason"] = auto_reason
+        return result
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Install command failed")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail=str(e)) from e
 
 
 @router.post("/tools/uninstall")
@@ -810,7 +959,7 @@ async def uninstall_dependency(body: InstallRequest):
         raise
     except Exception as e:
         logger.exception("Uninstall command failed")
-        raise HTTPException(500, detail=str(e))
+        raise HTTPException(500, detail=str(e)) from e
 
 
 @router.post("/servers/{name}/tools/{tool_name}/call")

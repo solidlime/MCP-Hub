@@ -3628,6 +3628,10 @@
 
                 const status = data.success ? '✅ 成功' : '❌ 失敗';
                 const out = [status + ` (exit: ${data.returncode})`];
+                if (Array.isArray(data.auto_constraints) && data.auto_constraints.length) {
+                    out.push('🔒 自動ピン適用: ' + data.auto_constraints.join(', ')
+                        + (data.auto_constraints_reason ? ` — ${data.auto_constraints_reason}` : ''));
+                }
                 if (data.stdout) out.push(data.stdout);
                 if (data.stderr) out.push(data.stderr);
                 output.textContent = out.join('\n');
