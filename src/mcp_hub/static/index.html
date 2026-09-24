@@ -1524,61 +1524,6 @@
                 transition-duration: 0.01ms !important;
             }
         }
-
-        /* ============================================================
-           CATALOG MODAL
-           ============================================================ */
-        .catalog-list {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-        .catalog-card {
-            border: 1px solid var(--border-default);
-            border-radius: var(--radius-md);
-            padding: 14px;
-            background: var(--bg-surface);
-        }
-        .catalog-card:hover {
-            background: var(--bg-hover);
-        }
-        .catalog-card-name {
-            font-size: 0.95rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            margin-bottom: 6px;
-        }
-        .catalog-card-desc {
-            font-size: 0.82rem;
-            color: var(--text-muted);
-            line-height: 1.6;
-            margin-bottom: 8px;
-        }
-        .catalog-card-meta {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
-        .catalog-card-docs {
-            font-size: 0.75rem;
-            color: var(--accent-primary);
-            text-decoration: none;
-            margin-left: 4px;
-        }
-        .catalog-card-docs:hover {
-            text-decoration: underline;
-        }
-        .catalog-card-footer {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-top: 10px;
-        }
-        .catalog-error {
-            font-size: 0.82rem;
-            color: var(--accent-red);
-        }
     </style>
 </head>
 <body>
@@ -1604,10 +1549,6 @@
                 <button class="btn btn-primary" onclick="openAddServerModal()" aria-label="MCP サーバーを追加">
                     <span aria-hidden="true">＋</span>
                     <span>サーバー追加</span>
-                </button>
-                <button class="btn btn-secondary" onclick="openCatalogModal()" aria-label="カタログから MCP サーバーを追加">
-                    <span aria-hidden="true">📋</span>
-                    <span>カタログから追加</span>
                 </button>
             </div>
         </header>
@@ -1665,9 +1606,6 @@
             </div>
             <button class="btn btn-primary" onclick="openAddServerModal()" aria-label="最初の MCP サーバーを追加">
                 最初のサーバーを追加
-            </button>
-            <button class="btn btn-secondary" onclick="openCatalogModal()" aria-label="カタログから最初の MCP サーバーを追加">
-                カタログから追加
             </button>
         </div>
         </section>
@@ -1801,20 +1739,6 @@
                 <button class="btn btn-primary" id="editSubmitBtn" onclick="submitEdit()">
                     保存
                 </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Catalog Modal -->
-    <div id="catalogModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="catalogModalTitle">
-        <div class="modal">
-            <div class="modal-header">
-                <h2 class="modal-title" id="catalogModalTitle">カタログから追加</h2>
-                <button class="modal-close" onclick="closeCatalogModal()" aria-label="閉じる">✕</button>
-            </div>
-            <div class="modal-body">
-                <div id="catalogError" class="catalog-error" style="display: none;" role="alert"></div>
-                <div id="catalogList" class="catalog-list" role="list" aria-label="カタログサーバー一覧"></div>
             </div>
         </div>
     </div>
@@ -1966,14 +1890,18 @@
                         <select id="installManager" class="setting-input" style="max-width:96px; flex-shrink:0;" aria-label="パッケージマネージャー">
                             <option value="pip">pip</option>
                             <option value="uv">uv</option>
+                            <option value="uv-tool">uv tool</option>
                             <option value="npm">npm</option>
                         </select>
                         <input type="text" id="installPackages" class="setting-input"
-                               placeholder="yt-dlp requests"
+                               placeholder="yt-dlp requests / git+https://github.com/user/repo.git"
                                style="flex:1; max-width:none; margin-left:8px;">
                         <button id="installBtn" class="btn btn-primary"
                                 style="width:80px; flex-shrink:0; margin-left:8px;"
                                 onclick="runInstallCommand()">Install</button>
+                        <button id="uninstallBtn" class="btn btn-secondary"
+                                style="width:64px; flex-shrink:0; margin-left:8px;"
+                                onclick="runUninstallCommand()">削除</button>
                     </div>
                     <div id="installOutput" class="setting-hint"
                          style="display:none; white-space:pre-wrap; font-family:monospace; font-size:11px;
@@ -1981,6 +1909,7 @@
                                 border-radius:6px; padding:8px; margin-top:8px;"></div>
                     <div class="setting-hint" style="margin-top:4px;">
                         パッケージは永続ボリュームに保存され、再起動後も利用可能です。
+                        git+https://... などの URL 仕様にも対応。インストール・削除とも最大 300 秒。
                     </div>
                 </div>
             </div>
@@ -2879,8 +2808,6 @@
             if (tagChip) { toggleTagFilter(tagChip.dataset.tag); return; }
             const editRm = e.target.closest('[data-action="remove-edit-tag"]');
             if (editRm) { removeEditTag(editRm.dataset.tag); return; }
-            const catalogAdd = e.target.closest('[data-action="add-catalog"]');
-            if (catalogAdd) { addFromCatalog(catalogAdd.dataset.catalogEntry); return; }
             const el = e.target.closest('#serversList [data-action]');
             if (!el) return;
             const action = el.dataset.action;
@@ -3382,88 +3309,6 @@
         }
 
         // ============================================================
-        // SERVER CATALOG
-        // ============================================================
-        async function openCatalogModal() {
-            document.getElementById('catalogError').style.display = 'none';
-            document.getElementById('catalogList').textContent = '';
-            document.getElementById('catalogModal').classList.add('active');
-
-            let catalog;
-            try {
-                const res = await fetch('/admin/static/catalog.json');
-                if (!res.ok) {
-                    throw new Error(`HTTP ${res.status}`);
-                }
-                catalog = await res.json();
-            } catch (e) {
-                console.warn('カタログの取得に失敗しました:', e);
-                const errEl = document.getElementById('catalogError');
-                errEl.textContent = 'カタログの取得に失敗しました。しばらくしてからもう一度お試しください。';
-                errEl.style.display = 'block';
-                return;
-            }
-
-            const list = document.getElementById('catalogList');
-            const servers = Array.isArray(catalog.servers) ? catalog.servers : [];
-            list.innerHTML = servers.map(entry => {
-                const name = escapeAttr(entry.name || '');
-                const safeHref = /^https?:\/\//i.test(entry.docs_url || '') ? escapeAttr(entry.docs_url) : '';
-                return `<div class="catalog-card" role="listitem">
-                    <div class="catalog-card-name">${escapeHtml(entry.name)}</div>
-                    <div class="catalog-card-desc">${escapeHtml(entry.description)}</div>
-                    <div class="catalog-card-meta">
-                        ${(entry.tags || []).map(t => `<span class="tag-chip">${escapeHtml(t)}</span>`).join('')}
-                        ${safeHref ? `<a class="catalog-card-docs" href="${safeHref}" target="_blank" rel="noopener noreferrer" aria-label="${name} のドキュメントを開く">ドキュメント ↗</a>` : ''}
-                    </div>
-                    <div class="catalog-card-footer">
-                        <span></span>
-                        <button class="btn btn-sm btn-primary" data-action="add-catalog" data-catalog-entry="${name}" aria-label="${name} をカタログから追加">
-                            追加
-                        </button>
-                    </div>
-                </div>`;
-            }).join('');
-        }
-
-        function closeCatalogModal() {
-            document.getElementById('catalogModal').classList.remove('active');
-        }
-
-        async function addFromCatalog(entryName) {
-            let catalog;
-            try {
-                const res = await fetch('/admin/static/catalog.json');
-                if (!res.ok) {
-                    throw new Error(`HTTP ${res.status}`);
-                }
-                catalog = await res.json();
-            } catch (e) {
-                console.warn('カタログの取得に失敗しました:', e);
-                showToast('カタログの取得に失敗しました', 'error');
-                closeCatalogModal();
-                openEditModal(null);
-                return;
-            }
-            const entry = (catalog.servers || []).find(s => s.name === entryName);
-            if (!entry) {
-                showToast('カタログの取得に失敗しました', 'error');
-                closeCatalogModal();
-                openEditModal(null);
-                return;
-            }
-
-            closeCatalogModal();
-            openEditModal(null); // フォームがリセットされるため、この後にプリセットを投入
-
-            document.getElementById('editName').value = entry.name;
-            document.getElementById('editCommand').value = entry.command || '';
-            document.getElementById('editArgs').value = (entry.args || []).join('\n');
-            editTags = [...(entry.tags || [])];
-            renderEditTags();
-        }
-
-        // ============================================================
         // TOOL EXECUTION
         // ============================================================
         function openToolModal(serverName, toolName) {
@@ -3739,10 +3584,12 @@
             }
         }
 
-        async function runInstallCommand() {
+        async function runPackageCommand(action) {
+            const isInstall = action === 'install';
             const manager = document.getElementById('installManager').value;
             const input = document.getElementById('installPackages');
-            const btn = document.getElementById('installBtn');
+            const btn = document.getElementById(isInstall ? 'installBtn' : 'uninstallBtn');
+            const otherBtn = document.getElementById(isInstall ? 'uninstallBtn' : 'installBtn');
             const output = document.getElementById('installOutput');
             const packages = input.value.trim().split(/\s+/).filter(Boolean);
 
@@ -3753,21 +3600,28 @@
                 return;
             }
 
+            if (!isInstall && !confirm(`${manager}: ${packages.join(', ')} を削除しますか？`)) {
+                return;
+            }
+
             btn.disabled = true;
+            otherBtn.disabled = true;
+            const prevLabel = btn.textContent;
             btn.textContent = '...';
             output.textContent = '実行中...';
             output.style.display = 'block';
             output.style.color = 'inherit';
 
             try {
-                const resp = await fetch('/admin/api/tools/install', {
+                const resp = await fetch(`/admin/api/tools/${action}`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({manager, packages})
                 });
                 const data = await resp.json().catch(() => ({}));
                 if (!resp.ok) {
-                    output.textContent = `❌ 失敗 (${resp.status}): ${data.detail || 'インストールに失敗しました'}`;
+                    const fallback = isInstall ? 'インストール' : '削除';
+                    output.textContent = `❌ 失敗 (${resp.status}): ${data.detail || fallback + 'に失敗しました'}`;
                     output.style.color = '#e74c3c';
                     return;
                 }
@@ -3783,8 +3637,17 @@
                 output.style.color = '#e74c3c';
             } finally {
                 btn.disabled = false;
-                btn.textContent = 'Install';
+                otherBtn.disabled = false;
+                btn.textContent = prevLabel;
             }
+        }
+
+        function runInstallCommand() {
+            return runPackageCommand('install');
+        }
+
+        function runUninstallCommand() {
+            return runPackageCommand('uninstall');
         }
 
         function openSettingsModal() {

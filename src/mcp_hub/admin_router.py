@@ -5,7 +5,9 @@
 
 import asyncio
 import logging
+import os
 import re
+import shutil
 import time
 from typing import Any
 from urllib.parse import urljoin
@@ -28,10 +30,29 @@ from .validators import (
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_MANAGERS: tuple[str, ...] = ("pip", "uv", "npm")
+_ALLOWED_MANAGERS: tuple[str, ...] = ("pip", "uv", "uv-tool", "npm")
 _PIP_PKG_RE = re.compile(r"^[A-Za-z0-9_.\-]+(\[[A-Za-z0-9_.\-,]+\])?(==[A-Za-z0-9_.\-*+]+)?$")
+# pip/uv(-tool) の緩和パターン: PEP 508 バージョン範囲と URL 仕様。
+# 許可リスト方式 — 空白・制御文字・先頭 '-'/'.'・シェルメタ文字は
+# _PKG_BAD_RE 側で拒否（フラグ注入・パストラバーサル対策）。
+_PIP_RANGE_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.\-]*"
+    r"(?:\[[A-Za-z0-9_.\-,]+\])?"
+    r"(?:[<>=!~]=?[A-Za-z0-9_.\-*+!,]+)*$"
+)
+_PIP_URL_RE = re.compile(r"^(?:git\+)?https://[A-Za-z0-9._~%!&+,=:@/?#-]+$")
+_PKG_BAD_RE = re.compile(r"[\s\x00-\x1f\x7f;|`$\\\"']")
 _NPM_PKG_RE = re.compile(r"^(@[A-Za-z0-9_.\-~]+\/)?[A-Za-z0-9_.\-~]+(@[A-Za-z0-9_.\-~^]+)?$")
+# constraints（依存ピン）用: 名前 + 範囲指定子。バージョン指定子
+# < > ! = ~ , ( ) は許可（PEP 508/440）。空白・制御文字・シェルメタ・
+# '/' は _PKG_BAD_RE とキャラクラス外で拒否（先頭 '-'/'.' も別途弾く）。
+_CONSTRAINT_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.\-]*"
+    r"(?:\[[A-Za-z0-9_.\-,]+\])?"
+    r"[<>=!~(),.\-*+A-Za-z0-9]*$"
+)
 _EXTRAS_DIR = "/home/mcp-hub/pip-extras"
+_INSTALL_TIMEOUT = 300.0
 _install_sem = asyncio.Semaphore(1)
 
 
@@ -76,6 +97,8 @@ class InstallRequest(BaseModel):
     # pydantic の 422 より先に 400 + 移行メッセージで拒否するため。
     manager: str | None = None
     packages: list[str] | None = None
+    # 依存ピン（例: "mcp<2"）。install のみ。npm / uninstall は 400。
+    constraints: list[str] | None = None
 
 
 # --- Router ---
@@ -574,20 +597,45 @@ async def list_server_resource_templates(name: str):
         raise HTTPException(502, detail=f"Failed to list resource templates from {name!r}")
 
 
-@router.post("/tools/install")
-async def install_dependency(body: InstallRequest):
-    """Install packages via pip/uv/npm only (no shell).
+def _pkg_spec_ok(manager: str, pkg: str) -> bool:
+    """pkg がマネージャーの要求仕様として妥当なら True。"""
+    if manager == "npm":
+        return bool(_NPM_PKG_RE.match(pkg))
+    return bool(
+        _PIP_PKG_RE.match(pkg)
+        or _PIP_RANGE_RE.match(pkg)
+        or _PIP_URL_RE.match(pkg)
+    )
 
-    Request: {"manager": "pip"|"uv"|"npm", "packages": [...]}.
-    pip/uv are pinned to --target <EXTRAS_DIR>; extra flags rejected.
+
+def _validate_constraints(constraints: Any) -> list[str]:
+    """constraints の安全検査（packages と同等、範囲指定子は許可）。"""
+    if not isinstance(constraints, list) or not constraints:
+        raise HTTPException(400, detail="constraints は1件以上の文字列リストである必要があります")
+    for c in constraints:
+        if (
+            not isinstance(c, str)
+            or not c
+            or c.startswith(("-", "."))
+            or _PKG_BAD_RE.search(c)
+            or not _CONSTRAINT_RE.match(c)
+        ):
+            raise HTTPException(400, detail=f"Invalid constraint: {c!r}")
+    return constraints
+
+
+def _validate_manager_packages(body: InstallRequest) -> tuple[str, list[str]]:
+    """install/uninstall 共通のリクエスト検証。
+
+    旧 {command: str} 形式・未知マネージャー・フラグ注入（先頭 '-'）・
+    パストラバーサル（先頭 '.' / パス区切り）・空白・制御文字・
+    シェルメタ文字を拒否する。
     """
-    import os
-
     extra = getattr(body, "model_extra", None) or {}
     if "command" in extra:
         raise HTTPException(
             400,
-            detail="旧形式 {command: str} は廃止。{manager: pip|uv|npm, packages: string[]} で送ってください",
+            detail="旧形式 {command: str} は廃止。{manager: pip|uv|uv-tool|npm, packages: string[]} で送ってください",
         )
 
     manager: str | None = body.manager
@@ -600,15 +648,119 @@ async def install_dependency(body: InstallRequest):
     if not isinstance(packages, list) or not packages:
         raise HTTPException(400, detail="packages は1件以上の文字列リストである必要があります")
 
-    pattern = _NPM_PKG_RE if manager == "npm" else _PIP_PKG_RE
     for pkg in packages:
-        if not isinstance(pkg, str) or not pkg or pkg.startswith("-") or not pattern.match(pkg):
+        if (
+            not isinstance(pkg, str)
+            or not pkg
+            or pkg.startswith(("-", "."))
+            or _PKG_BAD_RE.search(pkg)
+            or not _pkg_spec_ok(manager, pkg)
+        ):
             raise HTTPException(400, detail=f"Invalid package: {pkg!r}")
+    return manager, packages
+
+
+async def _run_pkg_command(argv: list[str], op: str) -> dict:
+    """パッケージマネージャーの固定 argv をシェルなしで実行する。
+
+    asyncio.create_subprocess_exec のまま（create_subprocess_shell は使わない）。
+    セマフォで直列化、_INSTALL_TIMEOUT 秒でタイムアウト。
+    """
+    async with _install_sem:
+        process = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=_INSTALL_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            finally:
+                await process.wait()
+            raise HTTPException(
+                504, detail=f"{op} command timed out ({int(_INSTALL_TIMEOUT)}s)"
+            )
+
+    return {
+        "success": process.returncode == 0,
+        "returncode": process.returncode,
+        "stdout": stdout.decode("utf-8", errors="replace"),
+        "stderr": stderr.decode("utf-8", errors="replace"),
+    }
+
+
+def _normalize_pkg_name(name: str) -> str:
+    """PEP 503 正規化: 小文字化と '-_.' 連続の '-' 統一。"""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _remove_extras_dirs(packages: list[str]) -> list[str]:
+    """_EXTRAS_DIR 配下のパッケージディレクトリを削除し、削除名を返す。
+
+    `pip uninstall` は --target 非対応のため直接削除する。マッチは PEP 503
+    正規化 + 大文字小文字無視の前方一致（<pkg> / <pkg>-*.dist-info）。
+    realpath プレフィックス検証で _EXTRAS_DIR 配下に固定しており、
+    バリデーションでパス区切りを弾いているためトラバーサルは不可能。
+    """
+    removed: list[str] = []
+    if not os.path.isdir(_EXTRAS_DIR):
+        return removed
+    base = os.path.realpath(_EXTRAS_DIR)
+    try:
+        entries = os.listdir(_EXTRAS_DIR)
+    except OSError:
+        return removed
+    for pkg in packages:
+        norm = _normalize_pkg_name(pkg)
+        for entry in entries:
+            entry_norm = _normalize_pkg_name(entry)
+            if entry_norm != norm and not entry_norm.startswith(norm + "-"):
+                continue
+            target = os.path.join(_EXTRAS_DIR, entry)
+            real = os.path.realpath(target)
+            if not real.startswith(base + os.sep):
+                continue
+            if os.path.islink(target) or not os.path.isdir(target):
+                continue
+            shutil.rmtree(target)
+            removed.append(entry)
+    return removed
+
+
+@router.post("/tools/install")
+async def install_dependency(body: InstallRequest):
+    """Install packages via pip/uv/uv-tool/npm (fixed argv, no shell).
+
+    Request: {"manager": "pip"|"uv"|"uv-tool"|"npm", "packages": [...]}.
+    pip/uv are pinned to --target <EXTRAS_DIR>; extra flags rejected.
+    pip/uv(-tool) additionally accept URL specs (git+https://...,
+    https://...tar.gz/.whl) and PEP 508 ranges. URL specs download and
+    run upstream code at the package author's discretion — only install
+    sources you trust.
+
+    constraints（依存ピン、例 "mcp<2"）: uv-tool は各項を --with <spec>
+    として packages の前に、pip/uv は argv 末尾に連結（--target は不変）。
+    固定 argv・シェル無しは維持。npm は 400（非対応）。
+    """
+    manager, packages = _validate_manager_packages(body)
+
+    constraints: list[str] = list(body.constraints or [])
+    if constraints and manager == "npm":
+        raise HTTPException(400, detail="npm は constraints 未対応です")
+    if constraints:
+        constraints = _validate_constraints(constraints)
 
     if manager == "pip":
-        argv = ["pip", "install", "--target", _EXTRAS_DIR, *packages]
+        argv = ["pip", "install", "--target", _EXTRAS_DIR, *packages, *constraints]
     elif manager == "uv":
-        argv = ["uv", "pip", "install", "--target", _EXTRAS_DIR, *packages]
+        argv = ["uv", "pip", "install", "--target", _EXTRAS_DIR, *packages, *constraints]
+    elif manager == "uv-tool":
+        with_args = [a for c in constraints for a in ("--with", c)]
+        argv = ["uv", "tool", "install", *with_args, *packages]
     else:
         argv = ["npm", "install", *packages]
 
@@ -616,33 +768,48 @@ async def install_dependency(body: InstallRequest):
     os.makedirs(_EXTRAS_DIR, exist_ok=True)
 
     try:
-        async with _install_sem:
-            process = await asyncio.create_subprocess_exec(
-                *argv,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(), timeout=120.0
-                )
-            except asyncio.TimeoutError:
-                try:
-                    process.kill()
-                finally:
-                    await process.wait()
-                raise HTTPException(504, detail="Install command timed out (120s)")
-
-        return {
-            "success": process.returncode == 0,
-            "returncode": process.returncode,
-            "stdout": stdout.decode("utf-8", errors="replace"),
-            "stderr": stderr.decode("utf-8", errors="replace"),
-        }
+        return await _run_pkg_command(argv, "Install")
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Install command failed")
+        raise HTTPException(500, detail=str(e))
+
+
+@router.post("/tools/uninstall")
+async def uninstall_dependency(body: InstallRequest):
+    """Uninstall packages (same InstallRequest as /tools/install).
+
+    npm / uv-tool: fixed argv (`npm uninstall` / `uv tool uninstall`,
+    no shell). pip/uv: pip has no --target-aware uninstall, so matching
+    directories under EXTRAS_DIR are removed instead (name validation
+    plus realpath pinning make traversal impossible). Zero hits →
+    {success: false, removed: []}.
+    """
+    if body.constraints:
+        raise HTTPException(400, detail="uninstall は constraints 非対応です")
+    manager, packages = _validate_manager_packages(body)
+
+    try:
+        if manager in ("pip", "uv"):
+            removed = _remove_extras_dirs(packages)
+            return {
+                "success": bool(removed),
+                "returncode": 0 if removed else 1,
+                "removed": removed,
+                "stdout": "\n".join(removed),
+                "stderr": "" if removed else f"no matching packages under {_EXTRAS_DIR}",
+            }
+
+        if manager == "uv-tool":
+            argv = ["uv", "tool", "uninstall", *packages]
+        else:
+            argv = ["npm", "uninstall", *packages]
+        return await _run_pkg_command(argv, "Uninstall")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Uninstall command failed")
         raise HTTPException(500, detail=str(e))
 
 

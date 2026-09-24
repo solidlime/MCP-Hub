@@ -24,7 +24,6 @@ from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 import fastmcp
 from fastmcp import FastMCP
 
@@ -376,15 +375,6 @@ def create_app() -> FastAPI:
         finally:
             request_tags.set(None)
 
-    # 静的ファイル配信 (admin UI 用の追加アセット用、catalog.json など)
-    static_dir = os.path.join(os.path.dirname(__file__), "static")
-    if os.path.isdir(static_dir):
-        app.mount(
-            "/admin/static",
-            StaticFiles(directory=static_dir),
-            name="admin-static",
-        )
-
     return app
 
 
@@ -435,8 +425,6 @@ def main():
         @app.get("/admin")
         async def admin_index():
             return HTMLResponse(html_content)
-
-    # 静的ファイル配信は create_app 内でマウント済み
 
     import uvicorn
 

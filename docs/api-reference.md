@@ -473,18 +473,24 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 
 #### `POST /admin/api/tools/install`
 
-依存パッケージのインストールコマンドを実行します（pip, npm, uv 等）。
+依存パッケージのインストールコマンドを実行します（pip, uv, uv-tool, npm）。
 インストールされたパッケージは Docker ボリュームに永続化されます。
-ベースパス `/admin/api` 配下（実装: `admin_router.py` の `APIRouter(prefix="/admin/api")` + `@router.post("/tools/install")`、UI `index.html:3489` の `fetch('/admin/api/tools/install')` が正）。
+ベースパス `/admin/api` 配下（実装: `admin_router.py` の `APIRouter(prefix="/admin/api")` + `@router.post("/tools/install")`、UI `index.html` の `fetch('/admin/api/tools/install')` が正）。
 
 **Request Body:**
 ```json
 {
-  "command": "pip install yt-dlp"
+  "manager": "uv",
+  "packages": ["yt-dlp"],
+  "constraints": ["mcp<2"]
 }
 ```
 
-pip / uv pip の install コマンドは自動的に `--target /home/mcp-hub/pip-extras` が付加され、永続化ディレクトリにインストールされます。
+- `manager`: `pip` / `uv` / `uv-tool` / `npm` のいずれか。
+- `packages`: パッケージ指定のリスト。PyPI パッケージ名のほか、PEP 508 互換の URL 指定（`git+https://...`、`https://` の sdist/wheel、`name[extra]==ver`）を pip/uv/uv-tool で許可。空文字・先頭 `-`・ホワイトスペース・制御文字は 400。
+- `constraints`（省略可）: 依存ピンのリスト（例: `"mcp<2"`）。uv-tool は各項が `--with <spec>` として渡され、pip/uv は追加要件として argv 末尾に連結される。npm は未対応（400）。
+
+pip / uv の install コマンドは自動的に `--target`（pip-extras 永続化ディレクトリ）が付加され、永続化ディレクトリにインストールされます。`uv-tool` は `uv tool install` / `npm` は `npm install` として実行されます。コマンドは固定 argv でシェルなし実行されます。
 
 **Response:**
 ```json
@@ -496,7 +502,23 @@ pip / uv pip の install コマンドは自動的に `--target /home/mcp-hub/pip
 }
 ```
 
-**タイムアウト:** 120 秒
+**タイムアウト:** 300 秒（install/uninstall 共通、セマフォで直列化）
+
+#### `POST /admin/api/tools/uninstall`
+
+依存パッケージをアンインストールします。
+
+**Request Body:**
+```json
+{
+  "manager": "uv-tool",
+  "packages": ["j-quants-doc-mcp"]
+}
+```
+
+- `uv-tool` / `npm`: 各マネージャーの uninstall コマンドを実行。
+- `pip` / `uv`: `--target` ディレクトリから該当パッケージのディレクトリを削除（前方一致、トラバーサル防御あり）。依存の連鎖は削除されません。
+- `constraints` は非対応（400）。
 
 #### `POST /admin/api/servers/{name}/tools/{tool_name}/call`
 
@@ -526,7 +548,3 @@ pip / uv pip の install コマンドは自動的に `--target /home/mcp-hub/pip
 ### `GET /admin/`
 
 ブラウザベースの管理インターフェース。サーバーの一覧表示、追加、編集、削除、タグ管理が行えます。
-
-### 静的アセット
-
-`GET /admin/static/*` — CSS、JS、その他フロントエンドアセット。
