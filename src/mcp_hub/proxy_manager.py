@@ -596,6 +596,37 @@ class ProxyManager:
         """プロキシインスタンスを取得。"""
         return self._proxies.get(name)
 
+    async def test_connect(self, name: str) -> tuple["FastMCPProxy | None", str]:
+        """Test endpoint helper: return a usable proxy, fresh-connecting once
+        if needed so the WebUI test button also works as a reconnect trigger.
+
+        Returns (proxy, reason) where reason is one of:
+          "connected"       — existing proxy (no connect attempted) or fresh
+                              connect succeeded
+          "not_found"       — server not registered
+          "disabled"        — server is disabled
+          "in_progress"     — a background connect/recovery is already running
+          "failed:<status>" — fresh connect attempted but proxy is still absent
+        """
+        proxy = self._proxies.get(name)
+        if proxy is not None:
+            return proxy, "connected"
+        config = self._server_configs.get(name)
+        if config is None:
+            return None, "not_found"
+        if config.get("disabled"):
+            return None, "disabled"
+        status = self._status.get(name, "unknown")
+        if status in ("connecting", "recovering"):
+            return None, "in_progress"
+        # 未接続 — fresh connect を1回試みる。_connect_and_mount は single-shot
+        # （リトライなし・例外内包・世代管理込み）なので endpoint から await 可能。
+        await self._connect_and_mount(name, config)
+        proxy = self._proxies.get(name)
+        if proxy is None:
+            return None, f"failed:{self._status.get(name, 'unknown')}"
+        return proxy, "connected"
+
     def proxy_to_name(self, proxy_id: int) -> str | None:
         """id(proxy) → server_name の逆引き。TagFilterMiddleware 用。"""
         for name, proxy in self._proxies.items():

@@ -540,9 +540,23 @@ async def remove_server(name: str):
 @router.post("/servers/{name}/test")
 async def test_server(name: str):
     pm = _get_proxy_manager()
-    proxy = pm.get_proxy(name)
-    if not proxy:
-        raise HTTPException(status_code=404, detail="Server not found")
+    proxy, reason = await pm.test_connect(name)
+    if proxy is None:
+        if reason == "not_found":
+            raise HTTPException(status_code=404, detail="Server not found")
+        error = {
+            "disabled": "Server is disabled — enable it before testing",
+            "in_progress": "Connection attempt already in progress; try again shortly",
+        }.get(reason)
+        if error is None:
+            status = reason.split(":", 1)[1] if reason.startswith("failed:") else reason
+            error = f"Connection failed (status: {status})"
+        return {
+            "success": False,
+            "tools_count": 0,
+            "tools": [],
+            "error": error,
+        }
 
     try:
         tools = await pm.list_tools_for_server(name, proxy)

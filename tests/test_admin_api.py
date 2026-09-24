@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 
 from mcp_hub import admin_router
 from mcp_hub.main import create_app
+from types import SimpleNamespace
+
 from mcp_hub.state import app_state
 
 
@@ -1227,3 +1229,123 @@ class TestUninstall:
                 json={"manager": "pip", "packages": [bad]},
             )
             assert r.status_code == 400, bad
+
+class TestServerTestEndpoint:
+    """POST /servers/{name}/test — fresh connect when not connected (reconnect
+    behavior for the WebUI test button).
+
+    Servers are registered disabled (no background connect task), then state
+    is arranged directly on the ProxyManager for hermetic assertions.
+    """
+
+    def _register_disabled(self, client, name):
+        r = client.post("/admin/api/servers", json={
+            "name": name, "config": {"url": "http://localhost:9999", "disabled": True}
+        })
+        assert r.status_code == 201
+
+    def _enable(self, pm, name):
+        pm._server_configs[name] = {"url": "http://localhost:9999"}
+
+    def test_unknown_server_is_404(self, client):
+        r = client.post("/admin/api/servers/no-such/test")
+        assert r.status_code == 404
+
+    def test_disabled_server_reports_disabled_without_connect(self, client, monkeypatch):
+        self._register_disabled(client, "dis")
+        pm = admin_router._get_proxy_manager()
+        calls = []
+
+        async def spy_connect(name, config):
+            calls.append(name)
+
+        monkeypatch.setattr(pm, "_connect_and_mount", spy_connect)
+        r = client.post("/admin/api/servers/dis/test")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert "disabled" in data["error"].lower()
+        assert calls == []  # fresh connect は実行されない
+
+    def test_connected_server_uses_existing_proxy_without_fresh_connect(self, client, monkeypatch):
+        self._register_disabled(client, "conn")
+        pm = admin_router._get_proxy_manager()
+        pm._proxies["conn"] = object()  # 既にマウント済みのプロキシ
+        calls = []
+
+        async def spy_connect(name, config):
+            calls.append(name)
+
+        async def fake_list_tools(name, proxy, cache_ttl=60.0):
+            return [SimpleNamespace(name="t1", description="d1")]
+
+        monkeypatch.setattr(pm, "_connect_and_mount", spy_connect)
+        monkeypatch.setattr(pm, "list_tools_for_server", fake_list_tools)
+        r = client.post("/admin/api/servers/conn/test")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert data["tools_count"] == 1
+        assert data["tools"][0]["name"] == "t1"
+        assert calls == []  # 既存プロキシ経由 — fresh connect は呼ばれない
+
+    def test_fresh_connect_succeeds_when_not_connected(self, client, monkeypatch):
+        self._register_disabled(client, "fresh")
+        pm = admin_router._get_proxy_manager()
+        self._enable(pm, "fresh")
+        calls = []
+
+        async def fake_connect_and_mount(name, config):
+            if name not in calls:
+                calls.append(name)
+            pm._proxies[name] = object()  # 接続成功をエミュレート
+
+        async def fake_list_tools(name, proxy, cache_ttl=60.0):
+            return [SimpleNamespace(name="t1", description="d1")]
+
+        monkeypatch.setattr(pm, "_connect_and_mount", fake_connect_and_mount)
+        monkeypatch.setattr(pm, "list_tools_for_server", fake_list_tools)
+        r = client.post("/admin/api/servers/fresh/test")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is True
+        assert data["tools_count"] == 1
+        assert calls == ["fresh"]  # 未接続 → fresh connect が呼ばれる
+
+    def test_fresh_connect_failure_reports_connection_failed(self, client, monkeypatch):
+        self._register_disabled(client, "fail")
+        pm = admin_router._get_proxy_manager()
+        self._enable(pm, "fail")
+
+        async def failing_connect_and_mount(name, config):
+            pm._status[name] = "error"  # 接続失敗をエミュレート
+
+        async def spy_create_proxy(*args, **kwargs):
+            raise AssertionError("fresh connect must use _connect_and_mount")
+
+        monkeypatch.setattr(pm, "_connect_and_mount", failing_connect_and_mount)
+        monkeypatch.setattr(pm, "_create_proxy", spy_create_proxy)
+        r = client.post("/admin/api/servers/fail/test")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert "Connection failed" in data["error"]
+        assert "error" in data["error"]
+
+    def test_in_progress_connect_reports_without_racing(self, client, monkeypatch):
+        self._register_disabled(client, "busy")
+        pm = admin_router._get_proxy_manager()
+        self._enable(pm, "busy")
+        pm._status["busy"] = "recovering"  # バックグラウンド接続/リカバリ中
+        calls = []
+
+        async def spy_connect(name, config):
+            calls.append(name)
+
+        monkeypatch.setattr(pm, "_connect_and_mount", spy_connect)
+        r = client.post("/admin/api/servers/busy/test")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["success"] is False
+        assert "in progress" in data["error"].lower()
+        assert calls == []  # 並行接続と競合しない
