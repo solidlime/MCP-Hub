@@ -40,6 +40,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# execute_tool の server-not-found エラーで返す available_servers の上限。
+# 全列挙は応答を肥大させるため先頭のみ + 残数を返す（案E）。
+_MAX_LISTED_SERVERS = 10
+
 MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 
 _SUPPORTED_MODELS_CACHE: set[str] | None = None
@@ -618,9 +622,8 @@ class MetaTools:
                     "hint": "Try broader keywords or check server connections.",
                 },
                 ensure_ascii=False,
-                indent=2,
             )
-        return json.dumps({"results": results}, ensure_ascii=False, indent=2)
+        return json.dumps({"results": results}, ensure_ascii=False)
 
     async def execute_tool(
         self,
@@ -657,7 +660,6 @@ class MetaTools:
                     "hint": "Call search_tools first and use the server/name values it returns.",
                 },
                 ensure_ascii=False,
-                indent=2,
             )
 
         # Normalize to the registered (live) server name before tag check /
@@ -671,16 +673,20 @@ class MetaTools:
         # (live 未注入 = 検証不能なので素通し。解決失敗＝ここまで素通し済み。)
         live = self._list_servers()
         if live and server not in live:
+            # 応答肥大防止: 全列挙せず先頭10件のみ + 残り件数を返す
+            ranked = sorted(live)
+            shown = ranked[:_MAX_LISTED_SERVERS]
+            if len(ranked) > len(shown):
+                shown = [*shown, f"... and {len(ranked) - len(shown)} more"]
             return json.dumps(
                 {
                     "error": f"Server '{server}' not found.",
                     "hint": "Call search_tools first and copy the exact 'server' "
                     "value from its results (case-insensitive match was tried "
                     "and found no unique server).",
-                    "available_servers": sorted(live),
+                    "available_servers": shown,
                 },
                 ensure_ascii=False,
-                indent=2,
             )
 
         # Tag check: block execution if server's tags don't match request_tags.
@@ -697,7 +703,6 @@ class MetaTools:
                         "server_tags": list(server_tags),
                     },
                     ensure_ascii=False,
-                    indent=2,
                 )
 
         # Verify tool exists on the live proxy (index may be stale/missing).
@@ -713,7 +718,6 @@ class MetaTools:
                     "hint": "Use search_tools first to discover available tools on this server.",
                 },
                 ensure_ascii=False,
-                indent=2,
             )
         return await self._execute_tool(server, tool_name, arguments)
 
@@ -728,7 +732,6 @@ class MetaTools:
             return json.dumps(
                 {"message": "No upstream tools available. Add servers via admin API."},
                 ensure_ascii=False,
-                indent=2,
             )
         tools_by_server = {
             srv: [t["name"] for t in tools] for srv, tools in by_server.items()
@@ -740,7 +743,6 @@ class MetaTools:
                 "tools_by_server": tools_by_server,
             },
             ensure_ascii=False,
-            indent=2,
         )
 
 

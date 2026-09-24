@@ -492,6 +492,22 @@ class TestServerResolutionErrors:
         assert "filesystem" in data["available_servers"]
         assert "tag filter" not in data["error"]
 
+    def test_available_servers_capped(self, client):
+        """案E: available_servers は全列挙せず先頭10件 + 残数サマリに留まる。"""
+        pm = client.app.state.proxy_manager
+        for i in range(15):
+            pm._proxies[f"pad{i:02d}"] = _build_mock_proxy([])
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"server": "ghost", "tool_name": "whatever", "arguments": {}},
+            "t-ghost-cap",
+        )
+        avail = json.loads(_get_text_content(parsed))["available_servers"]
+        # 既存4 + pad15 = 19 サーバー → 先頭10件 + "... and 9 more"
+        assert len(avail) == 11
+        assert avail[-1] == "... and 9 more"
+
     def test_tag_mismatch_exposes_server_tags(self, client):
         """Connected server whose tags miss the filter → tag-filter error that
         includes the server's real tags so the mismatch is debuggable."""
