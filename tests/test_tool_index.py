@@ -705,13 +705,35 @@ class TestModelProfile:
         seen: dict = {}
 
         class _Spy:
-            def embed(self, texts):
+            def embed(self, texts, **kwargs):
                 seen["docs"] = list(texts)
                 return [np.zeros(4, dtype=np.float32) for _ in texts]
 
         idx._embedder = _Spy()
         idx._embed_docs_blocking(["a/b: c", "d/e: f"])
         assert seen["docs"] == ["passage: a/b: c", "passage: d/e: f"]
+
+    def test_embed_docs_passes_explicit_batch_size(self):
+        """rebuild の埋め込みは明示的な batch_size で回す（メモリ不変条件）。
+
+        fastembed の既定 batch_size=256 だと 227 件カタログが 1 バッチになり、
+        max_length=512 固定パディングの attention 行列 (227, 12, 512, 512) fp32
+        = 227×12×512²×4 ≈ 2.86GB を一括確保して low-memory 環境で OOM する。
+        実装の写経ではなく「None でなく、メモリ安全上界以下」を検証する。
+        """
+        idx = ToolIndex()
+        seen: dict = {}
+
+        class _Spy:
+            def embed(self, texts, **kwargs):
+                seen["kwargs"] = kwargs
+                return [np.zeros(2, dtype=np.float32) for _ in texts]
+
+        idx._embedder = _Spy()
+        idx._embed_docs_blocking(["a/b: c", "d/e: f"])
+        bs = seen["kwargs"].get("batch_size")
+        assert bs is not None, "batch_size 未指定 = fastembed 既定 256 に戻り OOM する"
+        assert bs <= 32, f"batch_size={bs} はメモリ安全上界(32)を超える"
 
     def test_query_prefix_applied_to_query(self):
         idx = ToolIndex(embedding_model="intfloat/multilingual-e5-small")

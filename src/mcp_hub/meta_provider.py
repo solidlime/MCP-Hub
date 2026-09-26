@@ -50,6 +50,12 @@ _CATALOG_MAX_CHARS = 1200
 _MAX_CATALOG_TOOL_NAMES = 8
 _CATALOG_LINE_MAX_CHARS = 240
 
+# 埋め込みバッチサイズ。fastembed の既定 256 だと 227 件カタログが 1 バッチに
+# なり、max_length=512 固定パディングの attention 行列 (227, 12, 512, 512) fp32
+# ≈ 2.86GB を一括確保して low-memory 環境で OOM する。8 なら 8×12×512²×4
+# ≈ 100MB/バッチ。
+_EMBED_BATCH_SIZE = 8
+
 MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 
 
@@ -428,7 +434,9 @@ class ToolIndex:
         if self._embedder is None:  # type: ignore[truthiness-function]
             self._embedder = TextEmbedding(self._embedding_model)  # type: ignore[name-defined]
         prefix = self._profile["passage_prefix"] or ""
-        gen = self._embedder.embed([prefix + t for t in doc_texts])
+        gen = self._embedder.embed(
+            [prefix + t for t in doc_texts], batch_size=_EMBED_BATCH_SIZE
+        )
         return np.array(list(gen), dtype=np.float32)  # type: ignore[name-defined]
 
     async def rebuild(self, documents: list[dict]) -> None:
