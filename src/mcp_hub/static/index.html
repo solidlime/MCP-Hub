@@ -702,6 +702,56 @@
             outline: none;
         }
 
+        /* Description field on card */
+        .server-description {
+            margin-bottom: 12px;
+        }
+        .desc-input {
+            width: 100%;
+            box-sizing: border-box;
+            resize: vertical;
+            min-height: 44px;
+            padding: 8px 10px;
+            font-size: 0.8rem;
+            line-height: 1.5;
+            font-family: var(--font-sans);
+            color: var(--text-primary);
+            background: var(--bg-input);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            outline: none;
+            transition: border-color var(--transition-fast);
+        }
+        .desc-input:focus {
+            border-color: var(--accent-primary);
+        }
+        .desc-footer {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        .desc-saving {
+            display: none;
+            align-items: center;
+        }
+        .desc-saving.visible {
+            display: inline-flex;
+        }
+        .desc-saving .loading-spinner {
+            width: 10px;
+            height: 10px;
+            border-width: 1.5px;
+        }
+        .desc-counter {
+            font-size: 0.7rem;
+            color: var(--text-muted);
+        }
+        .desc-counter.over-limit {
+            color: var(--accent-red);
+        }
+
         .server-actions {
             display: flex;
             gap: 6px;
@@ -2264,6 +2314,7 @@
             const status = getServerStatus(server);
             const disabled = getServerDisabled(server);
             const tags = getServerTags(server);
+            const description = (server.config && server.config.description) || '';
             const statusLabel = status === 'connected' ? '接続済' : status === 'connecting' ? '接続中' : status === 'error' ? 'エラー' : '不明';
             const cardClasses = [
                 'server-card', 'fade-in',
@@ -2316,6 +2367,17 @@
                         </label>
                         <span class="toggle-label">全フル公開</span>`;
                         })() : ''}
+                    </div>
+
+                    <div class="server-description">
+                        <textarea class="desc-input" rows="2" maxlength="500"
+                                  placeholder="説明を追加（500文字以内）"
+                                  data-server="${escapeAttr(server.name)}"
+                                  aria-label="サーバー ${escapeAttr(server.name)} の説明">${escapeHtml(description)}</textarea>
+                        <div class="desc-footer">
+                            <span class="desc-saving" aria-hidden="true"><span class="loading-spinner"></span></span>
+                            <span class="desc-counter">${description.length}/500</span>
+                        </div>
                     </div>
 
                     ${tags.length > 0 ? `
@@ -2416,6 +2478,10 @@
             const container = document.getElementById('serversList');
             const existingCard = container.querySelector(`[data-server="${CSS.escape(name)}"]`);
             if (!existingCard) return;
+
+            // 入力中（debounce 未確定）の説明欄を再描画で消さない
+            // ponytail: フォーカス中はカード更新を保留する。周期リフレッシュ/他の操作による再描画で追いつく
+            if (existingCard.querySelector('.desc-input') === document.activeElement) return;
 
             const tempDiv = document.createElement('div');
             tempDiv.innerHTML = renderServerCard(server);
@@ -2802,7 +2868,112 @@
             }
         }
 
+        // ============================================================
+        // DESCRIPTION MANAGEMENT (inline on card / debounced autosave)
+        // ============================================================
+        const DESC_MAX_LENGTH = 500;
+        const DESC_SAVE_DEBOUNCE_MS = 600;
+        const descSaveStates = new Map(); // name -> { timer, pending, queued, latest }
+
+        function descriptionState(name) {
+            let state = descSaveStates.get(name);
+            if (!state) {
+                state = { timer: null, pending: false, queued: false, latest: null };
+                descSaveStates.set(name, state);
+            }
+            return state;
+        }
+
+        function setDescriptionSaving(name, saving) {
+            const card = document.querySelector(`#serversList .server-card[data-server="${CSS.escape(name)}"]`);
+            const dot = card && card.querySelector('.desc-saving');
+            if (dot) dot.classList.toggle('visible', saving);
+        }
+
+        function updateDescriptionCounter(input) {
+            const counter = input.closest('.server-description')?.querySelector('.desc-counter');
+            if (!counter) return;
+            counter.textContent = `${input.value.length}/${DESC_MAX_LENGTH}`;
+            counter.classList.toggle('over-limit', input.value.length > DESC_MAX_LENGTH);
+        }
+
+        // maxlength / IME 確定をすり抜けた超過分は 500 字に巻き戻す
+        function readDescriptionInput(input) {
+            let value = input.value.trim();
+            if (value.length > DESC_MAX_LENGTH) {
+                value = value.slice(0, DESC_MAX_LENGTH);
+                input.value = value;
+                showToast(`説明は${DESC_MAX_LENGTH}文字以内で入力してください`, 'error');
+            }
+            updateDescriptionCounter(input);
+            return value;
+        }
+
+        function scheduleDescriptionSave(input) {
+            const name = input.dataset.server;
+            const state = descriptionState(name);
+            clearTimeout(state.timer);
+            state.timer = setTimeout(() => flushDescriptionSave(input), DESC_SAVE_DEBOUNCE_MS);
+            setDescriptionSaving(name, true);
+        }
+
+        // 最新値だけを直列送信する（連続入力/遅い応答でも最後の入力が勝つ）
+        function flushDescriptionSave(input) {
+            const name = input.dataset.server;
+            const state = descriptionState(name);
+            clearTimeout(state.timer);
+            state.timer = null;
+            const value = readDescriptionInput(input);
+            state.latest = value === '' ? null : value; // 空文字は description を削除(null)
+            state.queued = true;
+            if (state.pending) return; // 送信中は最新値に集約してループに任せる
+            state.pending = true;
+            (async () => {
+                while (state.queued) {
+                    state.queued = false;
+                    const next = state.latest;
+                    const server = servers.find(s => s.name === name);
+                    if (!server || (server.config.description || null) === next) continue;
+                    try {
+                        await API.patchServer(name, { description: next });
+                        server.config.description = next || '';
+                        syncDescriptionCard(name, next || '');
+                    } catch (error) {
+                        // 422 等は API 応答のメッセージをそのまま表示（入力値は残す）
+                        showToast(error.message, 'error');
+                    }
+                }
+                state.pending = false;
+                if (!state.timer) setDescriptionSaving(name, false);
+            })();
+        }
+
+        // 再描画を挟んで表示が古いまま残ったときの同期（入力中は触らない）
+        function syncDescriptionCard(name, value) {
+            const card = document.querySelector(`#serversList .server-card[data-server="${CSS.escape(name)}"]`);
+            const input = card && card.querySelector('.desc-input');
+            if (!input || document.activeElement === input || input.value === value) return;
+            input.value = value;
+            updateDescriptionCounter(input);
+        }
+
         // Delegated actions (FIX-3b: no inline handlers with name interpolation; dataset carries raw values)
+        document.addEventListener('input', (e) => {
+            const input = e.target.closest('#serversList .desc-input');
+            if (!input) return;
+            updateDescriptionCounter(input);
+            if (e.isComposing) return; // IME 変換中は確定後にまとめて保存
+            scheduleDescriptionSave(input);
+        });
+        // IME 確定・フォーカス移動（タグ編集ボタン押下等）で保留中の debounce を flush
+        document.addEventListener('compositionend', (e) => {
+            const input = e.target.closest('#serversList .desc-input');
+            if (input) flushDescriptionSave(input);
+        });
+        document.addEventListener('focusout', (e) => {
+            const input = e.target.closest('#serversList .desc-input');
+            if (input) flushDescriptionSave(input); // 未変更なら内部で skip される
+        });
         document.addEventListener('click', (e) => {
             const tagChip = e.target.closest('#tagFilterBar [data-action="toggle-tag-filter"]');
             if (tagChip) { toggleTagFilter(tagChip.dataset.tag); return; }
