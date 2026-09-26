@@ -396,12 +396,24 @@ class TestMetaIntegration:
         assert r.status_code != 404
 
     def test_mcp_meta_has_expected_tools(self, client):
-        """Meta app exposes 2 tools: search_tools, execute_tool."""
+        """Meta app exposes 3 tools: search_tools, execute_tool, get_schema."""
         parsed = _post_tools_list(client)
         tools = parsed["result"]["tools"]
-        assert len(tools) == 2
+        assert len(tools) == 3
         names = {t["name"] for t in tools}
-        assert names == {"search_tools", "execute_tool"}
+        assert names == {"search_tools", "execute_tool", "get_schema"}
+
+    def test_get_schema_tool_returns_full_schema(self, client):
+        """get_schema は完全な inputSchema（パラメータ型付き）を返す。"""
+        parsed = _call_tool(
+            client,
+            "get_schema",
+            {"server": "filesystem", "tool_name": "file_read"},
+            "gs-endpoint",
+        )
+        data = json.loads(_get_text_content(parsed))
+        assert data["name"] == "file_read"
+        assert data["inputSchema"]["properties"]["path"]["type"] == "string"
 
     def test_search_tools_returns_results(self, client):
         """search_tools with a query returns a JSON response with result list."""
@@ -795,3 +807,295 @@ class TestCatalogBaking:
         second = await self._desc(m)
         assert first == second
         assert second.count(base) == 1
+
+
+# ── ②④ search_tools 圧縮 / get_schema（設計 02-04 §5）────────────────────────
+
+
+def _rich_schema() -> dict:
+    """圧縮契約の検証用 schema。短/長の enum・default と深いネストを持つ。
+
+    呼ぶたびに新しい dict を返す（非破壊テストで元 dict と比較するため）。
+    """
+    return {
+        "type": "object",
+        "required": ["mode"],
+        "properties": {
+            "mode": {
+                "type": "string",
+                "enum": ["a", "b", "c"],
+                "description": "short enum " + "m" * 150,
+            },
+            "many_enum": {
+                "type": "string",
+                "enum": [f"e{i}" for i in range(6)],
+                "description": "too many enum values " + "n" * 150,
+            },
+            "wide_enum": {
+                "type": "string",
+                "enum": ["x" * 30, "y" * 30, "z" * 30],
+                "description": "long enum values " + "w" * 150,
+            },
+            "count": {
+                "type": "integer",
+                "default": 7,
+                "description": "short numeric default " + "c" * 150,
+            },
+            "flag": {
+                "type": "boolean",
+                "default": True,
+                "description": "short bool default " + "f" * 150,
+            },
+            "label": {
+                "type": "string",
+                "default": "ok",
+                "description": "short string default " + "l" * 150,
+            },
+            "custom": {
+                "type": "string",
+                "default": "d" * 50,
+                "description": "long default " + "p" * 150,
+            },
+            "options": {
+                "type": "object",
+                "description": "nested object " + "o" * 150,
+                "properties": {"inner": {"type": "string", "description": "inner"}},
+            },
+            "tags": {
+                "type": "array",
+                "description": "array " + "t" * 150,
+                "items": {"type": "string", "description": "d", "enum": ["p", "q"]},
+            },
+        },
+    }
+
+
+def _big_schema(n: int = 20) -> dict:
+    """応答サイズ回帰用: パラメータ数が多く、各々長い説明を持つ schema。"""
+    return {
+        "type": "object",
+        "properties": {
+            f"param_{i}": {"type": "string", "description": "d" * 200}
+            for i in range(n)
+        },
+    }
+
+
+async def _app_from(servers: dict):
+    """{server: [tools]} から埋め込み無しの meta app を構築して返す。"""
+    pm = _build_mock_proxy_manager()
+    for name, tools in servers.items():
+        pm._proxies[name] = _build_mock_proxy(tools)
+    app = await create_meta_app(pm, use_embeddings=False)
+    await app.rebuild_index()
+    return pm, app
+
+
+class TestCompactSchemaContract:
+    """② search_tools の inputSchema は名前/型/必須へ圧縮され、完全な仕様は
+    get_schema に逃がす（設計 02-04 §5）。"""
+
+    async def test_inputschema_compaction_contract(self):
+        schema = _rich_schema()
+        _pm, app = await _app_from(
+            {
+                "srv": [
+                    SimpleNamespace(
+                        name="rich_tool", description="Rich tool", parameters=schema
+                    )
+                ]
+            }
+        )
+
+        data = json.loads(await app.meta_tools.search_tools("rich_tool", top_k=5))
+        result = next(r for r in data["results"] if r["name"] == "rich_tool")
+        compact = result["inputSchema"]
+
+        # type / required は保持される
+        assert compact["type"] == "object"
+        assert compact["required"] == ["mode"]
+
+        props = compact["properties"]
+        assert set(props) == set(schema["properties"])
+        # 各 property は type を持ち、description を持たない
+        for name, prop in props.items():
+            assert "type" in prop, name
+            assert "description" not in prop, name
+
+        # 短い enum は残り、長い enum（個数 or 連結長）は落ちる
+        assert props["mode"]["enum"] == ["a", "b", "c"]
+        assert "enum" not in props["many_enum"]
+        assert "enum" not in props["wide_enum"]
+
+        # 短い default（数値・真偽・40 字以下の文字列）は残り、長いものは落ちる
+        assert props["count"]["default"] == 7
+        assert props["flag"]["default"] is True
+        assert props["label"]["default"] == "ok"
+        assert "default" not in props["custom"]
+
+        # 深いネストは {"type": ...} に畳まれる
+        assert props["options"] == {"type": "object"}
+        assert props["tags"]["items"] == {"type": "string"}
+
+
+class TestSearchToolsNonDestructive:
+    """search_tools の圧縮は応答コピーに限定し、索引 doc を汚染しない。"""
+
+    async def test_search_tools_does_not_mutate_index(self):
+        tool = SimpleNamespace(
+            name="rich_tool", description="Rich tool", parameters=_rich_schema()
+        )
+        _pm, app = await _app_from({"srv": [tool]})
+
+        first = await app.meta_tools.search_tools("rich_tool", top_k=5)
+
+        # 索引 doc / live ツールの schema は完全形のまま
+        full = app.index.get_schema("srv", "rich_tool")
+        assert full is not None
+        assert full["inputSchema"]["properties"]["mode"]["description"].startswith(
+            "short enum"
+        )
+        assert (
+            full["inputSchema"]["properties"]["options"]["properties"]["inner"]["type"]
+            == "string"
+        )
+        assert "description" in tool.parameters["properties"]["mode"]
+
+        # 同じツールを 2 回検索しても結果は一致する
+        second = await app.meta_tools.search_tools("rich_tool", top_k=5)
+        assert first == second
+
+
+class TestGetSchemaTool:
+    """③ get_schema ツール: 完全な仕様を返し、未知/範囲外は not found。"""
+
+    async def test_returns_full_schema_and_untruncated_description(self):
+        long_desc = "q" * 700
+        _pm, app = await _app_from(
+            {
+                "big": [
+                    SimpleNamespace(
+                        name="big_tool",
+                        description=long_desc,
+                        parameters=_rich_schema(),
+                    )
+                ]
+            }
+        )
+
+        data = json.loads(await app.meta_tools.get_schema("big", "big_tool"))
+        assert data["name"] == "big_tool"
+        # full_description（切り詰めなし）— 表示用 description は 600 字 + "…"
+        assert data["description"] == long_desc
+        assert "…" not in data["description"]
+        # 完全な inputSchema（param の description 付き）
+        assert data["inputSchema"]["properties"]["mode"]["description"].startswith(
+            "short enum"
+        )
+
+    async def test_unknown_and_empty_args_return_not_found(self):
+        _pm, app = await _app_from(
+            {
+                "filesystem": [
+                    SimpleNamespace(
+                        name="file_read",
+                        description="Read",
+                        parameters={"type": "object"},
+                    )
+                ]
+            }
+        )
+        mt = app.meta_tools
+        for server, tool_name in [
+            ("filesystem", "nope"),
+            ("nope", "file_read"),
+            ("", "file_read"),
+            ("filesystem", ""),
+        ]:
+            data = json.loads(await mt.get_schema(server, tool_name))
+            assert data["message"] == "Tool not found", (server, tool_name)
+
+    async def test_tag_filtered_server_returns_not_found(self):
+        pm, app = await _app_from(
+            {
+                "filesystem": [
+                    SimpleNamespace(
+                        name="file_read",
+                        description="Read",
+                        parameters={"type": "object"},
+                    )
+                ]
+            }
+        )
+        pm.server_tags.side_effect = lambda name: {"filesystem": ["dev"]}.get(name, [])
+        request_tags.set(["librarian"])
+        try:
+            data = json.loads(await app.meta_tools.get_schema("filesystem", "file_read"))
+        finally:
+            request_tags.set(None)
+        assert data["message"] == "Tool not found"
+
+    async def test_server_name_resolved_case_insensitively(self):
+        _pm, app = await _app_from(
+            {
+                "filesystem": [
+                    SimpleNamespace(
+                        name="file_read",
+                        description="Read",
+                        parameters={"type": "object"},
+                    )
+                ]
+            }
+        )
+        data = json.loads(await app.meta_tools.get_schema("FileSystem", "file_read"))
+        assert data["name"] == "file_read"
+        assert data["inputSchema"] == {"type": "object"}
+
+
+class TestSearchResponseSize:
+    """④ 多数パラメータのツールでも圧縮後の応答が生 schema より十分小さい。"""
+
+    async def test_compaction_shrinks_schema_and_response(self):
+        from mcp_hub.meta_provider import _compact_input_schema
+
+        big = _big_schema()
+        raw_size = len(json.dumps(big, ensure_ascii=False))
+        compact_size = len(json.dumps(_compact_input_schema(big), ensure_ascii=False))
+        assert compact_size < raw_size * 0.5
+
+        _pm, app = await _app_from(
+            {
+                "big": [
+                    SimpleNamespace(
+                        name="big_tool",
+                        description="Big tool",
+                        parameters=_big_schema(),
+                    )
+                ]
+            }
+        )
+        out = await app.meta_tools.search_tools("big_tool", top_k=5)
+        assert len(out) < raw_size * 0.5
+
+
+class TestSearchNoteFlag:
+    """⑤ note は成功応答には付き、0 件応答には付かない。"""
+
+    async def test_note_present_on_success_absent_on_zero_results(self):
+        _pm, app = await _app_from(
+            {
+                "srv": [
+                    SimpleNamespace(
+                        name="rich_tool",
+                        description="Rich",
+                        parameters={"type": "object"},
+                    )
+                ]
+            }
+        )
+        ok = json.loads(await app.meta_tools.search_tools("rich_tool", top_k=5))
+        assert "note" in ok
+
+        empty = json.loads(await app.meta_tools.search_tools("zzzznope", top_k=5))
+        assert "message" in empty
+        assert "note" not in empty
