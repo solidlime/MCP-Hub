@@ -67,6 +67,28 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
 | `search_tools(query, top_k=10)` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。結果に `tags`（サーバータグ配列）を含む。`top_k` は最大 50 にクランプされる（巨大な値を渡しても返り値が肥大しない） |
 | `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行。互換のため `{"arguments": {...}}` に `server` / `tool_name` / `arguments` を折り畳んだ形式（LLM が生成しがちなフラット呼び出し）も受け付ける。サーバー名の大文字小文字は case-insensitive に解決される |
 
+##### `search_tools` のレスポンス形式
+
+```json
+{
+  "results": [
+    {
+      "server": "filesystem",
+      "name": "read_file",
+      "description": "Read a file's contents",
+      "tags": ["local"],
+      "inputSchema": { "type": "object", "properties": {} },
+      "score": 1.2345
+    }
+  ],
+  "servers": { "filesystem": "ローカルファイル操作" }
+}
+```
+
+- `results[].description` は**表示用のツール説明**（サーバー説明の前置なし）。`_DISPLAY_DESC_CHARS = 600` 字で切り詰め、切った時だけ末尾に `"…"` を付ける。
+- `servers` は**結果に現れたサーバーのみ**を対象にした `{server_name: server_description}` マップ（未ヒットのサーバーは含まない）。表示 `description` からサーバー前置を外した代わりに、LLM がサーバー文脈を得る経路。
+- 検索（BM25 トークン・埋め込み）が使う**索引テキスト**は別物で、`サーバー説明 + ツール説明（_INDEX_DESC_CHARS = 400 字上限）` を前置付きで持つ（結果には出さない）。
+
 `search_tools` が 0 件を返す場合、`{"message": "No matching tools found", "hint": ...}` を返します。`X-MCP-Hub-Tags` によるタグフィルタで全件除外された場合は、`hint` に「タグフィルタ ... により全件除外された可能性」を含めます（0 件ヒットの主因。additive で既存キーは不変）。
 
 #### フル公開ツール（`full_info_tools`）
@@ -74,7 +96,7 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
 meta_mode 有効時でも、`full_info_tools` に指定したツールは通常ツールとして `tools/list` にフル公開され、`tools/call` で直接呼び出すことができます（`execute_tool` を経由しません）。指定形式は `"{server}_{tool}"`（例: `"fetch_fetch"`）。
 
 - フル公開ツールの呼び出しはタグフィルタリングの対象外（意図的仕様。`execute_tool` のタグ拒否もバイパスされます）
-- ツール定義（description / inputSchema）は `ToolIndex` の検索インデックスから取得されるため、対象サーバーが接続中である必要があります
+- ツール定義（description / inputSchema）は `ToolIndex` の検索インデックスから取得されるため、対象サーバーが接続中である必要があります。description は表示用の切り詰めをしない**フル説明**（`get_schema` が返す `full_description`）です
 - 設定は管理 API の `PATCH /settings` または `hub.config.json` の `full_info_tools` で変更できます（Web UI のツール行 / サーバーカードの「フル公開」トグルからも操作可能）
 
 ---

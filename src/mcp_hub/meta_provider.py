@@ -81,6 +81,11 @@ _DEFAULT_EMBED_CACHE_DIR = os.path.join(
 # 埋め込みコストも増やす。400 字で切るとサーバー説明（日本語）が効く。
 _INDEX_DESC_CHARS = 400
 
+# search_tools / get_schema が表示するツール説明の上限（索引テキストとは別物）。
+# 索引は 400 字で切るが、表示は LLM に渡すリッチな情報なので長め。切り詰めた
+# 時だけ末尾に "…" を付けて省略を明示する。
+_DISPLAY_DESC_CHARS = 600
+
 # search() の 1 回で返す最大件数。LLM が巨大な top_k を渡すと schema 込みの
 # 結果 JSON が無制限に肥大しコンテキストを浪費するため、ここで頭打ちにする。
 # 75 件列挙のような正当な全量取得はほぼ許す上限として 50。
@@ -520,7 +525,7 @@ class ToolIndex:
         # Core fields with explicit weights
         _add(doc["name"], copies=5)  # Tool name: ×5
         _add(doc["server"], copies=3)  # Server name: ×3
-        _add(doc.get("description", ""), copies=2)  # Description: ×2
+        _add(doc.get("index_text") or doc.get("description", ""), copies=2)  # Description: ×2
         for tag in doc.get("tags", []):  # サーバータグ: ×2（説明と同重み）
             _add(tag, copies=2)
 
@@ -666,12 +671,18 @@ class ToolIndex:
 
     @staticmethod
     def _corpus_hash_of(documents: list[dict]) -> str:
-        """コーパス同定用ハッシュ（server/name/description/tags/inputSchema 正規化 JSON）。"""
+        """コーパス同定用ハッシュ（server/name/index_text/full_description/tags/inputSchema 正規化 JSON）。"""
         key = [
             {
                 "server": d.get("server"),
                 "name": d.get("name"),
-                "description": d.get("description", ""),
+                # 検索に効くのは index_text（無ければ description にフォールバック）。
+                "index_text": d.get("index_text") or d.get("description", ""),
+                # full_description（raw 全体）も含める: index_text は raw[:400] に
+                # 切り詰められるため、400 字以降だけの編集（表示 description の
+                # 400-600 帯 / full_description の 600+ 帯）がハッシュに出ず
+                # short-circuit して古い文面を serving する穴があった。
+                "full_description": d.get("full_description", ""),
                 "tags": d.get("tags", []),
                 "inputSchema": d.get("inputSchema", {}),
             }
@@ -683,17 +694,21 @@ class ToolIndex:
     async def rebuild(self, documents: list[dict]) -> None:
         """Rebuild index from pre-built tool documents.
 
-        Each document: {server, name, description, inputSchema}.
-        Caller is responsible for building the document list. The index text
-        uses ``description``, which callers may build as
+        Each document: {server, name, description, index_text, full_description,
+        inputSchema}. Caller is responsible for building the document list. The
+        index text uses ``index_text`` when present (callers build it as
         ``サーバー説明 + ツール説明（_INDEX_DESC_CHARS 上限）`` so server-level
-        (often Japanese) context enters both BM25 and embedding retrieval.
+        (often Japanese) context enters both BM25 and embedding retrieval) and
+        falls back to ``description`` otherwise. ``description`` is the display
+        string; ``full_description`` is the untruncated raw tool description
+        (``get_schema``).
 
         When fastembed is available, also computes dense embeddings
         for semantic search. Falls back to BM25 otherwise.
 
-        A2: コーパス（server/name/description/tags/inputSchema の正規化 JSON）と
-       埋め込み設定が前回と同一なら全体を short-circuit する（BM25 索引も埋め込みも
+        A2: コーパス（server/name/index_text/full_description/tags/inputSchema
+        の正規化 JSON）と埋め込み設定が前回と同一なら全体を short-circuit する
+        （BM25 索引も埋め込みも
         作り直さない）。差分がある時は A1 のディスクキャッシュ経由で変わった
         文書だけを埋め込む。
         """
@@ -743,7 +758,7 @@ class ToolIndex:
                 try:
                     # タグ無しでも括弧付きで均一フォーマット（埋め込みの決定性を担保）
                     doc_texts = [
-                        f"{d['server']}/{d['name']} [{', '.join(d.get('tags', []))}]: {d.get('description', '')}"
+                        f"{d['server']}/{d['name']} [{', '.join(d.get('tags', []))}]: {d.get('index_text') or d.get('description', '')}"
                         for d in documents
                     ]
                     # Run CPU-bound embedding in a thread; event loop stays responsive.
@@ -804,7 +819,7 @@ class ToolIndex:
 
         Japanese: the tokenizer emits CJK bigrams+unigrams and the default
         embedder is multilingual, so Japanese queries hit lexically and/or
-        semantically. The indexed ``description`` may carry the server
+        semantically. The indexed ``index_text`` may carry the server
         description prefix + a truncated tool description (_INDEX_DESC_CHARS),
         which raises Japanese hit rates.
 
@@ -1008,7 +1023,7 @@ class ToolIndex:
             if doc["server"] == server and doc["name"] == tool_name:
                 return {
                     "name": doc["name"],
-                    "description": doc.get("description", ""),
+                    "description": doc.get("full_description") or doc.get("description", ""),
                     "server": server,
                     "inputSchema": doc.get("inputSchema", {}),
                 }
@@ -1036,10 +1051,12 @@ class MetaTools:
         get_server_tags: Callable[[str], list[str]] | None = None,
         list_server_tools_fn: Callable[[str], Awaitable[list]] | None = None,
         list_servers_fn: Callable[[], list[str]] | None = None,
+        get_server_description: Callable[[str], str] | None = None,
     ):
         self._index = tool_index
         self._execute_tool = execute_tool_fn
         self._get_server_tags = get_server_tags or (lambda _: [])
+        self._get_server_description = get_server_description or (lambda _: "")
 
         async def _noop_server(name: str) -> list:
             return []
@@ -1116,7 +1133,15 @@ class MetaTools:
                 },
                 ensure_ascii=False,
             )
-        return json.dumps({"results": results}, ensure_ascii=False)
+        # 結果に現れたサーバーの一行説明をトップレベルに添える（表示 description から
+        # サーバー前置を外したため、LLM がサーバー文脈を得る経路をここに移す）。
+        servers: dict[str, str] = {}
+        for r in results:
+            srv = r["server"]
+            if srv not in servers:
+                desc = self._get_server_description(srv)
+                servers[srv] = desc if isinstance(desc, str) else ""
+        return json.dumps({"results": results, "servers": servers}, ensure_ascii=False)
 
     async def execute_tool(
         self,
@@ -1279,15 +1304,22 @@ async def create_meta_app(
                 else:
                     tools = await asyncio.wait_for(proxy.list_tools(), timeout=30.0)
                 for t in tools:
-                    tool_desc = (t.description or "").strip()[:_INDEX_DESC_CHARS]
-                    description = (
-                        f"{srv_desc} {tool_desc}".strip() if srv_desc else tool_desc
-                    )
+                    raw_desc = (t.description or "").strip()
+                    # 索引テキスト: サーバー説明（日本語）を前置し、ツール説明は
+                    # _INDEX_DESC_CHARS で切る。BM25 トークンと埋め込みはこれから作る。
+                    index_text = f"{srv_desc} {raw_desc[:_INDEX_DESC_CHARS]}".strip()
+                    # 表示用: サーバー前置なし。切り詰めた時だけ "…" を付ける。
+                    if len(raw_desc) > _DISPLAY_DESC_CHARS:
+                        display_desc = raw_desc[:_DISPLAY_DESC_CHARS] + "…"
+                    else:
+                        display_desc = raw_desc
                     all_tools.append(
                         {
                             "server": server_name,
                             "name": t.name,
-                            "description": description,
+                            "description": display_desc,
+                            "index_text": index_text,
+                            "full_description": raw_desc,
                             "tags": list(proxy_manager.server_tags(server_name)),
                             "inputSchema": getattr(t, "parameters", {}),
                         }
@@ -1321,6 +1353,13 @@ async def create_meta_app(
             return []
         return await proxy_manager.list_tools_for_server(server_name, proxy)
 
+    def _server_description(name: str) -> str:
+        fn = getattr(proxy_manager, "server_description", None)
+        if not callable(fn):
+            return ""
+        desc = fn(name)
+        return desc if isinstance(desc, str) else ""
+
     meta = MetaTools(
         tool_index=index,
         execute_tool_fn=lambda s, t, a: proxy_manager.call_tool(s, t, a),
@@ -1328,6 +1367,8 @@ async def create_meta_app(
         list_server_tools_fn=_list_server_tools,
         # live 接続名（index の遅延に左右されない）— case-insensitive 解決用
         list_servers_fn=lambda: list(proxy_manager.get_connected_servers()),
+        # 結果に現れるサーバーの一行説明（search_tools の servers マップ用）
+        get_server_description=_server_description,
     )
 
     # Register meta tools via FastMCP tool decorator

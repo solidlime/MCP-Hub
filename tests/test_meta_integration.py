@@ -196,11 +196,11 @@ def _get_text_content(result: dict) -> str:
 # ── tests ─────────────────────────────────────────────────────────────────────
 
 
-async def test_index_description_prefixes_server_description():
-    """索引 description = サーバー説明 + ツール説明（400字上限）。
+async def test_index_text_keeps_server_prefix_display_drops_it():
+    """索引テキストはサーバー説明を前置し _INDEX_DESC_CHARS で切る。
 
-    サーバー説明（日本語）を前置し、ツール説明は _INDEX_DESC_CHARS で切る。
-    サーバー説明が無いサーバーは素のツール説明のまま（前置なし）。
+    表示 description は前置なし・_DISPLAY_DESC_CHARS 上限。full_description は
+    無制限。サーバー説明が無いサーバーは索引テキストも素のツール説明のまま。
     """
     from mcp_hub.meta_provider import _INDEX_DESC_CHARS
 
@@ -236,14 +236,153 @@ async def test_index_description_prefixes_server_description():
     app = await create_meta_app(pm, use_embeddings=False)
     await app.rebuild_index()
 
-    docs = {d["name"]: d["description"] for d in app.index._documents}
-    # サーバー説明を前置し、ツール説明は strip される
-    assert docs["file_read"] == "ローカルファイル操作 Read file contents from disk"
-    # ツール説明は 400 字で切る
-    assert docs["fetch_url"] == "Web 取得 " + "y" * _INDEX_DESC_CHARS
-    assert len(docs["fetch_url"]) == len("Web 取得 ") + _INDEX_DESC_CHARS
-    # サーバー説明なし → 前置なし・余分な空白なし
-    assert docs["brave_web_search"] == "Brave web search"
+    docs = {d["name"]: d for d in app.index._documents}
+    # 索引テキスト: サーバー説明を前置し、ツール説明は strip + 400 字で切る
+    assert (
+        docs["file_read"]["index_text"]
+        == "ローカルファイル操作 Read file contents from disk"
+    )
+    assert docs["fetch_url"]["index_text"] == "Web 取得 " + "y" * _INDEX_DESC_CHARS
+    # サーバー説明なし → 索引テキストも前置なし・余分な空白なし
+    assert docs["brave_web_search"]["index_text"] == "Brave web search"
+    # 表示 description: サーバー前置なし
+    assert docs["file_read"]["description"] == "Read file contents from disk"
+    assert docs["brave_web_search"]["description"] == "Brave web search"
+    # 600 字以下は切り詰めなし（"…" を付けない）
+    assert docs["fetch_url"]["description"] == "y" * 500
+    # full_description は無制限
+    assert docs["file_read"]["full_description"] == "Read file contents from disk"
+    assert docs["fetch_url"]["full_description"] == "y" * 500
+
+
+async def test_display_description_truncates_with_ellipsis():
+    """600 字超の表示 description は "…" 付きで切る。索引は 400 字、full は無制限。"""
+    from mcp_hub.meta_provider import _DISPLAY_DESC_CHARS, _INDEX_DESC_CHARS
+
+    pm = _build_mock_proxy_manager()
+    long = "z" * 700
+    pm._proxies["big"] = _build_mock_proxy(
+        [SimpleNamespace(name="big_tool", description=long, parameters={})]
+    )
+
+    app = await create_meta_app(pm, use_embeddings=False)
+    await app.rebuild_index()
+
+    doc = next(d for d in app.index._documents if d["name"] == "big_tool")
+    assert doc["description"] == "z" * _DISPLAY_DESC_CHARS + "…"
+    assert doc["index_text"] == "z" * _INDEX_DESC_CHARS
+    assert doc["full_description"] == long
+
+
+async def test_get_schema_returns_full_description():
+    """get_schema は表示用に切られない full_description を返す。"""
+    pm = _build_mock_proxy_manager()
+    long = "q" * 700
+    pm._proxies["big"] = _build_mock_proxy(
+        [
+            SimpleNamespace(
+                name="big_tool", description=long, parameters={"type": "object"}
+            )
+        ]
+    )
+
+    app = await create_meta_app(pm, use_embeddings=False)
+    await app.rebuild_index()
+
+    schema = app.index.get_schema("big", "big_tool")
+    assert schema is not None
+    assert schema["description"] == long
+
+
+async def test_search_tools_servers_map_lists_only_result_servers():
+    """search_tools の servers は結果に現れたサーバーだけを（説明付きで）含む。"""
+    pm = _build_mock_proxy_manager()
+    pm.server_description = MagicMock(
+        side_effect=lambda s: {
+            "filesystem": "ローカル FS",
+            "fetch": "Web 取得",
+        }.get(s, "")
+    )
+    pm._proxies["filesystem"] = _build_mock_proxy(
+        [SimpleNamespace(name="file_read", description="Read files", parameters={})]
+    )
+    pm._proxies["fetch"] = _build_mock_proxy(
+        [SimpleNamespace(name="fetch_url", description="Fetch a URL", parameters={})]
+    )
+
+    app = await create_meta_app(pm, use_embeddings=False)
+    await app.rebuild_index()
+
+    data = json.loads(await app.meta_tools.search_tools("file", top_k=5))
+    assert {r["server"] for r in data["results"]} == {"filesystem"}
+    # 結果に出たサーバーのみ。未ヒットの fetch は含めない。
+    assert data["servers"] == {"filesystem": "ローカル FS"}
+
+
+async def test_rebuild_reflects_full_description_change():
+    """回帰(#003): index_text 不変でも full_description の変更は rebuild に反映される。
+
+    raw 説明の 600 字以降だけを v1→v2 に変える ⇒ index_text（raw[:400]）も
+    表示 description（raw[:600]+"…"）も不変。旧ハッシュは index_text のみを
+    対象にしていたため short-circuit し、get_schema が古い full_description を
+    serving し続けた。ハッシュ key に full_description を含めて修正。
+    """
+    pm = _build_mock_proxy_manager()
+    base = "x" * 650
+    pm._proxies["docs"] = _build_mock_proxy(
+        [SimpleNamespace(name="doc_tool", description=base + "FULL-v1", parameters={})]
+    )
+
+    app = await create_meta_app(pm, use_embeddings=False)
+    await app.rebuild_index()
+    assert app.index.get_schema("docs", "doc_tool")["description"] == base + "FULL-v1"
+
+    pm._proxies["docs"].list_tools = AsyncMock(
+        return_value=[
+            SimpleNamespace(name="doc_tool", description=base + "FULL-v2", parameters={})
+        ]
+    )
+    await app.rebuild_index()
+
+    assert app.index.get_schema("docs", "doc_tool")["description"] == base + "FULL-v2"
+
+
+async def test_rebuild_reflects_display_description_change():
+    """回帰(#003): index_text 不変でも表示 description の変更は search 結果に反映される。
+
+    raw 説明の 400 字以降だけを変える ⇒ index_text（raw[:400]）は不変だが
+    表示 description は変化する。旧ハッシュは index_text のみ対象だったため
+    short-circuit し、search 結果が古い文面を返し続けた。
+    """
+    pm = _build_mock_proxy_manager()
+    base = "y" * 400
+    pm._proxies["docs"] = _build_mock_proxy(
+        [
+            SimpleNamespace(
+                name="disp_tool", description=base + "DISPLAY-v1", parameters={}
+            )
+        ]
+    )
+
+    app = await create_meta_app(pm, use_embeddings=False)
+    await app.rebuild_index()
+
+    async def _search_desc() -> str:
+        data = json.loads(await app.meta_tools.search_tools("disp_tool", top_k=5))
+        return next(r for r in data["results"] if r["name"] == "disp_tool")["description"]
+
+    assert await _search_desc() == base + "DISPLAY-v1"
+
+    pm._proxies["docs"].list_tools = AsyncMock(
+        return_value=[
+            SimpleNamespace(
+                name="disp_tool", description=base + "DISPLAY-v2", parameters={}
+            )
+        ]
+    )
+    await app.rebuild_index()
+
+    assert await _search_desc() == base + "DISPLAY-v2"
 
 
 class TestMetaIntegration:

@@ -233,7 +233,7 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
   - モデル: `cl-nagoya/ruri-v3-30m`（日本語特化・256dim。設定で変更可能。未知のモデル名指定時はデフォルトにフォールバック）
   - 経路はモデル名で選ぶ（`embedders.create_embedder`）: fastembed 登録モデルは `TextEmbedding`、ModernBERT 系（ruri-v3）は ONNX Runtime 直叩き（`OrtEmbedder`。`snapshot_download` → `tokenizers` → `onnxruntime`、mean pooling + L2 正規化）。どちらも `embed(texts, batch_size=...)` で互換
   - プレフィックス: モデルプロファイル（`model_profile()`、大小文字非依存）で一元管理する。`cl-nagoya/ruri-v3-30m` はクエリ `"検索クエリ: "` / 文書 `"検索文書: "`、`intfloat/` 配下で名前に `e5` を含むモデルは `"query: "` / `"passage: "`。それ以外のモデルには付与しない
-  - ドキュメント: `"{server}/{name} [{tags}]: {description}"` 形式で埋め込み
+  - ドキュメント: `"{server}/{name} [{tags}]: {index_text}"` 形式で埋め込み。`index_text` は `サーバー説明（日本語） + ツール説明（_INDEX_DESC_CHARS = 400 字上限）`（サーバー前置付き）
   - 埋め込みキャッシュ: 文書単位でディスクに npz 保存（キーは文書テキストの `sha1[:16]`、ファイル名は `sha1("{model}|{dim}|{passage_prefix}|{TEXT_FMT_VERSION}")[:16].npz`）。置き場は `MCP_HUB_EMBED_CACHE_DIR` → 既定 `~/.cache/mcp-hub/embeddings/`。書き込みは tmp + `os.replace` で atomic。壊れた/次元不一致の npz は黙って再計算する。rebuild は不足行だけを embed する（`_embed_with_cache`）
   - 実効状態: `embedding_status` プロパティが `active`/`building`/`inactive:*`/`error:*` を返す（設定意図でなく真実。`use_embeddings` プロパティは実効値のまま）
   - セマンティック候補の下限（semantic floor）もモデルプロファイル単位で持つ（明示プロファイル `intfloat/multilingual-e5-small` = 0.75、`cl-nagoya/ruri-v3-30m` / E5 ファミリ既定 / 未定義モデル = 0.30）。E5 のコサインは 0.70〜0.85 の狭い帯に集中し、この床は「明らかなゴミ」を落とすだけで関連/無関係の分離は担わない（分離は RRF の順位が担う）
@@ -249,7 +249,8 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
 - サーバー追加・削除・更新時に `on_change` コールバック経由でトリガー
 - 起動時のカスケード接続は 500ms のデバウンスで統合
 - 全接続サーバーを走査し、ツール定義を収集後 ToolIndex に投入
-- **同一コーパス short-circuit**: コーパス（`server`+`name`+`description`+`tags`+`inputSchema` の正規化 JSON）と埋め込み設定（実効 ON/OFF・モデル・prefix）が前回と同一なら `ToolIndex.rebuild` 全体を省略する（BM25 索引も埋め込みも作り直さない）。NAS の弱 CPU で接続イベントごとに全件再 embed → CPU 張り付き／検索が黙って BM25 に劣化する問題を解消
+- **索引テキストと表示の分離（契約）**: 各ツールは 3 つの説明を持つ — `index_text`（`サーバー説明 + ツール説明[:_INDEX_DESC_CHARS]`。BM25 トークン・埋め込みはこれから作る）、`description`（表示用。サーバー前置なしの `ツール説明[:_DISPLAY_DESC_CHARS]`、切り詰め時のみ末尾 `"…"`）、`full_description`（無制限。`get_schema` / フル公開ツール定義用）。`search_tools` 結果は `description` を返し、結果に出たサーバーの一行説明を top-level `servers` マップで補う
+- **同一コーパス short-circuit**: コーパス（`server`+`name`+`index_text`+`full_description`+`tags`+`inputSchema` の正規化 JSON）と埋め込み設定（実効 ON/OFF・モデル・prefix）が前回と同一なら `ToolIndex.rebuild` 全体を省略する（BM25 索引も埋め込みも作り直さない）。NAS の弱 CPU で接続イベントごとに全件再 embed → CPU 張り付き／検索が黙って BM25 に劣化する問題を解消
 - 差分時は変わった文書だけを A1 のディスクキャッシュ経由で埋め込む
 - embed 失敗時は従来通り恒久降格（`_use_embeddings=False`）するが、理由を `embedding_status` に残す。コーパスが変わった時だけ一度再試行（不変コーパスでの毎回リトライはしない）
 
