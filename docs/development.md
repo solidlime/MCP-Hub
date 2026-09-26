@@ -28,7 +28,10 @@ pip install -e .
 | `uvicorn[standard]` | `>=0.30.0` | ✅ | ASGI サーバー |
 | `rank_bm25` | `>=0.2.2` | ✅ | BM25 キーワード検索 |
 | `packaging` | `>=24` | ✅ | バージョン比較ユーティリティ |
-| `fastembed` | `>=0.4.0` | ❌（任意） | セマンティック検索用埋め込みモデル |
+| `fastembed` | `>=0.4.0` | ❌（任意） | セマンティック検索の埋め込みエンジン（登録モデル用。ORT 経路のモデルでも能力ゲートとして必要） |
+| `onnxruntime` | `>=1.17` | ❌（任意） | ONNX Runtime 直叩きの埋め込み（既定 `cl-nagoya/ruri-v3-30m`） |
+| `tokenizers` | `>=0.15` | ❌（任意） | ruri のトークナイザ（tokenizer.json） |
+| `huggingface_hub` | `>=0.23` | ❌（任意） | ONNX/ トークナイザの取得（`snapshot_download`） |
 
 **開発ツール：**
 

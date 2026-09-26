@@ -571,8 +571,11 @@ class TestResolveEmbeddingModel:
 
 
 def test_default_embedding_model_is_supported():
-    """デフォルト埋め込みモデルは多言語対応の軽量モデル（日本語クエリ修正）。"""
-    assert DEFAULT_EMBEDDING_MODEL == "intfloat/multilingual-e5-small"
+    """デフォルト埋め込みモデルは ruri-v3-30m（日本語検索・ORT 経路）。"""
+    assert DEFAULT_EMBEDDING_MODEL == "cl-nagoya/ruri-v3-30m"
+    supported = _mp._supported_embedding_models()
+    assert supported is not None
+    assert DEFAULT_EMBEDDING_MODEL in supported.values()
 
 
 class TestTokenizerCJK:
@@ -745,7 +748,10 @@ class TestModelProfile:
 
     def test_default_embedding_model_has_profile(self):
         """デフォルトモデルは prefix 付きプロファイルを持つ（設定漏れ検出）。"""
-        assert model_profile(DEFAULT_EMBEDDING_MODEL)["query_prefix"] == "query: "
+        p = model_profile(DEFAULT_EMBEDDING_MODEL)
+        assert p["query_prefix"] == "検索クエリ: "
+        assert p["passage_prefix"] == "検索文書: "
+        assert p["semantic_floor"] == 0.30
 
     def test_passage_prefix_applied_to_documents(self):
         idx = ToolIndex(embedding_model="intfloat/multilingual-e5-small")

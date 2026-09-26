@@ -250,25 +250,25 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 **Response:**
 ```json
 {
-  "embedding_model": "intfloat/multilingual-e5-small"
+  "embedding_model": "cl-nagoya/ruri-v3-30m"
 }
 ```
 
 #### `PATCH /admin/api/settings/embedding-model`
 
-埋め込みモデルを変更します。**新しいモデルは次回のサーバー再起動後に反映されます**（この PATCH は値を保存するだけで、`rebuild_index()` によるインデックス再生成は行いません）。任意の fastembed 対応モデル名を指定できます（`intfloat/` 配下で名前に `e5` を含むモデルには `query: `/`passage: ` プレフィックスが自動付与されます）。
+埋め込みモデルを変更します。**新しいモデルは次回のサーバー再起動後に反映されます**（この PATCH は値を保存するだけで、`rebuild_index()` によるインデックス再生成は行いません）。任意の fastembed 対応モデル名、または ONNX Runtime 経路の登録モデル名（`cl-nagoya/ruri-v3-30m`）を指定できます。プレフィックスはモデルプロファイルから自動付与されます（`cl-nagoya/ruri-v3-30m` = `検索クエリ: `/`検索文書: `、`intfloat/` 配下で名前に `e5` を含むモデル = `query: `/`passage: `）。
 
 **Request Body:**
 ```json
 {
-  "embedding_model": "intfloat/multilingual-e5-small"
+  "embedding_model": "cl-nagoya/ruri-v3-30m"
 }
 ```
 
 **Response:**
 ```json
 {
-  "embedding_model": "intfloat/multilingual-e5-small"
+  "embedding_model": "cl-nagoya/ruri-v3-30m"
 }
 ```
 

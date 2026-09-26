@@ -22,7 +22,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 {
   "version": 1,
   "log_level": "info",
-  "embedding_model": "intfloat/multilingual-e5-small",
+  "embedding_model": "cl-nagoya/ruri-v3-30m",
   "meta_mode": true,
   "full_info_tools": ["fetch_fetch"],
   "mcpServers": {
@@ -49,7 +49,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 |---|---|---|---|
 | `version` | int | `1` | 設定ファイルバージョン。現在は `1` のみ。 |
 | `log_level` | string | `"info"` | ログレベル (`debug`, `info`, `warning`, `error`)。大文字小文字を区別しない。 |
-| `embedding_model` | string | `"intfloat/multilingual-e5-small"` | セマンティック検索に使用する埋め込みモデル。既定は多言語対応（日本語可・384dim）。fastembed がインストールされている場合に有効。`intfloat/` 配下で名前に `e5` を含むモデル（大小無視）には必須の `query: `/`passage: ` プレフィックスを自動付与する（モデルプロファイル管理。明示プロファイル `intfloat/multilingual-e5-small` は semantic floor 0.75、その他のファミリは 0.30）。fastembed がサポートしないモデルを指定した場合は警告ログを出してデフォルトにフォールバック。 |
+| `embedding_model` | string | `"cl-nagoya/ruri-v3-30m"` | セマンティック検索に使用する埋め込みモデル。既定は日本語特化の lightweight モデル（256dim、ONNX Runtime 経路）。モデルは 2 経路で解決する: fastembed 登録モデル（例 `intfloat/multilingual-e5-small`）と ONNX Runtime 直叩きモデル（例 `cl-nagoya/ruri-v3-30m`。ModernBERT 系で fastembed 非対応）。どちらも `embeddings` extra（`fastembed` / `onnxruntime` / `tokenizers` / `huggingface_hub`）が必要。プレフィックスは必須のモデルにのみ自動付与する（モデルプロファイル管理。`cl-nagoya/ruri-v3-30m` = `検索クエリ: `/`検索文書: `・floor 0.30、`intfloat/multilingual-e5-small` = `query: `/`passage: `・floor 0.75、`intfloat/` 配下で名前に `e5` を含むその他のモデル = `query: `/`passage: `・floor 0.30）。未知のモデル名を指定した場合は警告ログを出してデフォルトにフォールバック。 |
 | `meta_mode` | bool | `true`（バンドル設定からシード） | Meta モード（Progressive Discovery）の有効/無効。`true` のとき `search_tools` / `execute_tool` の 2 ツールのみ公開。設定未保存時はバンドルされた `hub.config.json` の値が初回起動時にシードされます。 |
 | `full_info_tools` | array\<string\> | `[]` | フル公開するツールのリスト。要素は `"{server}_{tool}"` 形式（例: `"fetch_fetch"`）。Meta モード時、ここに指定したツールのみ `tools/list` に通常ツールとしてフル公開され、`tools/call` で直接呼び出せる。未指定（空配列）なら現行の挙動と互換。 |
 | `use_embeddings` | bool | `true` | セマンティック検索（fastembed）の有効/無効。`false` で BM25 のみ。fastembed が未インストールの場合は実効値が常に `false` になる（ハードゲート）。Web UI の「⚙️ Hub 設定」からも変更可（ランタイム反映・検索インデックス再構築あり）。 |
@@ -57,10 +57,11 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 
 ### 埋め込みモデルの移行（既存インストール向け）
 
-`embedding_model` は**保存済みの設定値が優先**されます。バンドル既定を `intfloat/multilingual-e5-small` に変更しても、既に `hub.config.json` に値が保存されている環境は自動では変わりません。日本語検索を有効にするには、Web UI の「⚙️ Hub 設定」または `PATCH /admin/api/settings/embedding-model` で明示的に変更してください。
+`embedding_model` は**保存済みの設定値が優先**されます。バンドル既定を `cl-nagoya/ruri-v3-30m` に変更しても、既に `hub.config.json` に値が保存されている環境は自動では変わりません（旧既定 `intfloat/multilingual-e5-small` のままで動きます）。新既定に切り替えるには、Web UI の「⚙️ Hub 設定」または `PATCH /admin/api/settings/embedding-model` で明示的に変更してください。
 
 - **反映タイミング**: サーバー再起動後（PATCH は値を保存するだけで、`rebuild_index()` によるインデックス再生成は行いません）。
-- **初回起動時**: 新しいモデルのダウンロード（e5-small で約 450MB）が走ります。オフライン環境では事前に取得してください。
+- **初回起動時**: 新しいモデルのダウンロード（ruri-v3-30m は ONNX 約 147MB + tokenizer、Hugging Face キャッシュ）が走ります。オフライン環境では事前に取得してください。
+- **キャッシュ**: モデルごとに別ファイルなので、切替時に旧モデルの埋め込みキャッシュを消す必要はありません（`MCP_HUB_EMBED_CACHE_DIR` 直下に残ります。不要になったら手動削除）。
 
 ### サーバーエントリフィールド
 

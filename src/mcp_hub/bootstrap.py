@@ -96,7 +96,17 @@ def _ensure_fastembed():
     uv_bin = os.path.join(BIN_DIR, "uv")
     try:
         subprocess.run(
-            [uv_bin, "pip", "install", "--target", EXTRAS_DIR, "fastembed"],
+            [
+                uv_bin,
+                "pip",
+                "install",
+                "--target",
+                EXTRAS_DIR,
+                "fastembed",
+                "onnxruntime",
+                "tokenizers",
+                "huggingface_hub",
+            ],
             check=True,
             env={**os.environ, "VIRTUAL_ENV": os.environ.get("VIRTUAL_ENV", "/opt/venv")},
         )

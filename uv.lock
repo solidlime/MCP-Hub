@@ -1000,6 +1000,9 @@ dependencies = [
 [package.optional-dependencies]
 embeddings = [
     { name = "fastembed" },
+    { name = "huggingface-hub" },
+    { name = "onnxruntime" },
+    { name = "tokenizers" },
 ]
 
 [package.dev-dependencies]
@@ -1016,8 +1019,11 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "fastembed", marker = "extra == 'embeddings'", specifier = ">=0.4.0" },
     { name = "fastmcp", specifier = ">=4.0,<5.0" },
+    { name = "huggingface-hub", marker = "extra == 'embeddings'", specifier = ">=0.23" },
+    { name = "onnxruntime", marker = "extra == 'embeddings'", specifier = ">=1.17" },
     { name = "packaging", specifier = ">=24" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
+    { name = "tokenizers", marker = "extra == 'embeddings'", specifier = ">=0.15" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30.0" },
 ]
 provides-extras = ["embeddings"]

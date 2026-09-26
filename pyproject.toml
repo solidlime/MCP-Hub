@@ -11,7 +11,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-embeddings = ["fastembed>=0.4.0"]
+# ORT 経路（既定モデル ruri-v3-30m）に必要な依存も明示する。fastembed の推移依存に
+# 頼ると、fastembed 側の依存変更で既定の埋め込みが静かに読めなくなる。
+embeddings = [
+    "fastembed>=0.4.0",
+    "onnxruntime>=1.17",
+    "tokenizers>=0.15",
+    "huggingface_hub>=0.23",
+]
 
 [build-system]
 requires = ["setuptools>=75.0"]

@@ -283,7 +283,7 @@ async def update_embedding_model(body: dict):
         raise HTTPException(
             status_code=400,
             detail="embedding_model が必要です。例: {'embedding_model': "
-            "'intfloat/multilingual-e5-small'}",
+            "'cl-nagoya/ruri-v3-30m'}",
         )
     model = _validate_embedding_model(body["embedding_model"])
     await registry.set_embedding_model(model)

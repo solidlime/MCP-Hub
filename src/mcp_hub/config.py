@@ -12,7 +12,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
+# 既定の埋め込みモデル。ruri-v3-30m（日本語特化・dim 256）は ModernBERT のため
+# fastembed 非対応で、ONNX Runtime 経路（lc-studio/ruri-v3-30m-onnx）で読む。
+# 差し替え時は meta_provider._MODEL_PROFILES の prefix 登録も合わせること。
+DEFAULT_EMBEDDING_MODEL = "cl-nagoya/ruri-v3-30m"
 
 
 @dataclass

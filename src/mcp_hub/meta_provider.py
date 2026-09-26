@@ -20,6 +20,12 @@ from fastmcp import FastMCP
 from rank_bm25 import BM25Okapi
 
 from .config import DEFAULT_EMBEDDING_MODEL
+from .embedders import (
+    ORT_SUPPORTED_MODELS,
+    canonical_ort_model,
+    create_embedder,
+    ort_model_spec,
+)
 from .proxy_manager import ProxyManager as _ProxyManager
 from .state import request_tags
 from .state import tags_match as _tags_match
@@ -122,31 +128,37 @@ _SUPPORTED_MODELS_CACHE: dict[str, str] | None = None
 
 
 def _supported_embedding_models() -> dict[str, str] | None:
-    """fastembed 対応モデルの {lowercase: 登録カノニカル名} マップ。fastembed 不在/失敗時は None。
+    """既知モデルの {lowercase: 登録カノニカル名} マップ。
+
+    fastembed の登録リスト（取得できた場合）に ORT 経路モデル（ruri 等）を重ねる。
+    ruri は fastembed 非対応でも Hub にとっては「既知」なので、fastembed 不在の
+    環境でも None ではなく ORT 分だけの dict を返す（既定モデルの解決と status 表示
+    を fastembed の有無に依存させない）。
 
     登録名そのもの（大文字混じり）を値に持つ。TextEmbedding() は登録名で引くため、
     resolve_embedding_model() は生の入力ではなくこのカノニカル名を返す必要がある。
     """
     global _SUPPORTED_MODELS_CACHE
     if _SUPPORTED_MODELS_CACHE is None:
+        fastembed_models: dict[str, str] = {}
         try:
             if _HAS_FASTEMBED:
                 # list_supported_models() は dict のリストを返す（各要素に "model" キー）
-                _SUPPORTED_MODELS_CACHE = {
+                fastembed_models = {
                     m["model"].lower(): m["model"]
                     for m in TextEmbedding.list_supported_models()
                 }  # type: ignore[name-defined]
-            else:
-                _SUPPORTED_MODELS_CACHE = None
         except Exception:
             logger.debug("Could not query fastembed supported models", exc_info=True)
-            _SUPPORTED_MODELS_CACHE = None
+        _SUPPORTED_MODELS_CACHE = {**fastembed_models, **ORT_SUPPORTED_MODELS}
     return _SUPPORTED_MODELS_CACHE
 
 
 # 多言語モデル intfloat/multilingual-e5-small は fastembed 0.8.0 の標準リストに
 # 無い（確認済み）。add_custom_model で登録しないと resolve_embedding_model() が
 # 英語既定へ黙ってフォールバックする。登録はメタデータのみ（DL は embed 時）。
+# ruri-v3-30m（既定）はここではなく embedders.ORT_MODELS に登録する ——
+# ModernBERT 系は fastembed で読めず、ONNX Runtime 経路で扱うため。
 _CUSTOM_EMBEDDING_MODELS: tuple[dict[str, Any], ...] = (
     {
         "model": "intfloat/multilingual-e5-small",
@@ -187,13 +199,17 @@ def _register_custom_models() -> None:
 
 
 def resolve_embedding_model(model: str, supported: dict[str, str] | None) -> str:
-    """Resolve *model* to its fastembed canonical (registered) name.
+    """Resolve *model* to its canonical (registered) name.
 
     TextEmbedding() は登録名でモデルを引くため、大小違いの綴り（例:
     ``INTFLOAT/MULTILINGUAL-E5-SMALL``）をそのまま渡すと KeyError になる。
     ``{lowercase: canonical}`` テーブル経由でカノニカル名へ寄せる。
+    ORT 経路モデル（ruri 等）は fastembed の有無に関わらず既知なので先に解決する。
     未知の名前は従来挙動: DEFAULT_EMBEDDING_MODEL に警告付きでフォールバック。
     """
+    ort_canonical = canonical_ort_model(model)
+    if ort_canonical is not None:
+        return ort_canonical
     if supported is None:
         return model
     canonical = supported.get(model.lower())
@@ -228,6 +244,13 @@ _MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "query_prefix": "query: ",
         "passage_prefix": "passage: ",
         "semantic_floor": 0.75,
+    },
+    # ruri-v3（ModernBERT / ONNX Runtime 経路）は非対称プレフィックス必須。
+    # floor は既定 0.30 のまま（#001 実測で 0.30 が機能することを確認済み）。
+    "cl-nagoya/ruri-v3-30m": {
+        "query_prefix": "検索クエリ: ",
+        "passage_prefix": "検索文書: ",
+        "semantic_floor": _SEMANTIC_FLOOR,
     },
 }
 _DEFAULT_PROFILE: dict[str, Any] = {
@@ -283,6 +306,9 @@ def _embedding_dim(model: str) -> int | None:
     for spec in _CUSTOM_EMBEDDING_MODELS:
         if str(spec["model"]).lower() == model.lower():
             return int(spec["dim"])
+    ort_spec = ort_model_spec(model)
+    if ort_spec is not None:
+        return int(ort_spec["dim"])
     if not _HAS_FASTEMBED:
         return None
     try:
@@ -512,7 +538,8 @@ class ToolIndex:
         otherwise block the event loop for seconds during every rebuild.
         """
         if self._embedder is None:  # type: ignore[truthiness-function]
-            self._embedder = TextEmbedding(self._embedding_model)  # type: ignore[name-defined]
+            # モデル名でエンジンを選ぶ: ruri 等は OrtEmbedder、他は fastembed。
+            self._embedder = create_embedder(self._embedding_model)
         prefix = self._profile["passage_prefix"] or ""
         gen = self._embedder.embed(
             [prefix + t for t in doc_texts], batch_size=_EMBED_BATCH_SIZE
@@ -522,6 +549,13 @@ class ToolIndex:
     # ── Embedding disk cache (A1) ────────────────
 
     def _cache_dir(self) -> str:
+        """キャッシュ置き場。
+
+        掃除方針: ファイル名はモデル名/次元/prefix/TEXT_FMT_VERSION のハッシュなので、
+        モデルを差し替えても旧ファイルは読まれないまま溜まるだけ（自動削除はしない
+        — 一時的なモデル切替で再 embed が走るのを避けるため）。不要になったら
+        MCP_HUB_EMBED_CACHE_DIR 直下の npz を手動で消せばよい。
+        """
         return os.environ.get("MCP_HUB_EMBED_CACHE_DIR") or _DEFAULT_EMBED_CACHE_DIR
 
     def _cache_path(self) -> str:
