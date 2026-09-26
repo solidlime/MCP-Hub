@@ -4,11 +4,14 @@ Exposes 3 tools instead of all child server tools.
 """
 
 import asyncio
+import contextlib
+import hashlib
 import json
 import logging
 import math
 import os
 import re
+import tempfile
 import unicodedata
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -55,6 +58,18 @@ _CATALOG_LINE_MAX_CHARS = 240
 # ≈ 2.86GB を一括確保して low-memory 環境で OOM する。8 なら 8×12×512²×4
 # ≈ 100MB/バッチ。
 _EMBED_BATCH_SIZE = 8
+
+# 文書テキスト（rebuild が _embed_docs_blocking に渡す f"{server}/{name} [tags]: desc"）
+# の組み立て形式のバージョン。形式を変えたら必ず bump すること — 忘れると古い
+# 形式で作った埋め込みがキャッシュ（キーはモデル名/次元/prefix/TEXT_FMT_VERSION）
+# から返り、意味のずれたベクトルで検索が静かに劣化する。
+TEXT_FMT_VERSION = 1
+
+# 文書単位埋め込みディスクキャッシュの置き場（A1）。
+# MCP_HUB_EMBED_CACHE_DIR で上書き可（テストは tmpdir を指定して隔離する）。
+_DEFAULT_EMBED_CACHE_DIR = os.path.join(
+    os.path.expanduser("~"), ".cache", "mcp-hub", "embeddings"
+)
 
 # 索引テキストに載せるツール説明の上限。長い英語説明は mean pooling を薄め、
 # 埋め込みコストも増やす。400 字で切るとサーバー説明（日本語）が効く。
@@ -258,6 +273,29 @@ _HIRAGANA_TO_KATAKANA = str.maketrans(
 )
 
 
+def _embedding_dim(model: str) -> int | None:
+    """既知ならモデルの埋め込み次元を返す（未知は None）。
+
+    model_profile() は prefix と floor しか持たないため、キャッシュファイル名の
+    分離用の次元はここで別途引く。未知でもキーはモデル名で既に分離されるので、
+    次元が取れなくても実害はない（次元不一致は読み込み側で検出して再計算する）。
+    """
+    for spec in _CUSTOM_EMBEDDING_MODELS:
+        if str(spec["model"]).lower() == model.lower():
+            return int(spec["dim"])
+    if not _HAS_FASTEMBED:
+        return None
+    try:
+        models = TextEmbedding.list_supported_models()  # type: ignore
+    except Exception:
+        return None
+    for m in models:
+        if str(m.get("model", "")).lower() == model.lower():
+            dim = m.get("dim")
+            return int(dim) if dim is not None else None
+    return None
+
+
 class ToolIndex:
     """Embedding-based semantic search over proxied tools, with BM25 fallback.
 
@@ -295,11 +333,43 @@ class ToolIndex:
             embedding_model, _supported_embedding_models()
         )
         self._profile: dict[str, Any] = model_profile(self._embedding_model)
+        # 設定として要求された値（実効値 _use_embeddings と区別する）。embed 失敗で
+        # 実効値を恒久降格しても、ユーザー意図はここに残す（A3 の再試行判定に使う）。
+        self._embeddings_requested: bool = (
+            _HAS_FASTEMBED
+            and use_embeddings
+            and os.environ.get("MCP_HUB_EMBEDDING", "1") != "0"
+        )
+        # 直近の embed 失敗の短い要約（embedding_status 用）。成功で None に戻す。
+        self._embedding_error: str | None = None
+        # A2: 前回 rebuild したコーパス/設定の同定キー。一致したら全体を short-circuit。
+        self._index_key: tuple[Any, ...] | None = None
+        self._corpus_hash: str | None = None
 
     @property
     def use_embeddings(self) -> bool:
         """現在の効値（設定×fastembed 可否×env ハードキル）。admin GET はこれ-reported."""
         return self._use_embeddings
+
+    @property
+    def embedding_status(self) -> str:
+        """埋め込みの実効状態（A3: 設定の意図でなく真実を返す）。
+
+        "active" | "building" | "inactive:no-fastembed" | "inactive:setting" |
+        "inactive:no-documents" | "error:<短い要約>" のいずれか。
+        embed 失敗で恒久降格（_use_embeddings=False）しても理由を error:* で残す。
+        """
+        if self._embedding_error:
+            return f"error:{self._embedding_error}"
+        if not _HAS_FASTEMBED:
+            return "inactive:no-fastembed"
+        if not self._use_embeddings:
+            return "inactive:setting"
+        if not self._documents:
+            return "inactive:no-documents"
+        if self._embeddings is None:
+            return "building"
+        return "active"
 
     def set_use_embeddings(self, enabled: bool) -> None:
         """ランタイムで埋め込み ON/OFF を切り替える。
@@ -309,6 +379,7 @@ class ToolIndex:
         ON 化直後 _embeddings が None でも search() のガード
         （_use_embeddings and _embeddings is not None）で BM25 に落ちるため安全。
         """
+        self._embeddings_requested = enabled
         self._use_embeddings = (
             _HAS_FASTEMBED
             and enabled
@@ -448,6 +519,121 @@ class ToolIndex:
         )
         return np.array(list(gen), dtype=np.float32)  # type: ignore[name-defined]
 
+    # ── Embedding disk cache (A1) ────────────────
+
+    def _cache_dir(self) -> str:
+        return os.environ.get("MCP_HUB_EMBED_CACHE_DIR") or _DEFAULT_EMBED_CACHE_DIR
+
+    def _cache_path(self) -> str:
+        """キャッシュ npz のパス。モデル名/次元/passage prefix/TEXT_FMT_VERSION で分離。
+
+        モデルを差し替えても（例: ruri-v3-30m 既定化）キーが衝突しない。
+        """
+        dim = _embedding_dim(self._embedding_model)
+        key = (
+            f"{self._embedding_model}|{dim}|"
+            f"{self._profile['passage_prefix'] or ''}|{TEXT_FMT_VERSION}"
+        )
+        digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]  # noqa: S324
+        return os.path.join(self._cache_dir(), digest + ".npz")
+
+    def _load_cache(self) -> dict[str, "np.ndarray"]:
+        """{doc_sha: vector} を返す。欠落/破損/読めない時は空 dict（例外を出さない）。"""
+        path = self._cache_path()
+        try:
+            with np.load(path) as data:  # type: ignore
+                return {k: np.asarray(data[k], dtype=np.float32) for k in data.files}  # type: ignore
+        except Exception:
+            logger.debug("Embedding cache unreadable: %s", path, exc_info=True)
+            return {}
+
+    def _save_cache(self, vectors: dict[str, "np.ndarray"]) -> None:
+        """現コーパス分の {doc_sha: vector} を npz に丸ごと保存する（追記ではない）。
+
+        tmp ファイル + os.replace で atomic に置換する（部分書き込みの npz を
+        次回プロセスが読んで壊れるのを防ぐ）。渡された辞書がそのままファイル
+        内容になるので、呼び側は「現コーパス全分」を渡す必要がある。
+        """
+        if not vectors:
+            return
+        path = self._cache_path()
+        tmp: str | None = None
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".npz.tmp")
+            with os.fdopen(fd, "wb") as fh:
+                np.savez(fh, **vectors)  # type: ignore[name-defined,arg-type]
+            os.replace(tmp, path)
+        except Exception:
+            logger.debug("Embedding cache write failed: %s", path, exc_info=True)
+            if tmp is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+
+    async def _embed_with_cache(self, doc_texts: list[str]) -> "np.ndarray":
+        """doc_texts を埋め込む。ディスクキャッシュにある行は再利用し、不足分だけ embed。
+
+        キーは文書テキスト単位の sha1[:16]。返り値は文書順の (n, dim) 行列。
+        キャッシュの破損/次元不一致は例外を出さず全件再計算にフォールバックする。
+        """
+        if not doc_texts:
+            return np.zeros((0, 0), dtype=np.float32)  # type: ignore[name-defined]
+        shas = [
+            hashlib.sha1(t.encode("utf-8")).hexdigest()[:16]  # noqa: S324
+            for t in doc_texts
+        ]
+        cached = self._load_cache()
+        per_sha: dict[str, Any] = {}
+        shapes: set[tuple[int, ...]] = set()
+        for s in shas:
+            v = cached.get(s)
+            if v is not None:
+                per_sha[s] = v
+                shapes.add(v.shape)
+        if len(shapes) > 1:
+            # 次元の混ざったキャッシュは信用しない（全件再計算に回す）。
+            per_sha = {}
+        missing = [i for i, s in enumerate(shas) if s not in per_sha]
+        if missing:
+            arr = np.asarray(  # type: ignore[name-defined]
+                await asyncio.to_thread(
+                    self._embed_docs_blocking, [doc_texts[i] for i in missing]
+                ),
+                dtype=np.float32,  # type: ignore[name-defined]
+            )
+            fresh: dict[str, Any] = {}
+            for j, i in enumerate(missing):
+                fresh[shas[i]] = arr[j]
+                per_sha[shas[i]] = arr[j]
+            # 現コーパス全分（cached ∪ fresh）を保存する。fresh だけを保存すると
+            # 読み込み済みエントリが毎回消え、部分 rebuild のたびにキャッシュが
+            # 自壊する（回帰: test_partial_change_does_not_clobber_cache）。
+            self._save_cache(per_sha)
+        try:
+            return np.vstack([per_sha[s] for s in shas])  # type: ignore[name-defined]
+        except ValueError:
+            # 新規埋め込みとキャッシュの次元が合わない等 → キャッシュ無しで全件再計算。
+            return np.asarray(  # type: ignore[name-defined]
+                await asyncio.to_thread(self._embed_docs_blocking, doc_texts),
+                dtype=np.float32,  # type: ignore[name-defined]
+            )
+
+    @staticmethod
+    def _corpus_hash_of(documents: list[dict]) -> str:
+        """コーパス同定用ハッシュ（server/name/description/tags/inputSchema 正規化 JSON）。"""
+        key = [
+            {
+                "server": d.get("server"),
+                "name": d.get("name"),
+                "description": d.get("description", ""),
+                "tags": d.get("tags", []),
+                "inputSchema": d.get("inputSchema", {}),
+            }
+            for d in documents
+        ]
+        blob = json.dumps(key, sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha1(blob.encode("utf-8")).hexdigest()  # noqa: S324
+
     async def rebuild(self, documents: list[dict]) -> None:
         """Rebuild index from pre-built tool documents.
 
@@ -459,8 +645,38 @@ class ToolIndex:
 
         When fastembed is available, also computes dense embeddings
         for semantic search. Falls back to BM25 otherwise.
+
+        A2: コーパス（server/name/description/tags/inputSchema の正規化 JSON）と
+       埋め込み設定が前回と同一なら全体を short-circuit する（BM25 索引も埋め込みも
+        作り直さない）。差分がある時は A1 のディスクキャッシュ経由で変わった
+        文書だけを埋め込む。
         """
         async with self._lock:
+            corpus_hash = self._corpus_hash_of(documents)
+            passage_prefix = self._profile["passage_prefix"] or ""
+            if (
+                corpus_hash,
+                self._use_embeddings,
+                self._embedding_model,
+                passage_prefix,
+            ) == self._index_key:
+                # コーパスも埋め込み設定も不変 → 再構築を丸ごと省略。
+                return
+
+            # 恒久降格後でも、コーパスが変わった時だけ埋め込みを再試行する（不変
+            # コーパスでの毎回リトライ＝無限再 embed を防ぐ）。ユーザー OFF / env
+            # ハードキル / fastembed 不在は _embeddings_requested と _HAS_FASTEMBED
+            # と env で除外される。
+            if (
+                corpus_hash != self._corpus_hash
+                and self._embeddings_requested
+                and not self._use_embeddings
+                and _HAS_FASTEMBED
+                and os.environ.get("MCP_HUB_EMBEDDING", "1") != "0"
+            ):
+                self._use_embeddings = True
+                self._embedding_error = None
+
             self._documents = documents
             self._corpus = [self._build_doc_tokens(d) for d in documents]
             self._bm25 = BM25Okapi(self._corpus) if self._corpus else None
@@ -486,17 +702,32 @@ class ToolIndex:
                     ]
                     # Run CPU-bound embedding in a thread; event loop stays responsive.
                     # Search falls back to BM25 until embeddings are ready.
-                    self._embeddings = await asyncio.to_thread(
-                        self._embed_docs_blocking, doc_texts
-                    )
-                except Exception:
+                    # 旧コーパスの行列を残さない: _documents は既に差し替え済なので、
+                    # ここで _embeddings を消してから embed する（残すと search() の
+                    # semantic 経路が新 doc リストと行ずれする＝誤ヒット）。この窓は
+                    # embedding_status も "building" を返し真実になる。
+                    self._embeddings = None
+                    # A1: 既存のキャッシュ済みベクトルは再利用し、不足行だけ embed する。
+                    self._embeddings = await self._embed_with_cache(doc_texts)
+                    self._embedding_error = None
+                except Exception as exc:
                     logger.warning(
                         "Embedding failed, falling back to BM25", exc_info=True
                     )
                     self._embeddings = None
                     self._use_embeddings = False
+                    # A3: 恒久降格の理由を残す（embedding_status/admin で可視化）。
+                    self._embedding_error = f"{type(exc).__name__}: {str(exc)[:80]}"
             else:
                 self._embeddings = None
+
+            self._corpus_hash = corpus_hash
+            self._index_key = (
+                corpus_hash,
+                self._use_embeddings,
+                self._embedding_model,
+                passage_prefix,
+            )
 
         logger.info("ToolIndex rebuilt: %d tools indexed", len(documents))
 
@@ -814,7 +1045,23 @@ class MetaTools:
         results = self._index.search(query, top_k)
         allowed = self._get_allowed_servers()
         if allowed is not None:
-            results = self._filter_search_results(results, allowed)
+            filtered = self._filter_search_results(results, allowed)
+            if results and not filtered:
+                # A3: タグフィルタで全件除外されたケース（0件ヒットの主因）を
+                # additive な hint で明示する。既存の message キーは不変。
+                active = request_tags.get() or []
+                return json.dumps(
+                    {
+                        "message": "No matching tools found",
+                        "hint": (
+                            f"タグフィルタ {', '.join(map(str, active))} により"
+                            "全件除外された可能性があります。より広いタグ"
+                            "（またはタグ無し）で再試行してください。"
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
+            results = filtered
         if not results:
             return json.dumps(
                 {

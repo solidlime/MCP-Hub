@@ -67,6 +67,8 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
 | `search_tools(query, top_k=10)` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。結果に `tags`（サーバータグ配列）を含む。`top_k` は最大 50 にクランプされる（巨大な値を渡しても返り値が肥大しない） |
 | `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行。互換のため `{"arguments": {...}}` に `server` / `tool_name` / `arguments` を折り畳んだ形式（LLM が生成しがちなフラット呼び出し）も受け付ける。サーバー名の大文字小文字は case-insensitive に解決される |
 
+`search_tools` が 0 件を返す場合、`{"message": "No matching tools found", "hint": ...}` を返します。`X-MCP-Hub-Tags` によるタグフィルタで全件除外された場合は、`hint` に「タグフィルタ ... により全件除外された可能性」を含めます（0 件ヒットの主因。additive で既存キーは不変）。
+
 #### フル公開ツール（`full_info_tools`）
 
 meta_mode 有効時でも、`full_info_tools` に指定したツールは通常ツールとして `tools/list` にフル公開され、`tools/call` で直接呼び出すことができます（`execute_tool` を経由しません）。指定形式は `"{server}_{tool}"`（例: `"fetch_fetch"`）。
@@ -104,9 +106,12 @@ X-API-Key: your-api-key-here
 ```json
 {
   "status": "ok",
-  "servers": 3
+  "servers": 3,
+  "embedding_status": "active"
 }
 ```
+
+`embedding_status` は埋め込み検索の**実効状態**（設定の意図値でなく真実）を返します: `active` / `building` / `inactive:no-fastembed` / `inactive:setting` / `inactive:no-documents` / `error:<短い要約>`。embed 失敗で BM25 に恒久降格した場合は `error:*` になります（additive フィールド、既存キーは不変）。
 
 ---
 
@@ -189,9 +194,12 @@ X-API-Key: your-api-key-here
   "full_info_tools": ["fetch_fetch"],
   "client_timeout": null,
   "connect_timeout": null,
-  "use_embeddings": true
+  "use_embeddings": true,
+  "embedding_status": "active"
 }
 ```
+
+`embedding_status`（実効状態。取り得る値は `GET /admin/api/health` と同じ）は additive フィールドです。`use_embeddings` は設定意図ではなく実効値のため、embed 失敗により降格している場合は `use_embeddings=false` かつ `embedding_status="error:*"` になります。
 
 `client_timeout` / `connect_timeout` は未設定時 `null` を返します（実装: `admin_router.py:128-138`）。設定値は `proxy_manager.py` で `MCP_HUB_CLIENT_TIMEOUT`（既定 `180.0`）/ `MCP_HUB_CONNECT_TIMEOUT`（既定 `30.0`）より優先されます。
 
@@ -232,7 +240,8 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
   "full_info_tools": ["fetch_fetch", "filesystem_read_file"],
   "client_timeout": 180.0,
   "connect_timeout": 30.0,
-  "use_embeddings": true
+  "use_embeddings": true,
+  "embedding_status": "active"
 }
 ```
 

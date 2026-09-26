@@ -124,6 +124,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `MCP_HUB_CONNECT_TIMEOUT` | `30.0` | 起動時の接続確認 `list_tools()` のタイムアウト（秒）。WebUI の Hub 設定「⏱️ 接続タイムアウト」からも設定可能（保存値が env より優先） |
 | `MCP_HUB_RECOVERY_COOLDOWN` | `300.0` | ヘルスチェックで死んだサーバーへの自動再接続試行の最小間隔（秒）。ヘルスチェック間隔（デフォルト 60s）より長く設定すること |
 | `MCP_HUB_EMBEDDING` | `1` | `0` に設定するとセマンティック検索を強制無効化（ハードキル）。`use_embeddings` 設定や Web UI トグルより優先され、ランタイム設定で再有効化できない |
+| `MCP_HUB_EMBED_CACHE_DIR` | `~/.cache/mcp-hub/embeddings` | 文書単位の埋め込みディスクキャッシュ（npz）の置き場。再起動・再接続時の再 embed を省略する（A1） |
 | `MCP_HUB_SESSION_IDLE_TIMEOUT` | (未設定) | アップストリームセッションのアイドル有効期限（秒）。未設定時は SDK 既定（期限なし）を維持（実装: `main.py:75-84`） |
 
 ### `MCP_HUB_RESEED=1` の動作

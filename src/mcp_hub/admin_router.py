@@ -164,6 +164,18 @@ def _effective_use_embeddings() -> bool:
     return bool(index.use_embeddings)
 
 
+def _effective_embedding_status() -> str:
+    """ライブ index の埋め込み実効状態（A3）。
+
+    "active"/"building"/"inactive:*"/"error:*" を返す。meta_app 未初期化で
+    index が無い場合は "inactive:setting"（埋め込みは動作し得ない）。
+    """
+    index = getattr(getattr(app_state, "meta_app", None), "index", None)
+    if index is None:
+        return "inactive:setting"
+    return str(index.embedding_status)
+
+
 @router.get("/settings")
 async def get_settings():
     registry = _get_registry()
@@ -174,6 +186,7 @@ async def get_settings():
         "client_timeout": data.get("client_timeout"),
         "connect_timeout": data.get("connect_timeout"),
         "use_embeddings": _effective_use_embeddings(),
+        "embedding_status": _effective_embedding_status(),
     }
 
 
@@ -226,6 +239,7 @@ async def update_settings(body: dict):
         "client_timeout": data.get("client_timeout"),
         "connect_timeout": data.get("connect_timeout"),
         "use_embeddings": _effective_use_embeddings(),
+        "embedding_status": _effective_embedding_status(),
     }
 
 
@@ -287,6 +301,7 @@ async def health():
     return {
         "status": "ok",
         "servers": servers,
+        "embedding_status": _effective_embedding_status(),
     }
 
 
