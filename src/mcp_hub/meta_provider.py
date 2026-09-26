@@ -56,6 +56,10 @@ _CATALOG_LINE_MAX_CHARS = 240
 # ≈ 100MB/バッチ。
 _EMBED_BATCH_SIZE = 8
 
+# 索引テキストに載せるツール説明の上限。長い英語説明は mean pooling を薄め、
+# 埋め込みコストも増やす。400 字で切るとサーバー説明（日本語）が効く。
+_INDEX_DESC_CHARS = 400
+
 MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 
 
@@ -443,7 +447,10 @@ class ToolIndex:
         """Rebuild index from pre-built tool documents.
 
         Each document: {server, name, description, inputSchema}.
-        Caller is responsible for building the document list.
+        Caller is responsible for building the document list. The index text
+        uses ``description``, which callers may build as
+        ``サーバー説明 + ツール説明（_INDEX_DESC_CHARS 上限）`` so server-level
+        (often Japanese) context enters both BM25 and embedding retrieval.
 
         When fastembed is available, also computes dense embeddings
         for semantic search. Falls back to BM25 otherwise.
@@ -515,7 +522,9 @@ class ToolIndex:
 
         Japanese: the tokenizer emits CJK bigrams+unigrams and the default
         embedder is multilingual, so Japanese queries hit lexically and/or
-        semantically.
+        semantically. The indexed ``description`` may carry the server
+        description prefix + a truncated tool description (_INDEX_DESC_CHARS),
+        which raises Japanese hit rates.
 
         Returns list of {server, name, description, tags, inputSchema, score}.
 
@@ -954,7 +963,12 @@ async def create_meta_app(
         """
         all_tools = []
         failed: list[str] = []
+        desc_fn = getattr(proxy_manager, "server_description", None)
         for server_name, proxy in proxy_manager.get_connected_servers().items():
+            srv_desc = desc_fn(server_name) if callable(desc_fn) else ""
+            if not isinstance(srv_desc, str):
+                srv_desc = ""
+            srv_desc = srv_desc.strip()
             try:
                 if isinstance(proxy_manager, _ProxyManager):
                     tools = await proxy_manager.list_tools_for_server(
@@ -963,11 +977,15 @@ async def create_meta_app(
                 else:
                     tools = await asyncio.wait_for(proxy.list_tools(), timeout=30.0)
                 for t in tools:
+                    tool_desc = (t.description or "").strip()[:_INDEX_DESC_CHARS]
+                    description = (
+                        f"{srv_desc} {tool_desc}".strip() if srv_desc else tool_desc
+                    )
                     all_tools.append(
                         {
                             "server": server_name,
                             "name": t.name,
-                            "description": t.description or "",
+                            "description": description,
                             "tags": list(proxy_manager.server_tags(server_name)),
                             "inputSchema": getattr(t, "parameters", {}),
                         }
@@ -981,7 +999,6 @@ async def create_meta_app(
         by_server: dict[str, list[str]] = {}
         for t in all_tools:
             by_server.setdefault(t["server"], []).append(t["name"])
-        desc_fn = getattr(proxy_manager, "server_description", None)
         entries = []
         for srv, names in by_server.items():
             desc = desc_fn(srv) if callable(desc_fn) else ""

@@ -196,6 +196,56 @@ def _get_text_content(result: dict) -> str:
 # ── tests ─────────────────────────────────────────────────────────────────────
 
 
+async def test_index_description_prefixes_server_description():
+    """索引 description = サーバー説明 + ツール説明（400字上限）。
+
+    サーバー説明（日本語）を前置し、ツール説明は _INDEX_DESC_CHARS で切る。
+    サーバー説明が無いサーバーは素のツール説明のまま（前置なし）。
+    """
+    from mcp_hub.meta_provider import _INDEX_DESC_CHARS
+
+    pm = _build_mock_proxy_manager()
+    pm.server_description = MagicMock(
+        side_effect=lambda s: {
+            "filesystem": "  ローカルファイル操作  ",
+            "fetch": "Web 取得",
+        }.get(s, "")
+    )
+    pm._proxies["filesystem"] = _build_mock_proxy(
+        [
+            SimpleNamespace(
+                name="file_read",
+                description="  Read file contents from disk  ",
+                parameters={},
+            )
+        ]
+    )
+    pm._proxies["fetch"] = _build_mock_proxy(
+        [SimpleNamespace(name="fetch_url", description="y" * 500, parameters={})]
+    )
+    pm._proxies["brave-search"] = _build_mock_proxy(
+        [
+            SimpleNamespace(
+                name="brave_web_search",
+                description="Brave web search",
+                parameters={},
+            )
+        ]
+    )
+
+    app = await create_meta_app(pm, use_embeddings=False)
+    await app.rebuild_index()
+
+    docs = {d["name"]: d["description"] for d in app.index._documents}
+    # サーバー説明を前置し、ツール説明は strip される
+    assert docs["file_read"] == "ローカルファイル操作 Read file contents from disk"
+    # ツール説明は 400 字で切る
+    assert docs["fetch_url"] == "Web 取得 " + "y" * _INDEX_DESC_CHARS
+    assert len(docs["fetch_url"]) == len("Web 取得 ") + _INDEX_DESC_CHARS
+    # サーバー説明なし → 前置なし・余分な空白なし
+    assert docs["brave_web_search"] == "Brave web search"
+
+
 class TestMetaIntegration:
     """End-to-end tests for the /mcp-meta endpoint."""
 
