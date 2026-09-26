@@ -224,6 +224,7 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
 |---|---|
 | `search_tools(query, top_k=10)` | キーワードまたはセマンティック検索でツールを発見（`top_k` は最大 50 にクランプ） |
 | `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行 |
+| `get_schema(server, tool_name)` | `search_tools` の `inputSchema` は要約なので、実行前に完全な仕様（切り詰めなしの `description` ＋完全な `inputSchema`）を取得する |
 
 **ToolIndex — 検索エンジン：**
 
@@ -249,7 +250,7 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
 - サーバー追加・削除・更新時に `on_change` コールバック経由でトリガー
 - 起動時のカスケード接続は 500ms のデバウンスで統合
 - 全接続サーバーを走査し、ツール定義を収集後 ToolIndex に投入
-- **索引テキストと表示の分離（契約）**: 各ツールは 3 つの説明を持つ — `index_text`（`サーバー説明 + ツール説明[:_INDEX_DESC_CHARS]`。BM25 トークン・埋め込みはこれから作る）、`description`（表示用。サーバー前置なしの `ツール説明[:_DISPLAY_DESC_CHARS]`、切り詰め時のみ末尾 `"…"`）、`full_description`（無制限。`get_schema` / フル公開ツール定義用）。`search_tools` 結果は `description` を返し、結果に出たサーバーの一行説明を top-level `servers` マップで補う
+- **索引テキストと表示の分離（契約）**: 各ツールは 3 つの説明を持つ — `index_text`（`サーバー説明 + ツール説明[:_INDEX_DESC_CHARS]`。BM25 トークン・埋め込みはこれから作る）、`description`（表示用。サーバー前置なしの `ツール説明[:_DISPLAY_DESC_CHARS]`、切り詰め時のみ末尾 `"…"`）、`full_description`（無制限。`get_schema` / フル公開ツール定義用）。`search_tools` 結果は `description` を返し、結果に出たサーバーの一行説明を top-level `servers` マップで補う。`inputSchema` は `type` / `required` / 各パラメータの `type`・短い `enum`・短い `default` のみに圧縮し（`description` と深いネストは落とす）、成功応答に `note` を添える。完全な仕様は `get_schema(server, tool_name)` で取得する
 - **同一コーパス short-circuit**: コーパス（`server`+`name`+`index_text`+`full_description`+`tags`+`inputSchema` の正規化 JSON）と埋め込み設定（実効 ON/OFF・モデル・prefix）が前回と同一なら `ToolIndex.rebuild` 全体を省略する（BM25 索引も埋め込みも作り直さない）。NAS の弱 CPU で接続イベントごとに全件再 embed → CPU 張り付き／検索が黙って BM25 に劣化する問題を解消
 - 差分時は変わった文書だけを A1 のディスクキャッシュ経由で埋め込む
 - embed 失敗時は従来通り恒久降格（`_use_embeddings=False`）するが、理由を `embedding_status` に残す。コーパスが変わった時だけ一度再試行（不変コーパスでの毎回リトライはしない）

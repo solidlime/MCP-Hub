@@ -1070,6 +1070,53 @@ class ToolIndex:
         return result
 
 
+def _compact_input_schema(schema: Any) -> dict:
+    """search_tools 応答用に inputSchema を「名前 / 型 / 必須」へ圧縮する。
+
+    サイズの主因はパラメータ説明文と深いネストなので落とす。完全な仕様は
+    get_schema(server, tool_name) で取得する。**入力 dict は一切変更しない** —
+    ToolIndex.search() の結果は索引 doc["inputSchema"] の同一参照を載せるため、
+    in-place で畳むと索引が汚染され get_schema / FullInfoMiddleware まで伝播する。
+    不正な形でも例外を出さず {} を返す（dict でない値は無視）。
+    """
+    if not isinstance(schema, dict):
+        return {}
+    out: dict[str, Any] = {}
+    if schema.get("type") is not None:
+        out["type"] = schema["type"]
+    required = schema.get("required")
+    if isinstance(required, list):
+        out["required"] = required
+    props = schema.get("properties")
+    if isinstance(props, dict) and props:
+        out["properties"] = {
+            str(name): _compact_property(prop) for name, prop in props.items()
+        }
+    return out
+
+
+def _compact_property(prop: Any, depth: int = 0) -> dict:
+    """1 パラメータ分の圧縮。depth>=1 は {"type": ...} のみ（深い階層は畳む）。"""
+    if not isinstance(prop, dict):
+        return {}
+    out: dict[str, Any] = {}
+    if prop.get("type") is not None:
+        out["type"] = prop["type"]
+    if depth >= 1:
+        return out
+    enum = prop.get("enum")
+    if isinstance(enum, list) and len(enum) <= 5 and len(",".join(map(str, enum))) <= 80:
+        out["enum"] = enum
+    if "default" in prop:
+        default = prop["default"]
+        if isinstance(default, (bool, int, float)) or len(str(default)) <= 40:
+            out["default"] = default
+    items = prop.get("items")
+    if isinstance(items, dict):
+        out["items"] = _compact_property(items, depth=1)
+    return out
+
+
 class MetaTools:
     """Manages meta-tool definitions and execution."""
 
@@ -1170,7 +1217,21 @@ class MetaTools:
             if srv not in servers:
                 desc = self._get_server_description(srv)
                 servers[srv] = desc if isinstance(desc, str) else ""
-        return json.dumps({"results": results, "servers": servers}, ensure_ascii=False)
+        # ② 応答肥大の主因は inputSchema の説明文・深いネスト。検索結果でも
+        # 「名前 / 型 / 必須」だけ残し、完全な仕様は get_schema に逃がす。
+        # 元 dict を変更しない（{**r} で新規 dict、schema は圧縮コピー）。
+        compact_results = [
+            {**r, "inputSchema": _compact_input_schema(r.get("inputSchema"))}
+            for r in results
+        ]
+        return json.dumps(
+            {
+                "results": compact_results,
+                "servers": servers,
+                "note": "inputSchema は要約です。完全な仕様は get_schema(server, tool_name) で取得してください。",
+            },
+            ensure_ascii=False,
+        )
 
     async def execute_tool(
         self,
@@ -1267,6 +1328,33 @@ class MetaTools:
                 ensure_ascii=False,
             )
         return await self._execute_tool(server, tool_name, arguments)
+
+    async def get_schema(self, server: str, tool_name: str) -> str:
+        """search_tools が見つけたツールの完全な仕様を返す。
+
+        search_tools の inputSchema は「名前 / 型 / 必須」の要約なので、実行前に
+        完全なパラメータ仕様が必要な時に呼ぶ。description は表示用に切り詰めない
+        full_description（無ければ description）を使う。
+        """
+        not_found = json.dumps(
+            {
+                "message": "Tool not found",
+                "hint": "search_tools で server / tool_name を確認してください。",
+            },
+            ensure_ascii=False,
+        )
+        if not server or not tool_name:
+            return not_found
+        # execute_tool と同じく live 接続名へ case-insensitive に解決してから照会。
+        resolved = self._resolve_server_name(server)
+        allowed = self._get_allowed_servers()
+        if allowed is not None and resolved not in allowed:
+            # タグフィルタ範囲外は存在の有無を漏らさず not found 扱い。
+            return not_found
+        schema = self._index.get_schema(resolved, tool_name)
+        if schema is None:
+            return not_found
+        return json.dumps(schema, ensure_ascii=False)
 
 
 class MetaApp:
@@ -1428,6 +1516,18 @@ async def create_meta_app(
         # server/tool_name ride inside `arguments` — reach the lift shim in
         # MetaTools.execute_tool instead of dying in schema validation.
         return await meta.execute_tool(server, tool_name, arguments)
+
+    @mcp.tool()
+    async def get_schema(server: str, tool_name: str) -> str:
+        """Get the full spec (description + inputSchema) of a tool found by search_tools.
+
+        search_tools の inputSchema は要約です。実行前に完全な仕様が必要ならこれを呼ぶ。
+
+        Args:
+            server: From search_tools results
+            tool_name: From search_tools results
+        """
+        return await meta.get_schema(server, tool_name)
 
     # 登録直後の素の description を捕捉（以降の焼き込みはここから再構成）。
     # FastMCP 4.0.2: get_tool() は local provider の stored instance を返し、
