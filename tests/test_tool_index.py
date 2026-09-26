@@ -710,6 +710,40 @@ class TestJapaneseSearch:
         assert results[0]["name"] == "set_light"
 
 
+class TestOovGate:
+    """BM25 字句サポート皆無のクエリは semantic を捧造しない（OOV ゲート）。"""
+
+    async def _idx_with_strong_semantic(self):
+        idx = ToolIndex()
+        await idx.rebuild(
+            [
+                {
+                    "name": "light_on",
+                    "description": "turn on the lights",
+                    "server": "ha",
+                    "inputSchema": {},
+                    "tags": [],
+                }
+            ]
+        )
+        # クエリ (1,0) に対して cos 1.0 — semantic 単体では候補が出てしまう
+        idx._embeddings = np.array([[1.0, 0.0]], dtype=np.float32)
+        idx._embedder = _FixedEmbedder([1.0, 0.0])  # type: ignore[assignment]
+        idx._use_embeddings = True
+        return idx
+
+    async def test_oov_query_returns_empty(self):
+        """字句サポート皆無（BM25 全 0）のクエリは空を返す（cos 0.8352 の捧造防止）。"""
+        idx = await self._idx_with_strong_semantic()
+        assert idx._semantic_search("zzzqqq", 10) != []  # semantic 単体なら出る
+        assert idx.search("zzzqqq", top_k=10) == []  # ゲートで空
+
+    async def test_lexical_query_not_dropped(self):
+        """字句サポートがあるクエリは結果を減らさない。"""
+        idx = await self._idx_with_strong_semantic()
+        assert any(r["name"] == "light_on" for r in idx.search("lights", top_k=10))
+
+
 class TestModelProfile:
     """モデルプロファイル: prefix と semantic floor をモデル単位で解決する。"""
 
@@ -751,7 +785,11 @@ class TestModelProfile:
         p = model_profile(DEFAULT_EMBEDDING_MODEL)
         assert p["query_prefix"] == "検索クエリ: "
         assert p["passage_prefix"] == "検索文書: "
-        assert p["semantic_floor"] == 0.30
+        assert p["semantic_floor"] == 0.80  # ruri 実測のプラトー中心
+
+    def test_e5_profile_floor_unchanged_by_ruri_retune(self):
+        """e5 の床はモデル固有校正のまま（0.75）— ruri 変更の巻き添えにしない。"""
+        assert model_profile("intfloat/multilingual-e5-small")["semantic_floor"] == 0.75
 
     def test_passage_prefix_applied_to_documents(self):
         idx = ToolIndex(embedding_model="intfloat/multilingual-e5-small")
@@ -833,8 +871,21 @@ class TestModelProfile:
         assert idx.search("zzz_nomatch", top_k=5) == []
 
     async def test_default_model_floor_keeps_moderate_hit(self):
-        """プレフィックス無しモデルは従来床 0.30 のまま（後方互換）。"""
+        """プレフィックス無しモデルは従来床 0.30 のまま（後方互換）。
+
+        OOV ゲート（BM25 全 0 かつ字句サポート無し）を踏まないよう、別 doc に
+        字句ヒットさせ、semantic 候補（cos 0.40）が床 0.30 で残ることを見る。
+
+        注意: fastembed 不在の CI では ``sentence-transformers/all-MiniLM-L6-v2``
+        が未知名として既定 ruri に解決され floor が変わる（環境依存）。このテスト
+        の主眼は「明示プロファイルの無いモデルの既定 floor 0.30」なので、モデル
+        解決に依存しないよう既定プロファイルを明示注入する。ruri 自身の floor
+        0.80 は ``test_default_embedding_model_has_profile`` が別途検証する。
+        """
         idx = ToolIndex(embedding_model="sentence-transformers/all-MiniLM-L6-v2")
+        idx._profile = dict(
+            model_profile("sentence-transformers/all-MiniLM-L6-v2")
+        )  # 既定 floor 0.30 を環境非依存に固定
         await idx.rebuild(
             [
                 {
@@ -843,15 +894,25 @@ class TestModelProfile:
                     "description": "",
                     "inputSchema": {},
                     "tags": [],
-                }
+                },
+                {
+                    "server": "s",
+                    "name": "anchor",
+                    "description": "lexical anchor",
+                    "inputSchema": {},
+                    "tags": [],
+                },
             ]
         )
-        # cos = 0.40 > 0.30 → 候補として残る
-        idx._embeddings = np.array([[0.40, 0.9165151]], dtype=np.float32)
+        # tool_x の cos = 0.40 > 0.30 → semantic 候補として残る；anchor は cos 0
+        idx._embeddings = np.array(
+            [[0.40, 0.9165151], [0.0, 1.0]], dtype=np.float32
+        )
         idx._embedder = _FixedEmbedder([1.0, 0.0])
         idx._use_embeddings = True
-        results = idx.search("zzz_nomatch", top_k=5)
-        assert [r["name"] for r in results] == ["tool_x"]
+        names = [r["name"] for r in idx.search("anchor", top_k=5)]
+        assert "tool_x" in names  # 床 0.30 で残った semantic 候補
+        assert "anchor" in names
 
 
 class TestTagsInIndex:

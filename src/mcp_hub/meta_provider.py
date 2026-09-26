@@ -263,11 +263,13 @@ _MODEL_PROFILES: dict[str, dict[str, Any]] = {
         "semantic_floor": 0.75,
     },
     # ruri-v3（ModernBERT / ONNX Runtime 経路）は非対称プレフィックス必須。
-    # floor は既定 0.30 のまま（#001 実測で 0.30 が機能することを確認済み）。
+    # #001 実測（229 doc）: ruri の cos は 0.66〜0.88 の狭帯。0.80 が hit@1 の
+    # プラトー中心（0.79〜0.81）。0.30 は事実上の全通過で、semantic の裾が
+    # BM25 ノイズと RRF 二重項を作り、正解を押し下げる。
     "cl-nagoya/ruri-v3-30m": {
         "query_prefix": "検索クエリ: ",
         "passage_prefix": "検索文書: ",
-        "semantic_floor": _SEMANTIC_FLOOR,
+        "semantic_floor": 0.80,
     },
 }
 _DEFAULT_PROFILE: dict[str, Any] = {
@@ -770,6 +772,12 @@ class ToolIndex:
                     self._embeddings = None
                     # A1: 既存のキャッシュ済みベクトルは再利用し、不足行だけ embed する。
                     self._embeddings = await self._embed_with_cache(doc_texts)
+                    # キャッシュ全命中だと _embed_docs_blocking が走らず _embedder が
+                    # None のまま残り、クエリ側の埋め込みが恒久的に死ぬ（warm-cache 死）。
+                    if self._embedder is None:
+                        self._embedder = await asyncio.to_thread(
+                            create_embedder, self._embedding_model
+                        )
                     self._embedding_error = None
                 except Exception as exc:
                     logger.warning(
@@ -828,7 +836,11 @@ class ToolIndex:
         inputSchema is included so the LLM can proceed directly to execute_tool without
         a separate get_tool_schema call.
 
-        Read-only — does not modify shared state, safe without lock.
+        Read-only with respect to search state — the index, BM25 corpus and
+        embeddings are not modified, so no lock is needed. The only write is
+        ``_embedding_error`` (set by ``_semantic_search`` to surface embedder
+        failures via ``embedding_status``); it is a status flag that does not
+        affect results.
 
         ``top_k`` is clamped to ``_MAX_TOP_K`` (LLM が巨大な top_k を渡しても
         返り値が肥大しないように)。top_k ≤ _MAX_TOP_K の挙動は不変。
@@ -870,10 +882,13 @@ class ToolIndex:
 
         if self._use_embeddings and self._embeddings is not None:
             candidates = max(top_k, _RRF_CANDIDATES)
-            results = self._rrf_fuse(
-                self._semantic_search(query, candidates),
-                self._bm25_search(query, candidates),
-            )
+            bm = self._bm25_search(query, candidates)
+            # OOV ゲート: クエリのトークンが索引語彙に 1 つも無い（BM25 全 0）なら、
+            # semantic の最近傍は無意味（実測: 'zzzqqq' でも cos 0.8352）。捏造せず空を返す。
+            if not bm and not self._has_lexical_support(query):
+                results = []
+            else:
+                results = self._rrf_fuse(self._semantic_search(query, candidates), bm)
         else:
             results = self._bm25_search(query, top_k)
 
@@ -924,22 +939,30 @@ class ToolIndex:
         if not _HAS_NUMPY:
             # numpy 無しでは意味検索不能 — search() が BM25 にフォールバック
             return []
+        if self._embedder is None:
+            # rebuild 側で担保するが、直接構築/旧状態に対する最終防衛線。
+            self._embedding_error = "embedder-uninitialized"
+            return []
         prefix = self._profile["query_prefix"] or ""
         try:
             query_vec = np.array(  # type: ignore[name-defined]
                 list(self._embedder.embed([prefix + query])),  # type: ignore[union-attr]
                 dtype=np.float32,  # type: ignore[union-attr]
             ).squeeze(0)
-        except Exception:
+            # L2-normalize query (bge-small produces normalized docs already)
+            norm = np.linalg.norm(query_vec)  # type: ignore[name-defined]
+            if norm > 0:
+                query_vec = query_vec / norm
+            # Dot product = cosine similarity (both vectors L2-normalized).
+            # matmul も try 内: _embeddings と query_vec の次元不一致で
+            # search_tools 全体が落ちるのを防ぐ（失敗は BM25 単独降格に）。
+            scores = self._embeddings @ query_vec  # type: ignore[name-defined,operator]
+        except Exception as exc:
             # 再構築時と同等: 警告して空結果→search() が BM25 にフォールバック
             logger.warning("Embedding query failed, falling back to BM25", exc_info=True)
+            self._embedding_error = f"{type(exc).__name__}: {str(exc)[:80]}"
             return []
-        # L2-normalize query (bge-small produces normalized docs already)
-        norm = np.linalg.norm(query_vec)  # type: ignore[name-defined]
-        if norm > 0:
-            query_vec = query_vec / norm
-        # Dot product = cosine similarity (both vectors L2-normalized)
-        scores = self._embeddings @ query_vec  # type: ignore[name-defined,operator]
+        self._embedding_error = None
         ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
         docs = self._documents
         results = []
@@ -1014,6 +1037,12 @@ class ToolIndex:
                     }
                 )
         return results
+
+    def _has_lexical_support(self, query: str) -> bool:
+        """クエリのトークンが索引語彙に 1 つでも現れるか（BM25 非ゼロがあるか）。"""
+        if self._bm25 is None:
+            return False
+        return bool((self._bm25.get_scores(self._tokenize(query)) > 0).any())
 
     # ── Schema + Server listing ───────────────────────────────────
 

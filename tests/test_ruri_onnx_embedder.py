@@ -96,11 +96,11 @@ class TestOrtRevisionPin:
 
 
 class TestRuriProfile:
-    def test_profile_has_japanese_prefixes_and_default_floor(self):
+    def test_profile_has_japanese_prefixes_and_retuned_floor(self):
         p = model_profile(RURI)
         assert p["query_prefix"] == "検索クエリ: "
         assert p["passage_prefix"] == "検索文書: "
-        assert p["semantic_floor"] == 0.30
+        assert p["semantic_floor"] == 0.80  # ruri 実測のプラトー中心
 
     def test_profile_is_case_insensitive(self):
         assert model_profile("CL-NAGOYA/RURI-V3-30M") == model_profile(RURI)

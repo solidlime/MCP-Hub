@@ -236,7 +236,7 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
   - ドキュメント: `"{server}/{name} [{tags}]: {index_text}"` 形式で埋め込み。`index_text` は `サーバー説明（日本語） + ツール説明（_INDEX_DESC_CHARS = 400 字上限）`（サーバー前置付き）
   - 埋め込みキャッシュ: 文書単位でディスクに npz 保存（キーは文書テキストの `sha1[:16]`、ファイル名は `sha1("{model}|{dim}|{passage_prefix}|{TEXT_FMT_VERSION}")[:16].npz`）。置き場は `MCP_HUB_EMBED_CACHE_DIR` → 既定 `~/.cache/mcp-hub/embeddings/`。書き込みは tmp + `os.replace` で atomic。壊れた/次元不一致の npz は黙って再計算する。rebuild は不足行だけを embed する（`_embed_with_cache`）
   - 実効状態: `embedding_status` プロパティが `active`/`building`/`inactive:*`/`error:*` を返す（設定意図でなく真実。`use_embeddings` プロパティは実効値のまま）
-  - セマンティック候補の下限（semantic floor）もモデルプロファイル単位で持つ（明示プロファイル `intfloat/multilingual-e5-small` = 0.75、`cl-nagoya/ruri-v3-30m` / E5 ファミリ既定 / 未定義モデル = 0.30）。E5 のコサインは 0.70〜0.85 の狭い帯に集中し、この床は「明らかなゴミ」を落とすだけで関連/無関係の分離は担わない（分離は RRF の順位が担う）
+  - セマンティック候補の下限（semantic floor）もモデルプロファイル単位で持つ（明示プロファイル `cl-nagoya/ruri-v3-30m` = 0.80、`intfloat/multilingual-e5-small` = 0.75、E5 ファミリ既定 / 未定義モデル = 0.30）。ruri（実測 0.66〜0.88、hit@1 のプラトー中心 0.79〜0.81）と E5（実測 0.70〜0.85）のコサインはいずれも狭い帯に集中し、この床は「明らかなゴミ」を落とすだけで関連/無関係の分離は担わない（分離は RRF の順位が担う）
 - **フォールバック**: BM25Okapi によるキーワード検索
   - `fastembed` 未インストール時（現行の degrade ゲート。ORT 経路モデルを指定していてもこの場合は埋め込みを作らず BM25 のみ）、またはセマンティック検索が 0 件の場合に使用
   - コード認識トークナイザー（NFKC → ひらがな→カタカナ統一 → camelCase 分割、digit 境界分割、CJK 連続区間の bigram+unigram）
