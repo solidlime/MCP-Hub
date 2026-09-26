@@ -150,7 +150,19 @@ def _supported_embedding_models() -> dict[str, str] | None:
                 }  # type: ignore[name-defined]
         except Exception:
             logger.debug("Could not query fastembed supported models", exc_info=True)
-        _SUPPORTED_MODELS_CACHE = {**fastembed_models, **ORT_SUPPORTED_MODELS}
+        # Hub 自身が静的に登録する独自モデル（e5-small 等）。fastembed 不在時は
+        # list_supported_models() に出てこないため、ここで既知に含める。含めないと
+        # resolve_embedding_model() が明示指定を「未知」と誤判定して既定 ruri へ
+        # 書き換え、e5 の prefix/floor プロファイルが失われる（実際 CI で起きた）。
+        custom_models = {
+            spec["model"].lower(): spec["model"]
+            for spec in _CUSTOM_EMBEDDING_MODELS
+        }
+        _SUPPORTED_MODELS_CACHE = {
+            **custom_models,
+            **fastembed_models,
+            **ORT_SUPPORTED_MODELS,
+        }
     return _SUPPORTED_MODELS_CACHE
 
 
