@@ -1099,3 +1099,83 @@ class TestSearchNoteFlag:
         empty = json.loads(await app.meta_tools.search_tools("zzzznope", top_k=5))
         assert "message" in empty
         assert "note" not in empty
+
+
+class TestCompactUnionType:
+    """_compact_property は anyOf/oneOf の null 以外の型が1種類なら type を残す。"""
+
+    def test_anyof_nullable_keeps_type(self):
+        from mcp_hub.meta_provider import _compact_property
+
+        prop = {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None}
+        assert _compact_property(prop) == {"type": "string", "default": None}
+
+    def test_oneof_nullable_keeps_type(self):
+        from mcp_hub.meta_provider import _compact_property
+
+        prop = {"oneOf": [{"type": "null"}, {"type": "integer"}]}
+        assert _compact_property(prop) == {"type": "integer"}
+
+    def test_ambiguous_and_malformed_keep_no_type(self):
+        from mcp_hub.meta_provider import _compact_property
+
+        # 複数種類 → 現状維持（type なし）
+        assert _compact_property({"anyOf": [{"type": "string"}, {"type": "integer"}]}) == {}
+        # 0種類（null のみ）→ type なし
+        assert _compact_property({"anyOf": [{"type": "null"}]}) == {}
+        # 不正形でも例外を出さない
+        assert _compact_property({"anyOf": "nope"}) == {}
+        assert _compact_property({"anyOf": [None, 3]}) == {}
+        # 要素側 type が配列でも null 以外が1種類なら残す
+        assert _compact_property({"anyOf": [{"type": ["string", "null"]}]}) == {
+            "type": "string"
+        }
+
+    def test_compact_input_schema_applies_union_type_at_top_level(self):
+        from mcp_hub.meta_provider import _compact_input_schema
+
+        # anyOf の null 以外が1種類 → トップレベルでも type を採る
+        assert _compact_input_schema(
+            {"anyOf": [{"type": "object"}, {"type": "null"}], "required": ["a"]}
+        ) == {"type": "object", "required": ["a"]}
+        # 複数種類 → type なし（誤った型を出さない）
+        assert (
+            _compact_input_schema({"anyOf": [{"type": "object"}, {"type": "string"}]})
+            == {}
+        )
+
+    def test_branch_without_type_disables_salvage(self):
+        from mcp_hub.meta_provider import _compact_property
+
+        # $ref 要素は型を判断できない → 救済せず捏造を防ぐ
+        assert _compact_property({"anyOf": [{"type": "string"}, {"$ref": "#/x"}]}) == {}
+        # enum のみの要素も同様
+        assert _compact_property({"anyOf": [{"type": "string"}, {"enum": [1, 2]}]}) == {}
+        # 既存の救済ケース（null は type を持つので除外）は壊さない
+        assert _compact_property({"anyOf": [{"type": "string"}, {"type": "null"}]}) == {
+            "type": "string"
+        }
+
+
+class TestZeroResultShape:
+    """0 件応答も hits と同形（results/servers を持つ）で KeyError を防ぐ。"""
+
+    async def test_zero_result_has_results_list(self):
+        _pm, app = await _app_from(
+            {
+                "srv": [
+                    SimpleNamespace(
+                        name="rich_tool",
+                        description="Rich",
+                        parameters={"type": "object"},
+                    )
+                ]
+            }
+        )
+        empty = json.loads(await app.meta_tools.search_tools("zzzznope", top_k=5))
+        assert empty["results"] == []
+        assert empty["servers"] == {}
+        assert "message" in empty
+        assert "hint" in empty
+        # 多言語キーワード併記の誘導が hint に含まれる
+        assert "室温 temperature" in empty["hint"]

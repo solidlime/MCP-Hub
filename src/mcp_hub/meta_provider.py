@@ -1070,6 +1070,34 @@ class ToolIndex:
         return result
 
 
+def _union_type(prop: dict) -> Any:
+    """anyOf / oneOf の要素から null 以外の型がちょうど1種類ならそれを返す。
+
+    複数種類・0種類・anyOf/oneOf 不在・不正な形は None（現状維持）。
+    type キーを持たない要素（$ref / enum のみ / 非 dict）が1つでもあれば
+    判断材料が足りないので None（誤った型を捏造しない保守側）。
+    `{"anyOf": [{"type": "string"}, {"type": "null"}], "default": null}` の
+    ように他言語の optional 表現で書かれた param の型を救う。
+    """
+    found: set[str] = set()
+    for key in ("anyOf", "oneOf"):
+        branches = prop.get(key)
+        if not isinstance(branches, list):
+            continue
+        for branch in branches:
+            if not isinstance(branch, dict):
+                return None
+            if "type" not in branch:
+                return None
+            btype = branch["type"]
+            if isinstance(btype, str):
+                if btype != "null":
+                    found.add(btype)
+            elif isinstance(btype, list):
+                found.update(t for t in btype if isinstance(t, str) and t != "null")
+    return found.pop() if len(found) == 1 else None
+
+
 def _compact_input_schema(schema: Any) -> dict:
     """search_tools 応答用に inputSchema を「名前 / 型 / 必須」へ圧縮する。
 
@@ -1082,8 +1110,11 @@ def _compact_input_schema(schema: Any) -> dict:
     if not isinstance(schema, dict):
         return {}
     out: dict[str, Any] = {}
-    if schema.get("type") is not None:
-        out["type"] = schema["type"]
+    schema_type = schema.get("type")
+    if schema_type is None:
+        schema_type = _union_type(schema)
+    if schema_type is not None:
+        out["type"] = schema_type
     required = schema.get("required")
     if isinstance(required, list):
         out["required"] = required
@@ -1100,8 +1131,11 @@ def _compact_property(prop: Any, depth: int = 0) -> dict:
     if not isinstance(prop, dict):
         return {}
     out: dict[str, Any] = {}
-    if prop.get("type") is not None:
-        out["type"] = prop["type"]
+    prop_type = prop.get("type")
+    if prop_type is None:
+        prop_type = _union_type(prop)
+    if prop_type is not None:
+        out["type"] = prop_type
     if depth >= 1:
         return out
     enum = prop.get("enum")
@@ -1191,6 +1225,8 @@ class MetaTools:
                 active = request_tags.get() or []
                 return json.dumps(
                     {
+                        "results": [],
+                        "servers": {},
                         "message": "No matching tools found",
                         "hint": (
                             f"タグフィルタ {', '.join(map(str, active))} により"
@@ -1204,8 +1240,14 @@ class MetaTools:
         if not results:
             return json.dumps(
                 {
+                    "results": [],
+                    "servers": {},
                     "message": "No matching tools found",
-                    "hint": "Try broader keywords or check server connections.",
+                    "hint": (
+                        "Try adding English keywords to the same query "
+                        "(e.g. '室温 temperature'), broader keywords, "
+                        "or check server connections."
+                    ),
                 },
                 ensure_ascii=False,
             )
@@ -1492,6 +1534,9 @@ async def create_meta_app(
     @mcp.tool()
     async def search_tools(query: str, top_k: int = 10) -> str:
         """Search upstream tools. Always call FIRST before execute_tool.
+
+        Include English keywords alongside your own language in the same query
+        (e.g. "室温 temperature") to match tools described in English.
 
         Args:
             query: What you want to do (e.g. "read files", "search web")
