@@ -653,11 +653,11 @@
             cursor: default;
             transition: all var(--transition-fast);
         }
-        .tag-chip:nth-child(5n+1) { background: var(--tag-bg-1); color: var(--tag-text-1); }
-        .tag-chip:nth-child(5n+2) { background: var(--tag-bg-2); color: var(--tag-text-2); }
-        .tag-chip:nth-child(5n+3) { background: var(--tag-bg-3); color: var(--tag-text-3); }
-        .tag-chip:nth-child(5n+4) { background: var(--tag-bg-4); color: var(--tag-text-4); }
-        .tag-chip:nth-child(5n+5) { background: var(--tag-bg-5); color: var(--tag-text-5); }
+        .tag-chip[data-color="1"] { background: var(--tag-bg-1); color: var(--tag-text-1); }
+        .tag-chip[data-color="2"] { background: var(--tag-bg-2); color: var(--tag-text-2); }
+        .tag-chip[data-color="3"] { background: var(--tag-bg-3); color: var(--tag-text-3); }
+        .tag-chip[data-color="4"] { background: var(--tag-bg-4); color: var(--tag-text-4); }
+        .tag-chip[data-color="5"] { background: var(--tag-bg-5); color: var(--tag-text-5); }
         .tag-chip .tag-remove {
             display: none;
             cursor: pointer;
@@ -2209,6 +2209,13 @@
             return String(text ?? '').replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
         }
 
+        // 同じタグは常に同じ色。DOM上の順番に依存させない（タグ文字列の安定ハッシュ）。
+        function tagColorIndex(tag) {
+            let h = 0;
+            for (const ch of String(tag)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+            return (h % 5) + 1;
+        }
+
         function getServerTags(server) {
             return (server.config && server.config.tags) || [];
         }
@@ -2383,7 +2390,7 @@
                     ${tags.length > 0 ? `
                     <div class="server-tags">
                         ${tags.map(tag => `
-                            <span class="tag-chip" data-tag="${escapeAttr(tag)}">
+                            <span class="tag-chip" data-tag="${escapeAttr(tag)}" data-color="${tagColorIndex(tag)}">
                                 ${escapeHtml(tag)}
                                 <span class="tag-remove" data-action="remove-tag" data-server="${escapeAttr(server.name)}" data-tag="${escapeAttr(tag)}" title="タグを削除" aria-label="タグ ${escapeAttr(tag)} を削除">✕</span>
                             </span>
