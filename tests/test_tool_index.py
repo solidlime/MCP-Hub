@@ -6,7 +6,12 @@ import numpy as np
 import pytest
 from mcp_hub.config import DEFAULT_EMBEDDING_MODEL
 import mcp_hub.meta_provider as _mp
-from mcp_hub.meta_provider import ToolIndex, resolve_embedding_model, _HAS_FASTEMBED
+from mcp_hub.meta_provider import (
+    ToolIndex,
+    model_profile,
+    resolve_embedding_model,
+    _HAS_FASTEMBED,
+)
 
 
 class _FixedEmbedder:
@@ -476,13 +481,17 @@ class TestResolveEmbeddingModel:
 
     def test_unsupported_model_falls_back(self):
         """非対応モデルは DEFAULT_EMBEDDING_MODEL にフォールバックする。"""
-        supported = {"sentence-transformers/all-minilm-l6-v2"}
+        supported = {
+            "sentence-transformers/all-minilm-l6-v2": "sentence-transformers/all-MiniLM-L6-v2"
+        }
         result = resolve_embedding_model("cl-nagoya/ruri-v3-30m", supported)
         assert result == DEFAULT_EMBEDDING_MODEL
 
     def test_supported_model_kept(self):
-        """対応モデルはそのまま返される。"""
-        supported = {"sentence-transformers/all-minilm-l6-v2"}
+        """対応モデルは登録カノニカル名で返される。"""
+        supported = {
+            "sentence-transformers/all-minilm-l6-v2": "sentence-transformers/all-MiniLM-L6-v2"
+        }
         model = "sentence-transformers/all-MiniLM-L6-v2"
         assert resolve_embedding_model(model, supported) == model
 
@@ -491,16 +500,283 @@ class TestResolveEmbeddingModel:
         model = "any/model-name"
         assert resolve_embedding_model(model, None) == model
 
-    def test_supported_matching_is_case_insensitive(self):
-        """対応判定は大文字小文字を無視する。"""
-        supported = {"sentence-transformers/all-minilm-l6-v2"}
-        model = "SENTENCE-TRANSFORMERS/ALL-MINILM-L6-V2"
-        assert resolve_embedding_model(model, supported) == model
+    def test_case_variant_resolves_to_canonical(self):
+        """大文字違いの綴りでも登録カノニカル名を返す。
+
+        TextEmbedding() は登録名で引くため、生の大文字名を渡すと fastembed が
+        KeyError を投げ、埋め込みが恒久停止する（B1）。
+        """
+        supported = {
+            "sentence-transformers/all-minilm-l6-v2": "sentence-transformers/all-MiniLM-L6-v2"
+        }
+        assert (
+            resolve_embedding_model("SENTENCE-TRANSFORMERS/ALL-MINILM-L6-V2", supported)
+            == "sentence-transformers/all-MiniLM-L6-v2"
+        )
+
+    def test_unknown_variant_not_aliased(self):
+        """未知の名前は勝手に別名へ寄せず、従来どおり既定へフォールバック。"""
+        supported = {"intfloat/multilingual-e5-small": "intfloat/multilingual-e5-small"}
+        assert (
+            resolve_embedding_model("INTFLOAT/MULTILINGUAL-E5-LARGE", supported)
+            == DEFAULT_EMBEDDING_MODEL
+        )
 
 
 def test_default_embedding_model_is_supported():
-    """デフォルト埋め込みモデルは fastembed 対応の軽量モデル。"""
-    assert DEFAULT_EMBEDDING_MODEL == "sentence-transformers/all-MiniLM-L6-v2"
+    """デフォルト埋め込みモデルは多言語対応の軽量モデル（日本語クエリ修正）。"""
+    assert DEFAULT_EMBEDDING_MODEL == "intfloat/multilingual-e5-small"
+
+
+class TestTokenizerCJK:
+    """CJK tokenizer: NFKC → かな統一 → CJK bigram+unigram。
+
+    期待トークン列を明示する（#042 の参考スニペットは未検証で期待値が
+    自己矛盾していたため、ここが唯一の正典）。
+    """
+
+    def test_hiragana_kanji_run(self):
+        """「読み込み」= 全体 + bigram3 + unigram3（重複除去後）= 7 トークン。"""
+        assert ToolIndex._tokenize("読み込み") == [
+            "読ミ込ミ",
+            "読ミ",
+            "ミ込",
+            "込ミ",
+            "読",
+            "ミ",
+            "込",
+        ]
+
+    def test_katakana_run(self):
+        """「ファイル」= 全体 + bigram3 + unigram4。"""
+        assert ToolIndex._tokenize("ファイル") == [
+            "ファイル",
+            "ファ",
+            "ァイ",
+            "イル",
+            "フ",
+            "ァ",
+            "イ",
+            "ル",
+        ]
+
+    def test_hiragana_and_katakana_unify(self):
+        """ひらがな入力「ふぁいる」はカタカナ文書と同じトークン列になる。"""
+        assert ToolIndex._tokenize("ふぁいる") == ToolIndex._tokenize("ファイル")
+
+    def test_halfwidth_katakana_nfkc(self):
+        """半角カナは NFKC で全角カナに正規化される。"""
+        assert ToolIndex._tokenize("ﾃﾞｰﾀ") == [
+            "データ",
+            "デー",
+            "ータ",
+            "デ",
+            "ー",
+            "タ",
+        ]
+
+    def test_fullwidth_ascii_nfkc(self):
+        """全角英数は NFKC で ASCII に正規化される。"""
+        assert ToolIndex._tokenize("ＦＩＬＥ") == ["file"]
+
+    def test_punctuation_breaks_cjk_window(self):
+        """句読点は bigram 窓を切る（記号を跨ぐ bigram を作らない）。"""
+        tokens = ToolIndex._tokenize("読み込み、書き込み")
+        # 記号を跨ぐ bigram が存在しない
+        assert "ミ、" not in tokens
+        assert ", " not in tokens
+        assert "読ミ込ミ" in tokens
+        assert "書キ込ミ" in tokens
+        assert "キ込" in tokens
+
+    def test_casefold(self):
+        """casefold により ß と ss が同一トークンに揃う。"""
+        assert "strasse" in ToolIndex._tokenize("Straße")
+        assert "strasse" in ToolIndex._tokenize("STRASSE")
+
+    def test_mixed_ascii_cjk(self):
+        """ASCII + CJK 混在は両経路のトークンを出す。"""
+        tokens = ToolIndex._tokenize("fileを読む")
+        assert "file" in tokens
+        assert "ヲ読" in tokens  # を -> ヲ
+        assert "読ム" in tokens  # む -> ム
+
+    def test_empty_inputs(self):
+        """空・空白のみは空リスト。"""
+        assert ToolIndex._tokenize("") == []
+        assert ToolIndex._tokenize("   ") == []
+
+    def test_cjk_extension_b_run(self):
+        """漢字拡張B面（𠮟 U+20B9F）も CJK 区間としてトークン化される（N1）。"""
+        assert ToolIndex._tokenize("𠮟") == ["𠮟"]
+
+
+class TestJapaneseSearch:
+    """日本語クエリの検索統合（字句経路・embeddings 非依存）。"""
+
+    @pytest.fixture
+    async def ja_index(self):
+        docs = [
+            {
+                "name": "get_weather",
+                "description": "天気予報を取得する",
+                "server": "weather",
+                "inputSchema": {"type": "object", "properties": {}},
+                "tags": [],
+            },
+            {
+                "name": "read_file",
+                "description": "ファイルを読み込む",
+                "server": "filesystem",
+                "inputSchema": {"type": "object", "properties": {}},
+                "tags": [],
+            },
+            {
+                "name": "set_light",
+                "description": "照明の明るさを操作する",
+                "server": "home",
+                "inputSchema": {"type": "object", "properties": {}},
+                "tags": [],
+            },
+        ]
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        idx._use_embeddings = False  # env-independent: exercise the lexical path
+        return idx
+
+    def test_ja_query_weather(self, ja_index):
+        results = ja_index.search("天気")
+        assert results
+        assert results[0]["name"] == "get_weather"
+
+    def test_ja_query_file(self, ja_index):
+        results = ja_index.search("ファイル")
+        assert results
+        assert results[0]["name"] == "read_file"
+
+    def test_ja_query_light(self, ja_index):
+        results = ja_index.search("照明")
+        assert results
+        assert results[0]["name"] == "set_light"
+
+
+class TestModelProfile:
+    """モデルプロファイル: prefix と semantic floor をモデル単位で解決する。"""
+
+    def test_e5_profile_has_prefixes_and_floor(self):
+        p = model_profile("intfloat/multilingual-e5-small")
+        assert p["query_prefix"] == "query: "
+        assert p["passage_prefix"] == "passage: "
+        assert p["semantic_floor"] > 0.30  # E5 の類似度帯に合わせて再校正済み
+
+    def test_uppercase_model_name_gets_profile(self):
+        """大文字綴りでもプロファイルが引ける（大小文字非依存・B1）。"""
+        p = model_profile("INTFLOAT/MULTILINGUAL-E5-SMALL")
+        assert p["query_prefix"] == "query: "
+        assert p["passage_prefix"] == "passage: "
+        assert p["semantic_floor"] > 0.30
+
+    def test_e5_family_model_gets_prefixes(self):
+        """intfloat/ 配下で名前に e5 を含む未登録モデルにも prefix を自動付与する（B2）。"""
+        p = model_profile("intfloat/multilingual-e5-large")
+        assert p["query_prefix"] == "query: "
+        assert p["passage_prefix"] == "passage: "
+        assert p["semantic_floor"] == 0.30  # ファミリ既定（明示プロファイルのみ 0.75）
+
+    def test_non_intfloat_e5_is_not_family(self):
+        """intfloat/ 以外は E5 名でもファミリ扱いしない（勝手に寄せない）。"""
+        p = model_profile("some-org/e5-base")
+        assert p["query_prefix"] is None
+        assert p["passage_prefix"] is None
+        assert p["semantic_floor"] == 0.30
+
+    def test_unknown_model_uses_default_profile(self):
+        p = model_profile("some/other-model")
+        assert p["query_prefix"] is None
+        assert p["passage_prefix"] is None
+        assert p["semantic_floor"] == 0.30
+
+    def test_default_embedding_model_has_profile(self):
+        """デフォルトモデルは prefix 付きプロファイルを持つ（設定漏れ検出）。"""
+        assert model_profile(DEFAULT_EMBEDDING_MODEL)["query_prefix"] == "query: "
+
+    def test_passage_prefix_applied_to_documents(self):
+        idx = ToolIndex(embedding_model="intfloat/multilingual-e5-small")
+        seen: dict = {}
+
+        class _Spy:
+            def embed(self, texts):
+                seen["docs"] = list(texts)
+                return [np.zeros(4, dtype=np.float32) for _ in texts]
+
+        idx._embedder = _Spy()
+        idx._embed_docs_blocking(["a/b: c", "d/e: f"])
+        assert seen["docs"] == ["passage: a/b: c", "passage: d/e: f"]
+
+    def test_query_prefix_applied_to_query(self):
+        idx = ToolIndex(embedding_model="intfloat/multilingual-e5-small")
+        seen: dict = {}
+
+        class _Spy:
+            def embed(self, texts):
+                seen["q"] = list(texts)
+                return [np.array([1.0, 0.0], dtype=np.float32)]
+
+        idx._documents = [
+            {
+                "server": "s",
+                "name": "t",
+                "description": "",
+                "inputSchema": {},
+                "tags": [],
+            }
+        ]
+        idx._embeddings = np.array([[1.0, 0.0]], dtype=np.float32)
+        idx._embedder = _Spy()
+        idx._use_embeddings = True
+        idx._semantic_search("天気", 5)
+        assert seen["q"] == ["query: 天気"]
+
+    async def test_e5_profile_floor_filters_weak_hit(self):
+        """E5 プロファイルの床（>0.30）未満の候補は落ちる。"""
+        idx = ToolIndex(embedding_model="intfloat/multilingual-e5-small")
+        await idx.rebuild(
+            [
+                {
+                    "server": "s",
+                    "name": "tool_x",
+                    "description": "",
+                    "inputSchema": {},
+                    "tags": [],
+                }
+            ]
+        )
+        # cos = 0.70 < floor(0.75)
+        idx._embeddings = np.array([[0.70, 0.7141428]], dtype=np.float32)
+        idx._embedder = _FixedEmbedder([1.0, 0.0])
+        idx._use_embeddings = True
+        assert idx.search("zzz_nomatch", top_k=5) == []
+
+    async def test_default_model_floor_keeps_moderate_hit(self):
+        """プレフィックス無しモデルは従来床 0.30 のまま（後方互換）。"""
+        idx = ToolIndex(embedding_model="sentence-transformers/all-MiniLM-L6-v2")
+        await idx.rebuild(
+            [
+                {
+                    "server": "s",
+                    "name": "tool_x",
+                    "description": "",
+                    "inputSchema": {},
+                    "tags": [],
+                }
+            ]
+        )
+        # cos = 0.40 > 0.30 → 候補として残る
+        idx._embeddings = np.array([[0.40, 0.9165151]], dtype=np.float32)
+        idx._embedder = _FixedEmbedder([1.0, 0.0])
+        idx._use_embeddings = True
+        results = idx.search("zzz_nomatch", top_k=5)
+        assert [r["name"] for r in results] == ["tool_x"]
 
 
 class TestTagsInIndex:

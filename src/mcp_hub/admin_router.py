@@ -269,7 +269,7 @@ async def update_embedding_model(body: dict):
         raise HTTPException(
             status_code=400,
             detail="embedding_model が必要です。例: {'embedding_model': "
-            "'sentence-transformers/all-MiniLM-L6-v2'}",
+            "'intfloat/multilingual-e5-small'}",
         )
     model = _validate_embedding_model(body["embedding_model"])
     await registry.set_embedding_model(model)

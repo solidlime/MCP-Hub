@@ -230,12 +230,15 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
 `ToolIndex` クラスがツールの検索インデックスを管理します。
 
 - **プライマリ検索**: fastembed による dense retrieval（コサイン類似度）
-  - モデル: `sentence-transformers/all-MiniLM-L6-v2`（設定で変更可能。fastembed 非対応モデル指定時はデフォルトにフォールバック）
-  - ドキュメント: `"{server}/{name}: {description}"` 形式で埋め込み
+  - モデル: `intfloat/multilingual-e5-small`（多言語・384dim。設定で変更可能。fastembed 非対応モデル指定時はデフォルトにフォールバック）
+  - プレフィックス: `intfloat/` 配下で名前に `e5` を含むモデル（大小無視）はクエリ `"query: "` / 文書 `"passage: "` が必須。fastembed は自動付与しないため、モデルプロファイル（`model_profile()`、大小文字非依存）経由で両側に適用する。それ以外のモデルには付与しない
+  - ドキュメント: `"{server}/{name} [{tags}]: {description}"` 形式で埋め込み
+  - セマンティック候補の下限（semantic floor）もモデルプロファイル単位で持つ（明示プロファイル `intfloat/multilingual-e5-small` = 0.75、E5 ファミリ既定 / 未定義モデル = 0.30）。E5 のコサインは 0.70〜0.85 の狭い帯に集中し、この床は「明らかなゴミ」を落とすだけで関連/無関係の分離は担わない（分離は RRF の順位が担う）
 - **フォールバック**: BM25Okapi によるキーワード検索
   - fastembed 未インストール時、またはセマンティック検索が 0 件の場合に使用
-  - コード認識トークナイザー（camelCase 分割、digit 境界分割）
+  - コード認識トークナイザー（NFKC → ひらがな→カタカナ統一 → camelCase 分割、digit 境界分割、CJK 連続区間の bigram+unigram）
   - BM25F 近似のためのトークン重複（名前×5、サーバー名×3、説明×2、パラメーター名×1）
+- **融合**: BM25 とセマンティック候補を RRF（Reciprocal Rank Fusion, k=60）で合成。name-match promotion（希少トークンの IDF ゲート付き）が最優先される
 - **小規模コーパスフォールバック**: 5 件以下のサーバーでは単純な TF 重み付け
 
 **インデックス再構築（rebuild_index）：**
