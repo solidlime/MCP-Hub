@@ -60,6 +60,28 @@
             --tag-text-4: #f0d8b8;
             --tag-bg-5: rgba(160, 200, 232, 0.15);
             --tag-text-5: #b8d8f0;
+            --tag-bg-6: rgba(234, 164, 164, 0.15);
+            --tag-text-6: #eeb5b5;
+            --tag-bg-7: rgba(234, 182, 164, 0.15);
+            --tag-text-7: #eec3b5;
+            --tag-bg-8: rgba(234, 193, 164, 0.15);
+            --tag-text-8: #eeccb5;
+            --tag-bg-9: rgba(234, 222, 164, 0.15);
+            --tag-text-9: #eee4b5;
+            --tag-bg-10: rgba(222, 234, 164, 0.15);
+            --tag-text-10: #e4eeb5;
+            --tag-bg-11: rgba(187, 234, 164, 0.15);
+            --tag-text-11: #c8eeb5;
+            --tag-bg-12: rgba(164, 234, 205, 0.15);
+            --tag-text-12: #b5eed6;
+            --tag-bg-13: rgba(164, 234, 228, 0.15);
+            --tag-text-13: #b5eee9;
+            --tag-bg-14: rgba(164, 222, 234, 0.15);
+            --tag-text-14: #b5e4ee;
+            --tag-bg-15: rgba(164, 176, 234, 0.15);
+            --tag-text-15: #b5beee;
+            --tag-bg-16: rgba(234, 164, 228, 0.15);
+            --tag-text-16: #eeb5e9;
             --scrollbar-thumb: #3a3450;
             --toggle-off: #3a3450;
             --toggle-on: var(--accent-green);
@@ -102,6 +124,28 @@
             --tag-text-4: #906820;
             --tag-bg-5: rgba(56, 128, 184, 0.10);
             --tag-text-5: #286898;
+            --tag-bg-6: rgba(211, 69, 69, 0.10);
+            --tag-text-6: #c62f2f;
+            --tag-bg-7: rgba(211, 105, 69, 0.10);
+            --tag-text-7: #b14b2a;
+            --tag-bg-8: rgba(211, 128, 69, 0.10);
+            --tag-text-8: #a25926;
+            --tag-bg-9: rgba(211, 188, 69, 0.10);
+            --tag-text-9: #7e6e1e;
+            --tag-bg-10: rgba(188, 211, 69, 0.10);
+            --tag-text-10: #67761c;
+            --tag-bg-11: rgba(117, 211, 69, 0.10);
+            --tag-text-11: #3d7d1d;
+            --tag-bg-12: rgba(69, 211, 152, 0.10);
+            --tag-text-12: #1d7d55;
+            --tag-bg-13: rgba(69, 211, 200, 0.10);
+            --tag-text-13: #1d7b73;
+            --tag-bg-14: rgba(69, 188, 211, 0.10);
+            --tag-text-14: #207789;
+            --tag-bg-15: rgba(69, 93, 211, 0.10);
+            --tag-text-15: #304bce;
+            --tag-bg-16: rgba(211, 69, 200, 0.10);
+            --tag-text-16: #b52aa9;
             --scrollbar-thumb: #ccc8dd;
             --toggle-off: #ccc8dd;
             --toggle-on: var(--accent-green);
@@ -658,6 +702,17 @@
         .tag-chip[data-color="3"] { background: var(--tag-bg-3); color: var(--tag-text-3); }
         .tag-chip[data-color="4"] { background: var(--tag-bg-4); color: var(--tag-text-4); }
         .tag-chip[data-color="5"] { background: var(--tag-bg-5); color: var(--tag-text-5); }
+        .tag-chip[data-color="6"] { background: var(--tag-bg-6); color: var(--tag-text-6); }
+        .tag-chip[data-color="7"] { background: var(--tag-bg-7); color: var(--tag-text-7); }
+        .tag-chip[data-color="8"] { background: var(--tag-bg-8); color: var(--tag-text-8); }
+        .tag-chip[data-color="9"] { background: var(--tag-bg-9); color: var(--tag-text-9); }
+        .tag-chip[data-color="10"] { background: var(--tag-bg-10); color: var(--tag-text-10); }
+        .tag-chip[data-color="11"] { background: var(--tag-bg-11); color: var(--tag-text-11); }
+        .tag-chip[data-color="12"] { background: var(--tag-bg-12); color: var(--tag-text-12); }
+        .tag-chip[data-color="13"] { background: var(--tag-bg-13); color: var(--tag-text-13); }
+        .tag-chip[data-color="14"] { background: var(--tag-bg-14); color: var(--tag-text-14); }
+        .tag-chip[data-color="15"] { background: var(--tag-bg-15); color: var(--tag-text-15); }
+        .tag-chip[data-color="16"] { background: var(--tag-bg-16); color: var(--tag-text-16); }
         .tag-chip .tag-remove {
             display: none;
             cursor: pointer;
@@ -2210,10 +2265,35 @@
         }
 
         // 同じタグは常に同じ色。DOM上の順番に依存させない（タグ文字列の安定ハッシュ）。
-        function tagColorIndex(tag) {
+        // パレットは TAG_PALETTE_SIZE 色。ハッシュの希望色が使用済みなら次の空き色へ巡回して
+        // ページ内の別タグと色が重複しないようにする（衝突しないタグの色は変わらない）。
+        const TAG_PALETTE_SIZE = 16;
+        let tagColorCache = { key: null, colors: new Map() };
+
+        function tagColorHash(tag) {
             let h = 0;
             for (const ch of String(tag)) h = (h * 31 + ch.codePointAt(0)) >>> 0;
-            return (h % 5) + 1;
+            return h;
+        }
+
+        function tagColorIndex(tag) {
+            const tagSet = [...new Set(servers.flatMap(getServerTags))].sort();
+            const signature = JSON.stringify(tagSet);
+            if (signature !== tagColorCache.key) {
+                const used = new Set();
+                const colors = new Map();
+                for (const t of tagSet) {
+                    let idx = (tagColorHash(t) % TAG_PALETTE_SIZE) + 1;
+                    for (let i = 0; i < TAG_PALETTE_SIZE && used.has(idx); i++) {
+                        idx = (idx % TAG_PALETTE_SIZE) + 1;
+                    }
+                    used.add(idx);
+                    colors.set(t, idx);
+                }
+                tagColorCache = { key: signature, colors };
+            }
+            const key = String(tag);
+            return tagColorCache.colors.get(key) || (tagColorHash(key) % TAG_PALETTE_SIZE) + 1;
         }
 
         function getServerTags(server) {
