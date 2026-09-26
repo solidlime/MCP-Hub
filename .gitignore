@@ -16,3 +16,6 @@ data/
 .DS_Store
 Thumbs.db
 .codegraph/
+
+# Pi agent state
+.pi/
