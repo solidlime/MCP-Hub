@@ -169,7 +169,7 @@ async def lifespan(app: FastAPI):
     # so that background connections trigger index rebuilds.
     from .meta_provider import create_meta_app
 
-    meta_app = create_meta_app(
+    meta_app = await create_meta_app(
         proxy_manager,
         embedding_model=config.embedding_model,
         use_embeddings=config.use_embeddings,

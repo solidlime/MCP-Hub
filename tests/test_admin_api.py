@@ -57,6 +57,22 @@ class TestServerCRUD:
         })
         assert r.status_code == 422
 
+    def test_register_with_description(self, client):
+        r = client.post("/admin/api/servers", json={
+            "name": "described",
+            "config": {"url": "http://localhost:9999",
+                       "description": "Search the web and fetch pages"},
+        })
+        assert r.status_code == 201
+        assert r.json()["config"]["description"] == "Search the web and fetch pages"
+
+    def test_register_description_too_long_is_422(self, client):
+        r = client.post("/admin/api/servers", json={
+            "name": "too-long",
+            "config": {"url": "http://localhost:9999", "description": "x" * 501},
+        })
+        assert r.status_code == 422
+
     def test_delete_existing(self, client):
         client.post("/admin/api/servers", json={
             "name": "to-delete", "config": {"url": "http://localhost:9999", "disabled": True}
@@ -78,6 +94,18 @@ class TestServerCRUD:
         for s in servers:
             assert "status" in s
             assert "disabled" in s
+
+    def test_list_includes_description(self, client):
+        """GET /admin/api/servers は config に description を含めて返す（WebUI 表示用）。"""
+        client.post("/admin/api/servers", json={
+            "name": "described-list",
+            "config": {"url": "http://localhost:9999", "disabled": True,
+                       "description": "一覧に載る説明"},
+        })
+        r = client.get("/admin/api/servers")
+        assert r.status_code == 200
+        server = next(s for s in r.json()["servers"] if s["name"] == "described-list")
+        assert server["config"]["description"] == "一覧に載る説明"
 
 
 class TestPatchUpdate:
@@ -118,6 +146,30 @@ class TestPatchUpdate:
         assert r.status_code == 200
         assert r.json()["config"]["tags"] == ["web", "api"]
         assert calls == []  # tags-only PATCH では refresh_server を呼ばない
+
+    def test_patch_description_updates_catalog(self, client, monkeypatch):
+        """description のみ PATCH は refresh せず update_config_only に落ち、
+        次回 rebuild でカタログに乗る description を更新する。"""
+        client.post("/admin/api/servers", json={
+            "name": "desc-srv",
+            "config": {"url": "http://localhost:9999", "disabled": True,
+                       "description": "old line"},
+        })
+        pm = app_state.proxy_manager
+        assert pm is not None
+        calls = []
+
+        async def fake_refresh(name, config):
+            calls.append((name, config))
+
+        monkeypatch.setattr(pm, "refresh_server", fake_refresh)
+        r = client.patch("/admin/api/servers/desc-srv",
+                         json={"description": "new catalog line"})
+        assert r.status_code == 200
+        assert r.json()["config"]["description"] == "new catalog line"
+        assert calls == []  # プロキシ再生成なし
+        # カタログの参照元（server_description）にも即時反映される
+        assert pm.server_description("desc-srv") == "new catalog line"
 
     def test_patch_disabled_still_refreshes(self, client, monkeypatch):
         client.post("/admin/api/servers", json={

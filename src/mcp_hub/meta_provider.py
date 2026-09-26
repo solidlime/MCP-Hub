@@ -44,7 +44,48 @@ logger = logging.getLogger(__name__)
 # 全列挙は応答を肥大させるため先頭のみ + 残数を返す（案E）。
 _MAX_LISTED_SERVERS = 10
 
+# search_tools の description に焼き込むサーバーカタログの上限。
+_CATALOG_MAX_CHARS = 1200
+_MAX_CATALOG_TOOL_NAMES = 8
+_CATALOG_LINE_MAX_CHARS = 240
+
 MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
+
+
+def _build_catalog(server_entries: list[dict]) -> str:
+    """サーバー一覧の一行カタログを組む（search_tools の導線用）。
+
+    各 entry は {"server": str, "description": str, "tools": list[str]}。
+    description があればそれを使い、無ければツール名（ソート・先頭8件、
+    超過は +N more）にフォールバックする。サーバー名 asc。ツール 0 件は
+    "(no tools listed)"。行単位で積み _CATALOG_MAX_CHARS を超えたら
+    "... and N more servers" で打ち切る。
+    """
+    lines: list[str] = []
+    for entry in sorted(server_entries, key=lambda e: e["server"]):
+        name = entry["server"]
+        desc = entry.get("description") or ""
+        if desc:
+            line = f"- {name}: {desc}"
+        else:
+            tools = sorted(entry.get("tools") or [])
+            if not tools:
+                line = f"- {name}: (no tools listed)"
+            else:
+                listed = ", ".join(tools[:_MAX_CATALOG_TOOL_NAMES])
+                extra = len(tools) - _MAX_CATALOG_TOOL_NAMES
+                if extra > 0:
+                    listed += f" +{extra} more"
+                line = f"- {name}: tools: {listed}"
+        lines.append(line[:_CATALOG_LINE_MAX_CHARS])
+
+    out = ""
+    for i, line in enumerate(lines):
+        if len(out) + len(line) + 1 > _CATALOG_MAX_CHARS:
+            out += f"\n... and {len(lines) - i} more servers"
+            break
+        out += line + "\n"
+    return out.rstrip("\n")
 
 _SUPPORTED_MODELS_CACHE: set[str] | None = None
 
@@ -552,7 +593,6 @@ class MetaTools:
         tool_index: ToolIndex,
         execute_tool_fn: Callable[[str, str, dict], Any],
         get_server_tags: Callable[[str], list[str]] | None = None,
-        list_all_tools_fn: Callable[[], Awaitable[dict]] | None = None,
         list_server_tools_fn: Callable[[str], Awaitable[list]] | None = None,
         list_servers_fn: Callable[[], list[str]] | None = None,
     ):
@@ -560,15 +600,11 @@ class MetaTools:
         self._execute_tool = execute_tool_fn
         self._get_server_tags = get_server_tags or (lambda _: [])
 
-        async def _noop_all() -> dict:
-            return {}
-
         async def _noop_server(name: str) -> list:
             return []
 
         # Live-proxy accessors: listing and execution must NOT depend on the
         # (possibly stale / partially-rebuilt) index.
-        self._list_all_tools = list_all_tools_fn or _noop_all
         self._list_server_tools = list_server_tools_fn or _noop_server
         self._list_servers = list_servers_fn or (lambda: [])
 
@@ -721,42 +757,27 @@ class MetaTools:
             )
         return await self._execute_tool(server, tool_name, arguments)
 
-    async def list_upstream_tools(self) -> str:
-        """List all upstream tools grouped by server. Use for orientation, then search_tools.
-
-        Reads from the live proxy manager (tag-filtered via request_tags),
-        NOT the index — servers that failed to rebuild still appear here.
-        """
-        by_server = await self._list_all_tools()
-        if not by_server:
-            return json.dumps(
-                {"message": "No upstream tools available. Add servers via admin API."},
-                ensure_ascii=False,
-            )
-        tools_by_server = {
-            srv: [t["name"] for t in tools] for srv, tools in by_server.items()
-        }
-        total = sum(len(t) for t in tools_by_server.values())
-        return json.dumps(
-            {
-                "total_tools": total,
-                "tools_by_server": tools_by_server,
-            },
-            ensure_ascii=False,
-        )
-
 
 class MetaApp:
     """Wrapper exposing FastMCP app with clean attribute interface."""
 
-    def __init__(self, mcp: FastMCP, index: ToolIndex, meta: MetaTools, rebuild_fn):
+    def __init__(
+        self,
+        mcp: FastMCP,
+        index: ToolIndex,
+        meta: MetaTools,
+        rebuild_fn,
+        base_descriptions: dict[str, str],
+    ):
         self.mcp = mcp
         self.index = index
         self.meta_tools = meta
         self.rebuild_index = rebuild_fn
+        # 焼き込み前の素の tool description（毎回ここから再構成して冪等化）
+        self.base_descriptions = base_descriptions
 
 
-def create_meta_app(
+async def create_meta_app(
     proxy_manager,  # ProxyManager instance
     embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     use_embeddings: bool = True,
@@ -764,6 +785,19 @@ def create_meta_app(
     """Create a MetaApp with meta-tools."""
     mcp = FastMCP("MCP Hub Meta")
     index = ToolIndex(embedding_model=embedding_model, use_embeddings=use_embeddings)
+    base_descriptions: dict[str, str] = {}
+
+    # search_tools の description を毎回 base から再構成する（idempotent）。
+    # catalog が空でも base のみを書き戻す。
+    async def _apply_catalog(catalog: str) -> None:
+        tool = await mcp.get_tool("search_tools")
+        if tool is None:
+            return
+        base_desc = base_descriptions.get("search_tools", tool.description or "")
+        if catalog:
+            tool.description = base_desc + "\n\nRegistered servers:\n" + catalog
+        else:
+            tool.description = base_desc
 
     # Build initial index from all connected proxy tools
     async def rebuild_index() -> list[str]:
@@ -796,12 +830,26 @@ def create_meta_app(
                 logger.warning("Failed to list tools for %s", server_name)
                 failed.append(server_name)
         await index.rebuild(all_tools)
+
+        # per-server grouping → catalog を search_tools の description に焼き込む
+        by_server: dict[str, list[str]] = {}
+        for t in all_tools:
+            by_server.setdefault(t["server"], []).append(t["name"])
+        desc_fn = getattr(proxy_manager, "server_description", None)
+        entries = []
+        for srv, names in by_server.items():
+            desc = desc_fn(srv) if callable(desc_fn) else ""
+            entries.append(
+                {
+                    "server": srv,
+                    "description": desc if isinstance(desc, str) else "",
+                    "tools": names,
+                }
+            )
+        await _apply_catalog(_build_catalog(entries))
         return failed
 
-    # Live-proxy accessors for MetaTools (list/execute bypass the index).
-    async def _list_all_tools() -> dict:
-        return await proxy_manager.list_tools()  # tags via request_tags
-
+    # Live-proxy accessor for MetaTools (execution bypasses the index).
     async def _list_server_tools(server_name: str) -> list:
         proxy = proxy_manager.get_connected_servers().get(server_name)
         if proxy is None:
@@ -812,7 +860,6 @@ def create_meta_app(
         tool_index=index,
         execute_tool_fn=lambda s, t, a: proxy_manager.call_tool(s, t, a),
         get_server_tags=proxy_manager.server_tags,
-        list_all_tools_fn=_list_all_tools,
         list_server_tools_fn=_list_server_tools,
         # live 接続名（index の遅延に左右されない）— case-insensitive 解決用
         list_servers_fn=lambda: list(proxy_manager.get_connected_servers()),
@@ -847,9 +894,17 @@ def create_meta_app(
         # MetaTools.execute_tool instead of dying in schema validation.
         return await meta.execute_tool(server, tool_name, arguments)
 
-    @mcp.tool()
-    async def list_upstream_tools() -> str:
-        """List all upstream tools grouped by server. Use for orientation, then search_tools."""
-        return await meta.list_upstream_tools()
+    # 登録直後の素の description を捕捉（以降の焼き込みはここから再構成）。
+    # FastMCP 4.0.2: get_tool() は local provider の stored instance を返し、
+    # Tool は frozen ではないので description 代入が反映される。
+    _search_tool = await mcp.get_tool("search_tools")
+    if _search_tool is not None:
+        base_descriptions["search_tools"] = _search_tool.description or ""
 
-    return MetaApp(mcp=mcp, index=index, meta=meta, rebuild_fn=rebuild_index)
+    return MetaApp(
+        mcp=mcp,
+        index=index,
+        meta=meta,
+        rebuild_fn=rebuild_index,
+        base_descriptions=base_descriptions,
+    )

@@ -53,7 +53,7 @@ RATE_LIMIT_DELAYS = [2, 4, 8, 16, 32]  # seconds, max 5 retries on 429
 
 SYSTEM_META_ON = (
     "You are connected to MCP-Hub. Only the hub meta tools are available "
-    "(search_tools, list_upstream_tools, execute_tool). Use search_tools first "
+    "(search_tools, execute_tool). Use search_tools first "
     "to discover the right upstream tool, then execute_tool to run it. "
     "Once the task is done, answer briefly."
 )
@@ -79,14 +79,6 @@ META_TOOL_DEFS = [
                 },
                 "required": ["query"],
             },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_upstream_tools",
-            "description": "List all upstream tools grouped by server. Use for orientation, then search_tools.",
-            "parameters": {"type": "object", "properties": {}},
         },
     },
     {
@@ -234,7 +226,7 @@ class Hub:
     async def start(self) -> None:
         await self.registry.init()
         self.pm = ProxyManager(self.mcp, self.registry)
-        self.meta_app = create_meta_app(self.pm)
+        self.meta_app = await create_meta_app(self.pm)
         await self.meta_app.rebuild_index()
 
     async def register(self, name: str, config: dict) -> None:
@@ -392,8 +384,6 @@ async def run_meta_on(hub: Hub, row: Row) -> tuple[bool, str]:
                     args.get("query", ""), int(args.get("top_k") or 10)
                 )
                 searched = True
-            elif name == "list_upstream_tools":
-                out = await hub.meta_app.meta_tools.list_upstream_tools()
             elif name == "execute_tool":
                 out = await hub.meta_app.meta_tools.execute_tool(
                     server=args.get("server", ""),

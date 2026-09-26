@@ -472,17 +472,6 @@ TOOLS_ON_NEW: list[dict[str, Any]] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_upstream_tools",
-            "description": "List all upstream tools grouped by server. Use for orientation, then search_tools.",
-            "parameters": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-    },
 ]
 
 # ── Core Logic ─────────────────────────────────────────────────────────────
@@ -716,7 +705,7 @@ def main() -> None:
     print()
 
     # ── NEW meta benchmark ──
-    print(">>> NEW meta (3 slim tools: search_tools + execute_tool + list_upstream_tools)")
+    print(">>> NEW meta (2 slim tools: search_tools + execute_tool)")
     print("-" * 60)
     results_new = run_benchmark(client, "ON", TOOLS_ON_NEW)
     print()

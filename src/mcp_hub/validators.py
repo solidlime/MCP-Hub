@@ -35,6 +35,7 @@ MAX_ARGS_COUNT = 50
 MAX_ARG_LENGTH = 1024
 MAX_HEADER_KEY_LENGTH = 256
 MAX_HEADER_VALUE_LENGTH = 8192
+MAX_DESCRIPTION_LENGTH = 500
 
 
 class ValidationError(ValueError):
@@ -219,4 +220,12 @@ def validate_server_config(name: str, config: dict) -> dict:
                 raise ValidationError(f"Invalid tag: {tag}")
     if "headers" in config:
         config["headers"] = validate_headers(config["headers"])
+    if config.get("description") is not None:
+        desc = config["description"]
+        if not isinstance(desc, str):
+            raise ValidationError("Description must be a string")
+        if len(desc) > MAX_DESCRIPTION_LENGTH:
+            raise ValidationError(
+                f"Description too long (max {MAX_DESCRIPTION_LENGTH} chars)"
+            )
     return config

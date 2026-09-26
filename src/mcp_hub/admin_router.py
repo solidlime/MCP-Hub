@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from .config import DEFAULT_EMBEDDING_MODEL
 from .state import app_state
 from .validators import (
+    MAX_DESCRIPTION_LENGTH,
     ValidationError,
     validate_args,
     validate_command,
@@ -81,11 +82,12 @@ class ServerConfig(BaseModel):
     tags: list[str] = []
     headers: dict[str, str] = {}
     disabled: bool = False
+    description: str | None = None
 
     def model_dump_for_config(self) -> dict:
         """空文字・空リストを除外した config dict を返す。"""
         raw = self.model_dump(exclude_none=True)
-        for key in ("url", "command", "args", "env", "tags", "headers"):
+        for key in ("url", "command", "args", "env", "tags", "headers", "description"):
             if key in raw and not raw[key]:
                 del raw[key]
         return raw
@@ -490,6 +492,15 @@ async def patch_server(name: str, body: PatchServerRequest):
         for tag in tags:
             if not isinstance(tag, str) or len(tag) > 64:
                 raise HTTPException(status_code=422, detail=f"Invalid tag: {tag}")
+    if merged_config.get("description") is not None:
+        desc = merged_config["description"]
+        if not isinstance(desc, str):
+            raise HTTPException(status_code=422, detail="Description must be a string")
+        if len(desc) > MAX_DESCRIPTION_LENGTH:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Description too long (max {MAX_DESCRIPTION_LENGTH} chars)",
+            )
 
     if rename:
         assert target_name is not None
@@ -517,8 +528,8 @@ async def patch_server(name: str, body: PatchServerRequest):
 
     # 恒久化（リネームなしの従来 PATCH）
     await registry.update_server(name, merged_config)
-    # tags のみの更新はプロキシ再生成が不要（サブプロセス再起動を防ぐ）
-    if set(updates) <= {"tags"}:
+    # tags / description のみの更新はプロキシ再生成が不要（サブプロセス再起動を防ぐ）
+    if set(updates) <= {"tags", "description"}:
         await pm.update_config_only(name, merged_config)
     else:
         await pm.refresh_server(name, merged_config)

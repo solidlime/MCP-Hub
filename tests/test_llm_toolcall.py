@@ -1,8 +1,8 @@
 """実LLM（OpenRouter・無料モデル固定）によるツールコール往復テスト。
 
 README の「ツールコール成功率」を LLM 実呼び出しで検証する:
-LLM エージェントに Hub のメタツール (search_tools / execute_tool /
-list_upstream_tools) を渡し、2-hop 発見フロー (search_tools → execute_tool)
+LLM エージェントに Hub のメタツール (search_tools / execute_tool)
+を渡し、2-hop 発見フロー (search_tools → execute_tool)
 を LLM 自身に生成させ、実行まで Hub 経由で往復させる。
 
 実 API を叩くため OPENROUTER_API_KEY がない場合はスキップ:
@@ -69,17 +69,6 @@ META_TOOL_DEFS = [
     {
         "type": "function",
         "function": {
-            "name": "list_upstream_tools",
-            "description": (
-                "List all upstream tools grouped by server. "
-                "Use for orientation, then search_tools."
-            ),
-            "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "execute_tool",
             "description": "Execute a tool discovered via search_tools.",
             "parameters": {
@@ -112,7 +101,7 @@ async def _hub_with_echo(name: str = "stdio-echo"):
     registry = JsonStore(data_dir=tmpdir)
     await registry.init()
     pm = ProxyManager(mcp, registry)
-    meta_app = create_meta_app(pm)
+    meta_app = await create_meta_app(pm)
     await meta_app.rebuild_index()
     pm.on_change(lambda: meta_app.rebuild_index())
 
@@ -131,8 +120,6 @@ async def _dispatch(meta_app, name: str, args: dict) -> str:
     """LLM の tool_call を Hub メタツールに振り分ける。"""
     if name == "search_tools":
         return await meta_app.meta_tools.search_tools(args["query"])
-    if name == "list_upstream_tools":
-        return await meta_app.meta_tools.list_upstream_tools()
     if name == "execute_tool":
         out = await meta_app.meta_tools.execute_tool(
             server=args.get("server", ""),

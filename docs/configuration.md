@@ -50,7 +50,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `version` | int | `1` | 設定ファイルバージョン。現在は `1` のみ。 |
 | `log_level` | string | `"info"` | ログレベル (`debug`, `info`, `warning`, `error`)。大文字小文字を区別しない。 |
 | `embedding_model` | string | `"sentence-transformers/all-MiniLM-L6-v2"` | セマンティック検索に使用する埋め込みモデル。fastembed がインストールされている場合に有効。fastembed がサポートしないモデルを指定した場合は警告ログを出してデフォルトにフォールバック。 |
-| `meta_mode` | bool | `true`（バンドル設定からシード） | Meta モード（Progressive Discovery）の有効/無効。`true` のとき `search_tools` / `execute_tool` / `list_upstream_tools` の 3 ツールのみ公開。設定未保存時はバンドルされた `hub.config.json` の値が初回起動時にシードされます。 |
+| `meta_mode` | bool | `true`（バンドル設定からシード） | Meta モード（Progressive Discovery）の有効/無効。`true` のとき `search_tools` / `execute_tool` の 2 ツールのみ公開。設定未保存時はバンドルされた `hub.config.json` の値が初回起動時にシードされます。 |
 | `full_info_tools` | array\<string\> | `[]` | フル公開するツールのリスト。要素は `"{server}_{tool}"` 形式（例: `"fetch_fetch"`）。Meta モード時、ここに指定したツールのみ `tools/list` に通常ツールとしてフル公開され、`tools/call` で直接呼び出せる。未指定（空配列）なら現行の挙動と互換。 |
 | `use_embeddings` | bool | `true` | セマンティック検索（fastembed）の有効/無効。`false` で BM25 のみ。fastembed が未インストールの場合は実効値が常に `false` になる（ハードゲート）。Web UI の「⚙️ Hub 設定」からも変更可（ランタイム反映・検索インデックス再構築あり）。 |
 | `mcpServers` | object | `{}` | MCP サーバー定義のマップ。キーがサーバー名。 |

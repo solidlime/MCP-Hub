@@ -20,7 +20,7 @@ LLM クライアントはここに接続して全子サーバーのツール・�
 | モード | 説明 |
 |---|---|
 | 通常モード (`meta_mode=false`) | 全子サーバーの全ツール・リソース・プロンプトを直接公開 |
-| Meta モード (`meta_mode=true`, デフォルト) | Progressive Discovery: `search_tools`、`execute_tool`、`list_upstream_tools` の 3 ツールのみ公開。ただし `full_info_tools` に指定したツールは通常ツールとしてフル公開される |
+| Meta モード (`meta_mode=true`, デフォルト) | Progressive Discovery: `search_tools`、`execute_tool` の 2 ツールのみ公開。ただし `full_info_tools` に指定したツールは通常ツールとしてフル公開される |
 
 #### タグフィルタリング
 
@@ -66,7 +66,6 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
 |---|---|
 | `search_tools(query, top_k=10)` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。結果に `tags`（サーバータグ配列）を含む |
 | `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行。互換のため `{"arguments": {...}}` に `server` / `tool_name` / `arguments` を折り畳んだ形式（LLM が生成しがちなフラット呼び出し）も受け付ける。サーバー名の大文字小文字は case-insensitive に解決される |
-| `list_upstream_tools()` | 全アップストリームツールをサーバー別に一覧表示 |
 
 #### フル公開ツール（`full_info_tools`）
 
@@ -314,7 +313,8 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
     },
     "tags": ["web", "api"],
     "headers": {},
-    "disabled": false
+    "disabled": false,
+    "description": "Search the web and fetch pages"
   }
 }
 ```
@@ -330,6 +330,7 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 | `tags` | 各タグ最大 64 文字の文字列。 |
 | `headers` | キー最大 256 文字、値最大 8192 文字。制御文字禁止。 |
 | `disabled` | ブール値。`true` で登録のみ行い接続しない。 |
+| `description` | Meta モードで `search_tools` の description に焼き込まれる一行説明。最大 500 文字。省略時はツール名の一覧にフォールバック。 |
 
 **Status Code:** `201 Created`
 

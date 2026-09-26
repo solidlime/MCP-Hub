@@ -224,7 +224,6 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
 |---|---|
 | `search_tools(query, top_k=10)` | キーワードまたはセマンティック検索でツールを発見 |
 | `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行 |
-| `list_upstream_tools()` | 全ツールの概要をサーバー別に一覧 |
 
 **ToolIndex — 検索エンジン：**
 

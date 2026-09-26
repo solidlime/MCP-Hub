@@ -88,6 +88,7 @@ def _build_mock_proxy_manager():
 
     pm.list_tools = AsyncMock(side_effect=_list_tools)
     pm.list_tools_for_server = AsyncMock(side_effect=_list_tools_for_server)
+    pm.server_description = MagicMock(return_value="")
     return pm
 
 
@@ -117,7 +118,7 @@ async def meta_app():
         [t for t in SAMPLE_TOOLS if "puppeteer" in t.name]
     )
 
-    meta_app = create_meta_app(pm)
+    meta_app = await create_meta_app(pm)
     meta_mcp = meta_app.mcp
     meta_http = meta_mcp.http_app(
         transport="streamable-http", path="/", stateless_http=True
@@ -206,12 +207,12 @@ class TestMetaIntegration:
         assert r.status_code != 404
 
     def test_mcp_meta_has_expected_tools(self, client):
-        """Meta app exposes 3 tools: search_tools, execute_tool, list_upstream_tools."""
+        """Meta app exposes 2 tools: search_tools, execute_tool."""
         parsed = _post_tools_list(client)
         tools = parsed["result"]["tools"]
-        assert len(tools) == 3
+        assert len(tools) == 2
         names = {t["name"] for t in tools}
-        assert names == {"search_tools", "execute_tool", "list_upstream_tools"}
+        assert names == {"search_tools", "execute_tool"}
 
     def test_search_tools_returns_results(self, client):
         """search_tools with a query returns a JSON response with result list."""
@@ -271,53 +272,32 @@ class TestMetaTagFiltering:
         pm = client.app.state.proxy_manager
         pm.server_tags.side_effect = lambda name: self.TAGS.get(name, [])
 
-    def _call_list_upstream(self, client, tags):
-        """Set request_tags, call list_upstream_tools, return parsed JSON dict."""
+    def _search(self, client, query, tags, tool_id):
         request_tags.set(tags)
         try:
-            parsed = _call_tool(client, "list_upstream_tools", {}, "t1")
+            parsed = _call_tool(client, "search_tools", {"query": query, "top_k": 10}, tool_id)
         finally:
             request_tags.set(None)
         return json.loads(_get_text_content(parsed))
 
-    def test_librarian_tag_keeps_multi_tag_servers(self, client):
-        """Issue #1: requesting 'librarian' alone must include servers tagged
-        ['librarian', 'search'] — they were wrongly excluded in the reporter's
-        environment (stale container build)."""
+    def test_matching_tag_keeps_server_results(self, client):
+        """Requesting 'dev' keeps filesystem tools in search results."""
         self._set_server_tags(client)
-        data = self._call_list_upstream(client, ["librarian"])
-        servers = set(data["tools_by_server"].keys())
-        assert "fetch" in servers        # [librarian, search] matches 'librarian'
-        assert "puppeteer" in servers    # [librarian] matches 'librarian'
-        assert "brave-search" not in servers  # [search] only
-        assert "filesystem" not in servers    # [dev] only
+        data = self._search(client, "file", ["dev"], "t1")
+        assert {r["server"] for r in data["results"]} == {"filesystem"}
 
-    def test_search_tag_matches_search_servers(self, client):
-        """Requesting 'search' includes all servers with the search tag."""
+    def test_non_matching_tag_filters_server_out(self, client):
+        """Issue #1: requesting 'librarian' must not block multi-tag servers —
+        but a server tagged only ['dev'] is filtered out."""
         self._set_server_tags(client)
-        data = self._call_list_upstream(client, ["search"])
-        servers = set(data["tools_by_server"].keys())
-        assert "fetch" in servers        # [librarian, search] matches 'search'
-        assert "brave-search" in servers
-        assert "puppeteer" not in servers
-        assert "filesystem" not in servers
+        data = self._search(client, "file", ["librarian"], "t2")
+        servers = {r["server"] for r in data.get("results", [])}
+        assert "filesystem" not in servers  # [dev] only
 
 
 class TestLiveProxyListing:
-    """list_upstream_tools / execute_tool read from the live proxy manager,
-    not the (possibly stale / partially rebuilt) index."""
-
-    def test_list_upstream_tools_sees_new_server_without_rebuild(self, client):
-        """A server added after the last rebuild still appears in the listing."""
-        pm = client.app.state.proxy_manager
-        pm._proxies["fresh-server"] = _build_mock_proxy(
-            [SimpleNamespace(name="fresh_tool", description="", parameters={})]
-        )
-        # Note: no rebuild_index() call — this is the point.
-        data = self._call_list_upstream(client, None)
-        servers = set(data["tools_by_server"].keys())
-        assert "fresh-server" in servers
-        assert "filesystem" in servers  # original servers still listed
+    """execute_tool reads from the live proxy manager, not the (possibly
+    stale / partially rebuilt) index."""
 
     def test_execute_tool_works_for_server_not_in_index(self, client):
         """execute_tool must not depend on the index — a server that failed
@@ -367,14 +347,6 @@ class TestLiveProxyListing:
             request_tags.set(None)
         text = _get_text_content(parsed)
         assert "not available" in text
-
-    def _call_list_upstream(self, client, tags):
-        request_tags.set(tags)
-        try:
-            parsed = _call_tool(client, "list_upstream_tools", {}, "t-live")
-        finally:
-            request_tags.set(None)
-        return json.loads(_get_text_content(parsed))
 
 
 class TestFlattenedCallCompat:
@@ -553,3 +525,84 @@ class TestRebuildIndex:
         """When every server lists tools, no failures are reported."""
         failed = await meta_app.state.meta_app.rebuild_index()
         assert failed == []
+
+
+class TestCatalogBaking:
+    """search_tools の description にサーバーカタログを焼き込む（発見可能性改善）。
+    モデルが search_tools を自発的に叩かなくても、登録済みサーバーと一行概要を
+    常時見られるようにする。"""
+
+    async def _desc(self, meta_app) -> str:
+        tool = await meta_app.mcp.get_tool("search_tools")
+        assert tool is not None
+        return tool.description
+
+    def test_description_reaches_wire(self, client):
+        """tools/list の search_tools description にカタログが乗る。"""
+        parsed = _post_tools_list(client)
+        st = next(t for t in parsed["result"]["tools"] if t["name"] == "search_tools")
+        assert "Registered servers:" in st["description"]
+        assert "- filesystem: tools: file_read, file_write" in st["description"]
+
+    async def test_description_mutation_reaches_wire(self, meta_app):
+        """description を設定 → rebuild で search_tools.description に反映される。"""
+        pm = meta_app.state.proxy_manager
+        pm.server_description.side_effect = lambda name: f"{name} server"
+        await meta_app.state.meta_app.rebuild_index()
+        desc = await self._desc(meta_app.state.meta_app)
+        assert "Registered servers:" in desc
+        assert "- filesystem: filesystem server" in desc
+
+    async def test_catalog_empty(self):
+        """proxy 0 件: description は base のみ、search_tools 自体は呼べる。"""
+        pm = _build_mock_proxy_manager()
+        m = await create_meta_app(pm)
+        base = m.base_descriptions["search_tools"]
+        await m.rebuild_index()
+        tool = await m.mcp.get_tool("search_tools")
+        assert tool is not None
+        assert tool.description == base
+        out = await m.meta_tools.search_tools("anything")
+        assert "message" in json.loads(out)  # 呼べる（結果 0 件でもエラーにならない）
+
+    async def test_catalog_fallback_tool_names(self, meta_app):
+        """description 無しサーバーは tool 名ベースの行になる。"""
+        pm = meta_app.state.proxy_manager
+        pm.server_description.side_effect = lambda name: ""
+        await meta_app.state.meta_app.rebuild_index()
+        desc = await self._desc(meta_app.state.meta_app)
+        assert "- filesystem: tools: file_read, file_write" in desc
+
+    async def test_catalog_reflects_new_server(self, meta_app):
+        """rebuild 後に新しいサーバーがカタログへ反映される。"""
+        pm = meta_app.state.proxy_manager
+        pm._proxies["fresh-server"] = _build_mock_proxy(
+            [SimpleNamespace(name="fresh_tool", description="", parameters={})]
+        )
+        await meta_app.state.meta_app.rebuild_index()
+        desc = await self._desc(meta_app.state.meta_app)
+        assert "- fresh-server: tools: fresh_tool" in desc
+
+    async def test_catalog_length_cap(self, meta_app):
+        """多数サーバーでも description は base + 1200 字 + 余白に収まる。"""
+        pm = meta_app.state.proxy_manager
+        for i in range(50):
+            pm._proxies[f"srv{i:03d}"] = _build_mock_proxy(
+                [SimpleNamespace(name=f"t{i}", description="", parameters={})]
+            )
+        m = meta_app.state.meta_app
+        base = m.base_descriptions["search_tools"]
+        await m.rebuild_index()
+        desc = await self._desc(m)
+        assert len(desc) <= len(base) + 1200 + 80
+
+    async def test_catalog_idempotent(self, meta_app):
+        """2 回 rebuild しても base description が複製されない。"""
+        m = meta_app.state.meta_app
+        base = m.base_descriptions["search_tools"]
+        await m.rebuild_index()
+        first = await self._desc(m)
+        await m.rebuild_index()
+        second = await self._desc(m)
+        assert first == second
+        assert second.count(base) == 1

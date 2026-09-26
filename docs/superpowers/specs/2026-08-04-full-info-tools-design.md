@@ -5,7 +5,7 @@
 
 ## 目的・背景
 
-meta on モードでは、MCP-Hub が公開するツールは `search_tools` / `execute_tool` / `list_upstream_tools` の3つに集約される。クライアントは個別ツールの全情報（名前・説明・inputSchema）を見られず、直接呼ぶこともできない（検索 → execute_tool 経由のみ）。
+meta on モードでは、MCP-Hub が公開するツールは `search_tools` / `execute_tool` の2つに集約される。クライアントは個別ツールの全情報（名前・説明・inputSchema）を見られず、直接呼ぶこともできない（検索 → execute_tool 経由のみ）。
 
 ユーザーは「ツールごとのメタOFF設定」を新設し、**指定したツールだけ全情報をクライアントに伝える**（フル公開）ようにしたい。
 
@@ -28,7 +28,7 @@ meta on モードでは、MCP-Hub が公開するツールは `search_tools` / `
 meta on モードの /mcp (Streamable HTTP)
    │
    ▼
-meta_app (FastMCP "MCP Hub Meta": search_tools/execute_tool/list_upstream_tools)
+meta_app (FastMCP "MCP Hub Meta": search_tools/execute_tool)
    │  tools/list, tools/call ディスパッチ
    ▼
 ToolLogMiddleware（既存・main.py:172 で登録済み。最内側）

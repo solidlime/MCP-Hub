@@ -476,6 +476,7 @@ class ProxyManager:
                 "name": name,
                 "disabled": config.get("disabled", False),
                 "tags": config.get("tags", []),
+                "description": config.get("description", ""),
                 "status": self._status.get(name, "unknown"),
                 "tool_count": self._tool_counts.get(name, 0),
             })
@@ -637,6 +638,10 @@ class ProxyManager:
     def server_tags(self, name: str) -> list[str]:
         """サーバーの設定タグ一覧。TagFilterMiddleware 用。"""
         return self._server_configs.get(name, {}).get("tags", [])
+
+    def server_description(self, name: str) -> str:
+        """サーバーの一行説明。無ければ空文字。meta カタログ用。"""
+        return self._server_configs.get(name, {}).get("description", "")
 
     def get_connected_servers(self) -> dict[str, Any]:
         """Return snapshot of connected proxy instances.

@@ -33,7 +33,7 @@ async def _hub_with_echo(name: str = "stdio-echo"):
     registry = JsonStore(data_dir=tmpdir)
     await registry.init()
     pm = ProxyManager(mcp, registry)
-    meta_app = create_meta_app(pm)
+    meta_app = await create_meta_app(pm)
     await meta_app.rebuild_index()
     pm.on_change(lambda: meta_app.rebuild_index())
 
@@ -70,13 +70,15 @@ class TestLLMAgentFlow:
         await pm.unregister_server("stdio-echo")
 
     @pytest.mark.asyncio
-    async def test_list_upstream_tools(self):
-        """list_upstream_tools returns tools grouped by server."""
+    async def test_search_tools_description_has_catalog(self):
+        """search_tools description carries the Registered servers catalog."""
         pm, meta_app = await _hub_with_echo("echo-srv")
 
-        listing = json.loads(await meta_app.meta_tools.list_upstream_tools())
-        assert "echo-srv" in listing["tools_by_server"]
-        assert "echo" in listing["tools_by_server"]["echo-srv"]
+        tool = await meta_app.mcp.get_tool("search_tools")
+        assert tool is not None
+        desc = tool.description or ""
+        assert "Registered servers:" in desc
+        assert "echo-srv" in desc
 
         # Verify via index directly too
         by_server = meta_app.index.get_tools_by_server()
