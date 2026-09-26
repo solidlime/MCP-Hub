@@ -87,6 +87,53 @@ class TestToolIndex:
         results = index.search("tool", top_k=2)
         assert len(results) <= 2
 
+    async def test_top_k_huge_value_no_error(self):
+        """top_k=9999 on a 3-doc index returns all 3, no error.
+
+        Guards the LLM passing an absurd top_k: it must not blow up and must
+        stay within _MAX_TOP_K."""
+        docs = [
+            {"name": "alpha", "description": "alpha tool", "server": "s", "inputSchema": {}},
+            {"name": "beta", "description": "beta tool", "server": "s", "inputSchema": {}},
+            {"name": "gamma", "description": "gamma tool", "server": "s", "inputSchema": {}},
+        ]
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        results = idx.search("tool", top_k=9999)
+        assert len(results) == 3
+        assert len(results) <= _mp._MAX_TOP_K
+
+    async def test_top_k_clamped_to_max_constant(self, monkeypatch):
+        """Clamp kills the clamp-removal mutant.
+
+        _MAX_TOP_K is lowered to 2, then a query is issued that matches ALL
+        five docs at the same BM25 score (identical descriptions, single
+        characteristic token "apple"), so the whole corpus is a hit. With the
+        clamp line `top_k = min(top_k, _MAX_TOP_K)` present the result is
+        capped to 2; delete that line and all 5 docs come back, breaking
+        `<= 2`.
+
+        Do NOT weaken/replace this with a query that matches only a few docs:
+        the previous query="file" version matched 2 of 5, so `len <= 2` held
+        even with the clamp removed and the mutant escaped (68 tests green).
+        Names deliberately omit the query token (no "apple") so the
+        identifier-promotion path cannot inject/cap results independently.
+        """
+        docs = [
+            {
+                "name": f"harvest_{i}",
+                "description": "apple harvest tool",
+                "server": "s",
+                "inputSchema": {},
+            }
+            for i in range(5)
+        ]
+        idx = ToolIndex()
+        await idx.rebuild(docs)
+        monkeypatch.setattr(_mp, "_MAX_TOP_K", 2)
+        results = idx.search("apple", top_k=9999)
+        assert len(results) <= 2
+
     async def test_search_no_match(self, index):
         """Nonsense query returns no results.
 

@@ -60,6 +60,11 @@ _EMBED_BATCH_SIZE = 8
 # 埋め込みコストも増やす。400 字で切るとサーバー説明（日本語）が効く。
 _INDEX_DESC_CHARS = 400
 
+# search() の 1 回で返す最大件数。LLM が巨大な top_k を渡すと schema 込みの
+# 結果 JSON が無制限に肥大しコンテキストを浪費するため、ここで頭打ちにする。
+# 75 件列挙のような正当な全量取得はほぼ許す上限として 50。
+_MAX_TOP_K = 50
+
 MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 
 
@@ -532,7 +537,11 @@ class ToolIndex:
         a separate get_tool_schema call.
 
         Read-only — does not modify shared state, safe without lock.
+
+        ``top_k`` is clamped to ``_MAX_TOP_K`` (LLM が巨大な top_k を渡しても
+        返り値が肥大しないように)。top_k ≤ _MAX_TOP_K の挙動は不変。
         """
+        top_k = min(top_k, _MAX_TOP_K)
         if not self._documents:
             return []
         query_tokens = set(self._tokenize(query))
