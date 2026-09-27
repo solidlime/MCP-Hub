@@ -964,7 +964,6 @@ class TestSearchDetailLevels:
                 "name",
                 "description",
                 "search_desc",
-                "tags",
                 "score",
             }
         # note は get_schema へ誘導する

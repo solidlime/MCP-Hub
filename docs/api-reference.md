@@ -78,7 +78,6 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
       "name": "read_file",
       "description": "Read a file's contents",
       "search_desc": "ファイルを読む。",
-      "tags": ["local"],
       "score": 1.2345
     }
   ],
@@ -89,7 +88,7 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
 
 - `results[].description` は**表示用のツール説明**（サーバー説明の前置なし）。`_DISPLAY_DESC_CHARS = 600` 字で切り詰め、切った時だけ末尾に `"…"` を付ける。
 - `results[].search_desc` は**ツール単位の日本語 1 文**（`tool_search_desc`。admin UI / `PATCH /servers/{name}` で投入）。未設定なら空文字。英語 docstring の語彙の壁を越える検索補助と同時に、結果の一行要約として返す。
-- **既定 (`detail="brief"`) の `results[]` は `inputSchema` を含まない**（フィールドは `server` / `name` / `description` / `search_desc` / `tags` / `score`）。スキーマが要る時は `detail="schema"`（上位 1 件のみ）か `get_schema(server, tool_name)` を呼ぶ。
+- **既定 (`detail="brief"`) の `results[]` は `inputSchema` を含まない**（フィールドは `server` / `name` / `description` / `search_desc` / `score`）。`tags` はフィルタ入力であり（サーバー側で適用済み）、結果には含めない。スキーマが要る時は `detail="schema"`（上位 1 件のみ）か `get_schema(server, tool_name)` を呼ぶ。
 - `detail="schema"` は**上位 1 件のみ**に圧縮 `inputSchema` を付け、残りは brief。`detail="all"` は全件に圧縮 `inputSchema` を付け、従来と同じ応答（同じ `note` を含む）を返す。
 - `results[].inputSchema`（`schema` / `all` 時）は**圧縮形**。`type` / `required` と各パラメータの `type`・短い `enum`（5 個以下かつ連結 80 字以下）・短い `default`（数値・真偽、または文字列化 40 字以下）のみで、`description` と深いネストは落とす。完全な仕様は `get_schema(server, tool_name)`、`get_schema(server, tool_name, compact=True)` で同じ圧縮形を取得できる。
 - `note` はスキーマ取得方法の案内。**成功時のみ**付き、0 件やタグ全滅の早期 return では付かない。`detail="all"` だけは従来互換の文言を保つ。

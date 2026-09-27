@@ -1245,7 +1245,7 @@ class MetaTools:
         """Search upstream tools. Always call FIRST before execute_tool.
 
         既定 (detail="brief") は inputSchema を省き、name / server / description /
-        search_desc / tags / score のみ返す（MCP 公式 Layer1）。スキーマが要る時は
+        search_desc / score のみ返す（MCP 公式 Layer1）。スキーマが要る時は
         detail="schema"（上位1件のみ）か get_schema を使う。
 
         Args:
@@ -1328,14 +1328,14 @@ class MetaTools:
         """検索結果1件を brief 形（inputSchema なし）に整える。
 
         search_desc は index の tool_search_desc。未投入なら空文字を返す
-        （description / tags と同じく常にキーを持たせる既存の流儀に合わせる）。
+        （description と同じく常にキーを持たせる既存の流儀に合わせる）。
+        tags はフィルタ入力であり、フィルタはサーバー側で適用済みなので結果には含めない。
         """
         return {
             "server": r["server"],
             "name": r["name"],
             "description": r.get("description", ""),
             "search_desc": self._index.get_search_desc(r["server"], r["name"]),
-            "tags": r.get("tags", []),
             "score": r.get("score"),
         }
 
