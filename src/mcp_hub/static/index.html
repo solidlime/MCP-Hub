@@ -1576,17 +1576,6 @@
             margin-bottom: 8px;
         }
         .desc-gen-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
-        .lever {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            font-size: 0.64rem;
-            font-weight: 700;
-            padding: 2px 9px;
-            border-radius: var(--radius-pill);
-        }
-        .lever.recall { background: var(--accent-amber-bg); color: var(--accent-amber); }
-        .lever.precision { background: var(--accent-blue-bg); color: var(--accent-blue); }
         .kw-count { font-size: 0.68rem; color: var(--text-muted); margin-left: 6px; font-weight: 500; }
         .kw-table-wrap {
             overflow-x: auto;
@@ -2020,44 +2009,6 @@
             </section>
         </div>
 
-        <!-- 実測 → 設計判断（この数字が入力欄の形と注意表示を決めている） -->
-        <section class="panel" role="region" aria-label="設計の実測根拠">
-            <div class="panel-head">
-                <div>
-                    <div class="panel-title">📊 なぜ「チップ」ではなく「日本語1文」なのか（実測 → 設計判断）</div>
-                    <div class="panel-sub">埋め込みあり・HA 関連6クエリ（#001）。この数字が入力欄の形と注意表示を決めている。</div>
-                </div>
-            </div>
-            <div class="kw-table-wrap">
-                <table class="log-table kw-table">
-                    <thead>
-                        <tr><th style="width:170px">方式</th><th>実測 / → 反映した設計</th></tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td><b>日本語の説明文1文</b>（ja_desc）</td>
-                            <td>この1文が語彙4語を包含（室温 / 温度 / エアコン df=1、照明は元から df=11）・狙い top-3 同等（3/6）・<b>top-5 は上（4/6 vs 3/6）</b>・英語回帰ゼロ・差分 1文書 0.44s → <b>採用</b>（狙い top-5 3/6 → 4/6）</td>
-                        </tr>
-                        <tr>
-                            <td><b>full_doc_bm25</b>（全文索引）</td>
-                            <td>日本語に効かず<b>悪化</b>: 照明 1→2 / 電球 3→16 / ノート 9→21、BM25 トークン 310→906 → <b>不採用</b>（<code>_INDEX_DESC_CHARS = 400</code> 据え置き、docstring は参考表示のみ）</td>
-                        </tr>
-                        <tr>
-                            <td><b>ja_desc_all</b>（全ツールに1文）</td>
-                            <td>flooding は増えない（2.00 → 1.83）が英語 <code>backup</code> の top-5 が変わる回帰 → <b>必要なツールだけ</b>（未設定ハイライト＋行ごとの ✨ で誘導）</td>
-                        </tr>
-                        <tr>
-                            <td><b>文の長さ依存</b></td>
-                            <td>同じ語を含んでも<b>文が長いと順位が動く</b> → UI に「1文・80字」の目安＋カウンタ＋超過時の ⚠</td>
-                        </tr>
-                        <tr>
-                            <td><b>サーバー説明</b>（recall）</td>
-                            <td>全ツールの索引に前置済み（照明が説明だけで df=11）。recall は top-5 の HA 件数 2/6 → 4/6 → 説明欄は現状維持（専用の設定レバーは無いので注記のみ）</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
         </section>
 
         <!-- Log Tab -->
@@ -2439,7 +2390,7 @@
         const autoSaveTimers = new Map();   // serverName -> timeout id
         const autoSaveDirty = new Set();    // 保存待ちのサーバー
         const autoSaveInFlight = new Set(); // 保存中のサーバー（二重送信ガード）
-        const saveStatus = new Map();       // serverName -> { phase, secs, message }
+        const saveStatus = new Map();       // serverName -> { phase, message }
 
         // ============================================================
         // THEME
@@ -2913,7 +2864,7 @@
             const n = value.length;
             const over = n > TOOL_DESC_MAX;
             const unset = n === 0;
-            const hint = unset ? '未設定 — 元の英語 docstring だけが索引に入る' : `目安: 1文・${TOOL_DESC_MAX}字`;
+            const hint = unset ? '未設定（英語の docstring のまま）' : `目安: 1文・${TOOL_DESC_MAX}字`;
             return `
                 <div class="server-description tool-desc-field${unset ? ' is-unset' : ''}">
                     <textarea class="desc-input tool-desc-input" rows="2" maxlength="${TOOL_DESC_INPUT_MAX}"
@@ -3020,6 +2971,7 @@
                 descDraft.set(toolDescKey(serverName, toolName), text);
                 updateDescriptionCounter(input);
                 syncToolDescField(input, text, '提案（未保存）');
+                refreshBulkGenUI(); // 一括ボタンの「未設定 N件」表示を追従させる（textarea は触らないのでフォーカスは維持）
                 scheduleAutoSave(serverName);
                 input.focus();
                 showToast('検索用の説明を提案しました（自動保存します）', 'info');
@@ -3037,6 +2989,7 @@
             const pane = document.getElementById('serverDetail');
             const input = pane && pane.querySelector('.desc-input:not([data-tool])');
             if (!input) return;
+            if (input.value.trim() && !confirm('既存の説明を上書きします。よろしい？')) return;
             const original = btn.textContent;
             btn.disabled = true;
             btn.textContent = '生成中...';
@@ -3280,7 +3233,7 @@
                     <div class="md-block-label">サーバー説明</div>
                     <div class="desc-gen-row">
                         ${llmConfigured ? `<button class="btn btn-sm btn-ai" data-action="gen-server-desc" data-server="${escapeAttr(server.name)}">✨ 説明を自動生成</button>
-                        <span class="field-note" style="margin:0">ツール ${tools.length}件の名前と説明から生成 → そのまま編集できます</span>`
+                        <span class="field-note" style="margin:0">ツール ${tools.length}件の構成からこのサーバーの説明を生成します。ツールごとの説明は各行の ✨ か「未設定を生成」でまとめて生成できます</span>`
                         : `<span class="field-note" style="margin:0">✨ 自動生成は LLM（設定 → LLM）を構成すると使えます</span>`}
                     </div>
                     <div class="server-description">
@@ -3293,7 +3246,7 @@
                             <span class="desc-counter">${description.length}/500</span>
                         </div>
                     </div>
-                    <div class="field-note"><b>この説明は全ツールの索引に前置されます（サーバー単位の検索語彙として効きます）。</b> 実測: 「照明」は説明だけで df=11 ＝ recall はここで上げる（top-5 の HA 件数 2/6 → 4/6）。</div>
+                    <div class="field-note"><b>この説明は全ツールの検索に使われます（サーバー単位の検索語彙として効きます）。</b></div>
                 </div>
 
                 ${renderServerTags(server, tags)}
@@ -3301,7 +3254,7 @@
                 <div class="md-block">
                     <div class="md-block-label">
                         ツール（編集主体＝この1文ずつ）
-                        <span class="field-note" style="margin:0"><span data-desc-count>説明 ${setCount}/${tools.length} 設定済</span> ・ 目安: 1文・80字（超過は保存可だが順位が動く）</span>
+                        <span class="field-note" style="margin:0"><span data-desc-count>説明 ${setCount}/${tools.length} 設定済</span> ・ 目安: 1文・80字</span>
                         <span class="bulk-gen-row" data-bulk-gen>${bulkGenControlsHtml(server)}</span>
                     </div>
                     <div class="bulk-gen-errors" data-bulk-errors${bulkGenErrorsHtml(server) ? '' : ' style="display:none"'}>${bulkGenErrorsHtml(server)}</div>
@@ -3338,8 +3291,7 @@
             } else if (phase === 'error') {
                 state = `<span class="save-state is-error">保存に失敗しました: ${escapeHtml(st.message || '不明なエラー')}</span>`;
             } else if (phase === 'saved' && n === 0) {
-                const secs = st.secs != null ? `（${st.rebuildReported ? '索引再構築' : '往復'} ${Number(st.secs).toFixed(2)}s）` : '';
-                state = `<span class="save-state is-success">保存しました${secs}</span>`;
+                state = `<span class="save-state is-success">保存しました</span>`;
             } else if (n > 0) {
                 state = `<span class="save-state">未保存の変更 <strong>${n}</strong> 件 — <code>hub.config.json</code></span>`;
             } else {
@@ -3359,7 +3311,7 @@
         function renderSaveBar(server) {
             return `
                 <div class="save-bar" data-save-bar data-server="${escapeAttr(server.name)}">${saveBarInnerHtml(server)}</div>
-                <div class="ba-note">サーバー説明＋ツールの検索用の説明は<b>自動保存</b>（入力停止 0.8 秒後、1 回の PATCH にまとめて差分 rebuild 1 文書 0.44s）。失敗時は「再試行」で送り直せます。</div>`;
+                <div class="ba-note">サーバー説明＋ツールの検索用の説明は<b>自動保存</b>（入力停止 0.8 秒後）。失敗時は「再試行」で送り直せます。</div>`;
         }
 
         function renderServerTags(server, tags) {
@@ -3386,7 +3338,7 @@
                         <tr>
                             <th style="width:150px">ツール</th>
                             <th style="width:200px">元の docstring（英語・参考）</th>
-                            <th>検索用の説明（日本語・1文）— 索引の先頭に前置 / 応答には出ない</th>
+            <th>検索用の説明（日本語・1文）</th>
                             <th style="width:120px">状態</th>
                         </tr>
                     </thead>
@@ -3836,7 +3788,7 @@
             if (hint) {
                 hint.style.display = over ? 'none' : 'inline';
                 hint.textContent = n === 0
-                    ? '未設定 — 元の英語 docstring だけが索引に入る'
+                    ? '未設定（英語の docstring のまま）'
                     : `目安: 1文・${limit}字`;
             }
         }
@@ -3954,16 +3906,12 @@
             autoSaveInFlight.add(serverName); // await より前に同期で立てる（二重送信防止）
             saveStatus.set(serverName, { phase: 'saving' });
             updateSaveBar(serverName);
-            const t0 = Date.now();
             try {
-                const data = await API.patchServer(serverName, payload);
+                await API.patchServer(serverName, payload);
                 if ('description' in payload) server.config.description = payload.description || '';
                 if ('tool_search_desc' in payload) server.config.tool_search_desc = payload.tool_search_desc;
                 reconcileDrafts(server); // 保存中に入った新しい編集は残す
-                // 応答に rebuild_seconds があればそれを、無ければ往復時間を表示（ラベルで区別する）
-                const rebuildReported = !!(data && typeof data.rebuild_seconds === 'number');
-                const secs = rebuildReported ? data.rebuild_seconds : (Date.now() - t0) / 1000;
-                saveStatus.set(serverName, { phase: 'saved', secs, rebuildReported });
+                saveStatus.set(serverName, { phase: 'saved' });
                 updateServerCard(serverName); // 左レール/集計を再描画
                 updateSaveBar(serverName);    // テキスト入力中で詳細が再描画されなくても反映
             } catch (error) {
