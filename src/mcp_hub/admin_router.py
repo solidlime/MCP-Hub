@@ -4,6 +4,7 @@
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -328,13 +329,21 @@ _LLM_BASE_URLS: dict[str, str] = {"openai": "https://api.openai.com/v1"}
 _LLM_DEFAULT_PROVIDER = "openai"
 _LLM_DEFAULT_MODEL = "gpt-4o-mini"
 _LLM_TIMEOUT = 30.0
-_LLM_KINDS = ("server_description", "tool_search_desc")
+# server_bundle はサーバー説明＋最大 _LLM_MAX_BUNDLE_TOOLS 件のツール説明を
+# 1 応答で返させるため出力が大きい。既存 kind の 30s では足りないことがあるので
+# この kind だけ余裕を持たせる（既存 kind の値は変えない）。
+_LLM_BUNDLE_TIMEOUT = 60.0
+# 1 回のまとめ生成で扱うツール数の上限。プロンプト／出力の肥大を防ぐ。
+_LLM_MAX_BUNDLE_TOOLS = 30
+_LLM_KINDS = ("server_description", "tool_search_desc", "server_bundle")
 
 
 class LLMGenerateRequest(BaseModel):
     kind: str
     server: str
     tool_name: str | None = None
+    # server_bundle の生成対象ツール名（空欄のみを渡す想定）。
+    tools: list[str] = []
 
 
 def _llm_public(llm: Any) -> dict:
@@ -375,6 +384,23 @@ def _llm_prompt(
             "付けないでください。\n\n"
             f"サーバー名: {server}\nツール一覧:\n{material}"
         )
+    if kind == "server_bundle":
+        lines = [
+            f"- {t.get('name', '')}: {(t.get('description') or '').strip()[:200]}"
+            for t in tools
+        ]
+        material = "\n".join(lines) or "(ツール情報なし)"
+        return (
+            f"次の MCP サーバー '{server}' について、次の2つを含む JSON オブジェクトを"
+            "1つだけ出力してください。\n"
+            "- server_description: サーバーが提供する機能の日本語1文（80文字以内）。"
+            "日本語で検索したときに見つけやすいよう、用途・対象・代表的な操作語を含める。\n"
+            "- tools: 対象ツールごとの検索用の日本語1文（80文字以内）のオブジェクト。"
+            "キーはツール名、値は説明。\n\n"
+            "出力は次の形式の JSON のみとし、前後に説明・見出しを付けないでください。\n"
+            '{"server_description": "...", "tools": {"ツール名": "..."}}\n\n'
+            f"サーバー名: {server}\n対象ツール:\n{material}"
+        )
     return (
         f"次の MCP ツール '{tool_name}'（サーバー '{server}'）を、日本語の1文"
         "（80文字以内）で要約してください。ユーザーが日本語で検索したときにヒットしやすい"
@@ -385,12 +411,57 @@ def _llm_prompt(
     )
 
 
+def _strip_json_fence(text: str) -> str:
+    """LLM 応答からマークダウンのコードフェンスを剥がす（無ければそのまま）。
+
+    ```json ... ``` / ``` ... ``` のどちらにも対応する。
+    """
+    s = text.strip()
+    match = re.match(r"^```[A-Za-z0-9_-]*[ \t]*\r?\n(.*?)```[ \t]*$", s, re.DOTALL)
+    return match.group(1).strip() if match else s
+
+
+def _parse_bundle_response(text: str) -> dict[str, Any]:
+    """server_bundle 応答の JSON をパースする（失敗は ValueError）。
+
+    実 LLM は前後に前置き文・コードフェンス・締めの一文を付けることがあるため、
+    寛容に 3 段階で試す: (1) 生のまま、(2) コードフェンス除去後、(3) 最初の
+    `{` から最後の `}` までを切り出した部分。server_description（空でない文字列）
+    と tools（オブジェクト）を要求する。tools の値検証・要求集合への絞り込みは
+    呼び出し側の責務。
+    """
+    stripped = _strip_json_fence(text)
+    candidates = [text, stripped]
+    start, end = stripped.find("{"), stripped.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(stripped[start : end + 1])
+
+    data: Any = None
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+            break
+        except (ValueError, TypeError):
+            continue
+    else:
+        raise ValueError("LLM の応答を JSON として解析できませんでした")
+    if not isinstance(data, dict):
+        raise ValueError("LLM の応答が JSON オブジェクトではありません")
+    desc = data.get("server_description")
+    tools = data.get("tools")
+    if not isinstance(desc, str) or not desc.strip():
+        raise ValueError("server_description がありません")
+    if not isinstance(tools, dict):
+        raise ValueError("tools がオブジェクトではありません")
+    return {"description": desc.strip(), "tools": tools}
+
+
 @router.post("/llm/generate")
 async def llm_generate(body: LLMGenerateRequest):
     """OpenAI 互換 API で日本語の説明文（1文）を生成する。
 
     api_key 未設定は 400（フロントは ✨ を出さない設計）。kind は
-    server_description / tool_search_desc のどちらか。
+    server_description / tool_search_desc / server_bundle のいずれか。
     """
     registry = _get_registry()
     data = await registry._read()
@@ -405,7 +476,12 @@ async def llm_generate(body: LLMGenerateRequest):
     if body.kind not in _LLM_KINDS:
         raise HTTPException(
             status_code=422,
-            detail="kind は server_description か tool_search_desc を指定してください",
+            detail="kind は server_description / tool_search_desc / server_bundle を指定してください",
+        )
+    if body.kind == "server_bundle" and len(body.tools) > _LLM_MAX_BUNDLE_TOOLS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"tools は最大 {_LLM_MAX_BUNDLE_TOOLS} 件までです",
         )
 
     pm = _get_proxy_manager()
@@ -439,13 +515,19 @@ async def llm_generate(body: LLMGenerateRequest):
             )
         tool_desc = match[0]["description"].strip()
 
+    # server_bundle は対象ツール（空欄のみ＝リクエストの tools）だけを材料にする。
+    prompt_tools = tools
+    if body.kind == "server_bundle":
+        requested = set(body.tools)
+        prompt_tools = [t for t in tools if t["name"] in requested]
+
     prompt = _llm_prompt(
         body.kind,
         server=server,
         server_desc=server_desc,
         tool_name=body.tool_name,
         tool_desc=tool_desc,
-        tools=tools,
+        tools=prompt_tools,
     )
 
     provider = str(llm.get("provider") or _LLM_DEFAULT_PROVIDER)
@@ -459,8 +541,9 @@ async def llm_generate(body: LLMGenerateRequest):
     # httpx は mcp の推移依存（主依存）。admin 起動を重くしないよう遅延 import。
     import httpx
 
+    timeout = _LLM_BUNDLE_TIMEOUT if body.kind == "server_bundle" else _LLM_TIMEOUT
     try:
-        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -490,6 +573,22 @@ async def llm_generate(body: LLMGenerateRequest):
         ) from e
     if not isinstance(text, str) or not text.strip():
         raise HTTPException(status_code=502, detail="LLM が空の応答を返しました")
+    if body.kind == "server_bundle":
+        try:
+            parsed = _parse_bundle_response(text)
+        except ValueError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        requested = set(body.tools)
+        # 指定外ツール・非文字列・空白のみは返さない（幻覚の混入を防ぐ）。
+        tool_search_desc = {
+            k: v.strip()
+            for k, v in parsed["tools"].items()
+            if k in requested and isinstance(v, str) and v.strip()
+        }
+        return {
+            "description": parsed["description"],
+            "tool_search_desc": tool_search_desc,
+        }
     return {"text": text.strip()}
 
 

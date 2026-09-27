@@ -11,6 +11,7 @@
 - 上流が HTTP 200 でも choices を持たない JSON（OpenAI 互換契約の外）は 502 に畳む。
 """
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -255,12 +256,17 @@ class _FakeResp:
         return self._payload
 
 
-def _install_fake_httpx(monkeypatch, handler):
-    """httpx.AsyncClient を handler(url, headers, json) -> _FakeResp に差し替える。"""
+def _install_fake_httpx(monkeypatch, handler, seen_client_kwargs=None):
+    """httpx.AsyncClient を handler(url, headers, json) -> _FakeResp に差し替える。
+
+    seen_client_kwargs にリストを渡すと、AsyncClient(**kwargs) の実引数を捕捉する
+    （timeout の kind 別分岐を検証するため）。
+    """
 
     class _FakeClient:
         def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
-            pass
+            if seen_client_kwargs is not None:
+                seen_client_kwargs.append(kwargs)
 
         async def __aenter__(self):
             return self
@@ -379,6 +385,209 @@ def test_llm_generate_connection_failure_is_502(client, monkeypatch):
         "/admin/api/llm/generate", json={"kind": "server_description", "server": "ha"}
     )
     assert r.status_code == 502
+
+
+def test_llm_generate_server_bundle(client, monkeypatch):
+    """正常系: 1回の呼び出しでサーバー説明＋ツール説明を JSON で受け取る。"""
+    _llm_ready_client(client, monkeypatch)
+    seen: list = []
+    content = json.dumps(
+        {
+            "server_description": " 照明と室温を操作する ",
+            "tools": {"ha_search": " エンティティを検索する "},
+        },
+        ensure_ascii=False,
+    )
+
+    def handler(url, headers, payload):
+        seen.append(payload)
+        return _FakeResp(200, {"choices": [{"message": {"content": content}}]})
+
+    _install_fake_httpx(monkeypatch, handler)
+    r = client.post(
+        "/admin/api/llm/generate",
+        json={"kind": "server_bundle", "server": "ha", "tools": ["ha_search"]},
+    )
+    assert r.status_code == 200
+    assert r.json() == {
+        "description": "照明と室温を操作する",
+        "tool_search_desc": {"ha_search": "エンティティを検索する"},
+    }
+    # 材料はリクエストのツールだけを列挙する
+    assert "ha_search" in seen[0]["messages"][0]["content"]
+
+
+def test_llm_generate_server_bundle_excludes_unrequested(client, monkeypatch):
+    """指定外のツール（設定済み含む）は材料にも応答にも出さない。"""
+    pm = _llm_ready_client(client, monkeypatch)
+
+    async def _list(name, proxy):  # noqa: ANN001
+        return [
+            _tool("ha_search", "Search entities"),
+            _tool("ha_light", "Turn on a light"),
+        ]
+
+    monkeypatch.setattr(pm, "list_tools_for_server", _list)
+    seen: list = []
+    content = json.dumps(
+        {
+            "server_description": "説明",
+            "tools": {
+                "ha_search": "検索する",
+                "ha_light": "点灯する",
+                "ghost": "幻覚ツール",
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    def handler(url, headers, payload):
+        seen.append(payload)
+        return _FakeResp(200, {"choices": [{"message": {"content": content}}]})
+
+    _install_fake_httpx(monkeypatch, handler)
+    r = client.post(
+        "/admin/api/llm/generate",
+        json={"kind": "server_bundle", "server": "ha", "tools": ["ha_search"]},
+    )
+    assert r.status_code == 200
+    assert r.json()["tool_search_desc"] == {"ha_search": "検索する"}
+    material = seen[0]["messages"][0]["content"]
+    assert "ha_search" in material
+    assert "ha_light" not in material
+
+
+def test_llm_generate_server_bundle_fenced_json(client, monkeypatch):
+    """```json フェンス付きの応答も剥がしてパースする。"""
+    _llm_ready_client(client, monkeypatch)
+    content = '```json\n{"server_description":"説明","tools":{"ha_search":"検索"}}\n```'
+    _install_fake_httpx(
+        monkeypatch,
+        lambda *a: _FakeResp(200, {"choices": [{"message": {"content": content}}]}),
+    )
+    r = client.post(
+        "/admin/api/llm/generate",
+        json={"kind": "server_bundle", "server": "ha", "tools": ["ha_search"]},
+    )
+    assert r.status_code == 200
+    assert r.json() == {
+        "description": "説明",
+        "tool_search_desc": {"ha_search": "検索"},
+    }
+
+
+def test_llm_generate_server_bundle_invalid_json_is_502(client, monkeypatch):
+    """JSON として壊れた応答は 502 に畳む。"""
+    _llm_ready_client(client, monkeypatch)
+    _install_fake_httpx(
+        monkeypatch,
+        lambda *a: _FakeResp(
+            200, {"choices": [{"message": {"content": "これは JSON ではない"}}]}
+        ),
+    )
+    r = client.post(
+        "/admin/api/llm/generate",
+        json={"kind": "server_bundle", "server": "ha", "tools": ["ha_search"]},
+    )
+    assert r.status_code == 502
+
+
+def test_llm_generate_server_bundle_over_limit_is_400(client, monkeypatch):
+    """tools が 30 件を超えたら 400（LLM を呼ばない）。"""
+    _llm_ready_client(client, monkeypatch)
+    called = []
+
+    def handler(url, headers, payload):
+        called.append(payload)
+        return _FakeResp(200, {"choices": [{"message": {"content": "{}"}}]})
+
+    _install_fake_httpx(monkeypatch, handler)
+    r = client.post(
+        "/admin/api/llm/generate",
+        json={
+            "kind": "server_bundle",
+            "server": "ha",
+            "tools": [f"t{i}" for i in range(31)],
+        },
+    )
+    assert r.status_code == 400
+    assert called == []
+
+
+def test_llm_generate_server_bundle_at_limit_is_200(client, monkeypatch):
+    """tools=30（上限ちょうど）は 200。境界を `>` から `>=` に壊すと落ちる。"""
+    pm = _llm_ready_client(client, monkeypatch)
+    names = [f"t{i}" for i in range(30)]
+
+    async def _list(name, proxy):  # noqa: ANN001
+        return [_tool(n, f"desc {n}") for n in names]
+
+    monkeypatch.setattr(pm, "list_tools_for_server", _list)
+    content = json.dumps(
+        {"server_description": "説明", "tools": {}}, ensure_ascii=False
+    )
+    _install_fake_httpx(
+        monkeypatch,
+        lambda *a: _FakeResp(200, {"choices": [{"message": {"content": content}}]}),
+    )
+    r = client.post(
+        "/admin/api/llm/generate",
+        json={"kind": "server_bundle", "server": "ha", "tools": names},
+    )
+    assert r.status_code == 200
+
+
+def test_llm_generate_server_bundle_preamble_is_200(client, monkeypatch):
+    """前置き文・締めの一文で JSON が囲まれていても切り出してパースする。"""
+    _llm_ready_client(client, monkeypatch)
+    content = (
+        "はい、どうぞ\n"
+        '{"server_description":"説明","tools":{"ha_search":"検索"}}\n'
+        "以上です"
+    )
+    _install_fake_httpx(
+        monkeypatch,
+        lambda *a: _FakeResp(200, {"choices": [{"message": {"content": content}}]}),
+    )
+    r = client.post(
+        "/admin/api/llm/generate",
+        json={"kind": "server_bundle", "server": "ha", "tools": ["ha_search"]},
+    )
+    assert r.status_code == 200
+    assert r.json() == {
+        "description": "説明",
+        "tool_search_desc": {"ha_search": "検索"},
+    }
+
+
+def test_llm_generate_timeout_per_kind(client, monkeypatch):
+    """httpx.AsyncClient に渡る timeout: server_bundle=60s, 他 kind=30s。"""
+    _llm_ready_client(client, monkeypatch)
+    seen_kwargs: list = []
+    bundle = json.dumps(
+        {"server_description": "説明", "tools": {"ha_search": "検索"}},
+        ensure_ascii=False,
+    )
+    # kind ごとに応答を変える handler（server_description は平文、bundle は JSON）
+    _install_fake_httpx(
+        monkeypatch,
+        lambda *a, **k: _FakeResp(
+            200, {"choices": [{"message": {"content": bundle}}]}
+        ),
+        seen_client_kwargs=seen_kwargs,
+    )
+    r = client.post(
+        "/admin/api/llm/generate", json={"kind": "server_description", "server": "ha"}
+    )
+    assert r.status_code == 200
+    assert seen_kwargs[-1]["timeout"] == 30.0
+
+    r = client.post(
+        "/admin/api/llm/generate",
+        json={"kind": "server_bundle", "server": "ha", "tools": ["ha_search"]},
+    )
+    assert r.status_code == 200
+    assert seen_kwargs[-1]["timeout"] == 60.0
 
 
 def test_patch_settings_llm_partial_merge_and_off(client):

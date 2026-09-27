@@ -2984,25 +2984,48 @@
             }
         }
 
-        // ✨ サーバー説明を生成（recall レバー。提案は入力欄に流し込むだけ）
+        // まとめ生成（server_bundle）1 回で扱うツール数の上限。バックエンドの
+        // _LLM_MAX_BUNDLE_TOOLS と揃える（超えると 400）。
+        const BUNDLE_CHUNK = 30;
+
+        // ✨ サーバー説明＋空欄ツールの説明を server_bundle 1回でまとめて生成する。
+        // サーバー説明は従来どおり上書き（既存は confirm）／ツール説明は空欄のみ（既存は温存）。
         async function generateServerDescription(serverName, btn) {
             const pane = document.getElementById('serverDetail');
             const input = pane && pane.querySelector('.desc-input:not([data-tool])');
             if (!input) return;
             if (input.value.trim() && !confirm('既存の説明を上書きします。よろしい？')) return;
+            const server = servers.find(s => s.name === serverName);
+            if (!server) return;
+            // 現在空欄のツール名だけを対象にする（既存の説明は上書きしない）。
+            // 上限を超える分は一括生成（30件ずつのチャンク）に任せる。
+            const emptyTools = (server.tools || []).filter(t => !toolDescValue(server, t.name).trim());
+            const bundleTools = emptyTools.slice(0, BUNDLE_CHUNK).map(t => t.name);
             const original = btn.textContent;
             btn.disabled = true;
             btn.textContent = '生成中...';
             try {
-                const data = await API.generateLLM({ kind: 'server_description', server: serverName });
-                const text = ((data && data.text) || '').trim();
+                const data = await API.generateLLM({ kind: 'server_bundle', server: serverName, tools: bundleTools });
+                const text = ((data && data.description) || '').trim();
                 if (!text) throw new Error('提案が空でした');
                 input.value = text;
                 descDraft.set(serverName, text);
                 updateDescriptionCounter(input);
                 scheduleAutoSave(serverName);
+                // tool_search_desc は空欄のツール欄にだけ流し込む（既存の説明は温存）
+                const descs = (data && data.tool_search_desc) || {};
+                const empty = new Set(bundleTools);
+                let filled = 0;
+                for (const [toolName, desc] of Object.entries(descs)) {
+                    const t = (typeof desc === 'string' ? desc : '').trim();
+                    if (!t || !empty.has(toolName) || toolDescValue(server, toolName).trim()) continue;
+                    applyToolDescText(server, toolName, t);
+                    filled += 1;
+                }
                 input.focus();
-                showToast('サーバー説明を提案しました（自動保存します）', 'info');
+                showToast(filled > 0
+                    ? `サーバー説明と${filled}件のツール説明を提案しました（自動保存します）`
+                    : 'サーバー説明を提案しました（自動保存します）', 'info');
             } catch (error) {
                 showToast(`自動生成を使えませんでした: ${error.message}`, 'warning');
             } finally {
@@ -3021,8 +3044,11 @@
         // 失敗理由（HTTP ステータス＋メッセージ）はコンソールではなく UI に出す
         function bulkGenErrorsHtml(server) {
             const r = bulkGenResult.get(server.name);
-            if (!r || !r.failed.length) return '';
-            return r.failed.map(f => `<div>✕ ${escapeHtml(f.tool)}: ${escapeHtml(f.message)}</div>`).join('');
+            const notes = (r && r.notes) || [];
+            if (!r || (!r.failed.length && !notes.length)) return '';
+            const noteHtml = notes.map(n => `<div>ℹ ${escapeHtml(n)}</div>`).join('');
+            const failHtml = r.failed.map(f => `<div>✕ ${escapeHtml(f.tool)}: ${escapeHtml(f.message)}</div>`).join('');
+            return noteHtml + failHtml;
         }
 
         // ヘッダーの一括生成ボタン＋進捗。状態は bulkGenState に置き、
@@ -3084,6 +3110,29 @@
             scheduleAutoSave(server.name);
         }
 
+        // ツール1件を従来の tool_search_desc で生成する（チャンク失敗時／バンドル未返却分のフォールバック）
+        async function genOneToolDesc(server, toolName) {
+            const data = await API.generateLLM({ kind: 'tool_search_desc', server: server.name, tool_name: toolName });
+            const text = ((data && data.text) || '').trim();
+            if (!text) throw new Error('提案が空でした');
+            return text;
+        }
+
+        // server_bundle 1回で chunk（最大 BUNDLE_CHUNK 件）のツール説明を得る。
+        // 戻り値: Map(ツール名 -> 説明)。サーバー説明はここでは使わない。リクエスト失敗は throw。
+        async function genBundleToolDescs(server, chunk) {
+            const data = await API.generateLLM({
+                kind: 'server_bundle', server: server.name, tools: chunk.map(t => t.name),
+            });
+            const map = (data && data.tool_search_desc) || {};
+            const out = new Map();
+            for (const [name, desc] of Object.entries(map)) {
+                const text = (typeof desc === 'string' ? desc : '').trim();
+                if (text) out.set(name, text);
+            }
+            return out;
+        }
+
         // mode='unset': 説明が空のツールだけ / mode='regen': 全ツール（確認ダイアログあり）
         async function runBulkGenerate(serverName, mode) {
             if (bulkGenState && bulkGenState.running) return;
@@ -3103,29 +3152,41 @@
             const pending = autoSaveTimers.get(serverName);
             if (pending) { clearTimeout(pending); autoSaveTimers.delete(serverName); }
             bulkGenResult.delete(serverName);
-            bulkGenState = { server: serverName, running: true, total: targets.length, index: 0, ok: 0, failed: [], cancelled: false };
+            bulkGenState = { server: serverName, running: true, total: targets.length, index: 0, ok: 0, failed: [], notes: [], cancelled: false };
             refreshBulkGenUI();
             try {
-                for (const tool of targets) {
+                // 30件ずつのまとめ生成（server_bundle）。チャンク失敗時はそのチャンクだけツール単位に
+                // フォールバックして継続する。
+                for (let i = 0; i < targets.length; i += BUNDLE_CHUNK) {
                     if (bulkGenState.cancelled) break;
+                    const chunk = targets.slice(i, i + BUNDLE_CHUNK);
+                    let bundled = null;
                     try {
-                        const data = await API.generateLLM({ kind: 'tool_search_desc', server: serverName, tool_name: tool.name });
-                        const text = ((data && data.text) || '').trim();
-                        if (!text) throw new Error('提案が空でした');
-                        applyToolDescText(server, tool.name, text);
-                        bulkGenState.ok += 1;
+                        bundled = await genBundleToolDescs(server, chunk);
                     } catch (error) {
-                        // 1件失敗しても継続し、理由は最後に UI へ列挙する
                         const message = error.status ? `HTTP ${error.status} — ${error.message}` : error.message;
-                        bulkGenState.failed.push({ tool: tool.name, message });
+                        bulkGenState.notes.push(`まとめ生成に失敗（${message}）→ 個別生成にフォールバック`);
                     }
-                    bulkGenState.index += 1;
-                    refreshBulkGenUI();
+                    for (const tool of chunk) {
+                        if (bulkGenState.cancelled) break;
+                        try {
+                            // バンドルで得られなかったツールは個別に再試行する
+                            const text = (bundled && bundled.get(tool.name)) || await genOneToolDesc(server, tool.name);
+                            applyToolDescText(server, tool.name, text);
+                            bulkGenState.ok += 1;
+                        } catch (error) {
+                            // 1件失敗しても継続し、理由は最後に UI へ列挙する
+                            const message = error.status ? `HTTP ${error.status} — ${error.message}` : error.message;
+                            bulkGenState.failed.push({ tool: tool.name, message });
+                        }
+                        bulkGenState.index += 1;
+                        refreshBulkGenUI();
+                    }
                 }
             } finally {
                 const result = {
                     total: bulkGenState.total, ok: bulkGenState.ok, failed: bulkGenState.failed,
-                    cancelled: bulkGenState.cancelled, index: bulkGenState.index,
+                    notes: bulkGenState.notes, cancelled: bulkGenState.cancelled, index: bulkGenState.index,
                 };
                 bulkGenState.running = false;
                 bulkGenResult.set(serverName, result);
@@ -3233,7 +3294,7 @@
                     <div class="md-block-label">サーバー説明</div>
                     <div class="desc-gen-row">
                         ${llmConfigured ? `<button class="btn btn-sm btn-ai" data-action="gen-server-desc" data-server="${escapeAttr(server.name)}">✨ 説明を自動生成</button>
-                        <span class="field-note" style="margin:0">ツール ${tools.length}件の構成からこのサーバーの説明を生成します。ツールごとの説明は各行の ✨ か「未設定を生成」でまとめて生成できます</span>`
+                        <span class="field-note" style="margin:0">ツール ${tools.length}件の構成から、サーバー説明と未設定ツールの説明を1回でまとめて生成します</span>`
                         : `<span class="field-note" style="margin:0">✨ 自動生成は LLM（設定 → LLM）を構成すると使えます</span>`}
                     </div>
                     <div class="server-description">

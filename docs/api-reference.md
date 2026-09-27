@@ -663,25 +663,39 @@ OpenAI 互換 API（`{base_url}/chat/completions`、`Authorization: Bearer {api_
 
 | フィールド | 必須 | 説明 |
 |---|---|---|
-| `kind` | 必須 | `"server_description"` または `"tool_search_desc"`（それ以外は `422`）。 |
+| `kind` | 必須 | `"server_description"` / `"tool_search_desc"` / `"server_bundle"`（それ以外は `422`）。 |
 | `server` | 必須 | 接続済みサーバー名（未接続は `404`）。 |
 | `tool_name` | `tool_search_desc` のとき必須 | 対象ツール名（無いと `400`、見つからないと `404`）。 |
+| `tools` | `server_bundle` のとき任意 | 生成対象のツール名の配列。**最大 30 件**（31 件以上は `400`）。空配列 `[]` も可（サーバー説明だけを生成）。 |
 
-**Response:**
+**Response（`server_description` / `tool_search_desc`）:**
 ```json
 {
   "text": "照明や電球を操作し室温を確認する"
 }
 ```
 
+**Response（`server_bundle`）:** 既存 2 kind とは形が異なる（`text` ではなく `description` + `tool_search_desc`）:
+```json
+{
+  "description": "照明や電球を操作し室温を確認する",
+  "tool_search_desc": {
+    "turn_on": "指定した照明を点灯する",
+    "get_temperature": "現在の室温を取得する"
+  }
+}
+```
+
+`server_bundle` はサーバー説明と、`tools` で指定した各ツールの検索用の説明を **1 回の LLM 呼び出し**でまとめて返します（管理 UI の ✨ サーバー説明生成と一括生成が使用。`tools` を 30 件ずつに分割して呼ぶ）。プロンプトには指定ツールの docstring だけを材料にし、`tools` に無いツール名・非文字列・空白のみの値は応答から黙って落とします。出力が大きいためこの kind だけタイムアウトを **60 秒**にしています（既存 2 kind は 30 秒）。
+
 **Errors:**
 
 | Status | 条件 |
 |---|---|
-| `400` | `llm.api_key` 未設定（`PATCH /admin/api/settings` で設定）。または `tool_search_desc` で `tool_name` なし。 |
+| `400` | `llm.api_key` 未設定（`PATCH /admin/api/settings` で設定）。または `tool_search_desc` で `tool_name` なし。または `server_bundle` で `tools` が 30 件超。 |
 | `404` | `server` が未接続、または `tool_name` が当該サーバーに見つからない。 |
 | `422` | `kind` が不正。 |
-| `502` | 上流 LLM への接続失敗、上流 HTTP エラー、応答の解析失敗、空応答。 |
+| `502` | 上流 LLM への接続失敗、上流 HTTP エラー、応答の解析失敗（`server_bundle` の JSON 解析失敗を含む）、空応答。 |
 
 ---
 
@@ -693,5 +707,5 @@ OpenAI 互換 API（`{base_url}/chat/completions`、`Authorization: Bearer {api_
 
 - サーバーの追加・編集・削除・タグ管理・有効/無効トグル・接続テスト
 - **サーバー説明**と**ツールの検索用の説明**（`tool_search_desc`）は**自動保存**（入力停止 0.8 秒後に 1 回の `PATCH` にまとめて送信）。保存バーに「未保存の変更 N件／保存中…／保存しました／保存に失敗しました」を表示し、失敗時は「再試行」で送り直せます
-- LLM（設定 → LLM）を構成すると「✨ 説明を生成」でサーバー説明・検索用の説明を自動生成できます（未設定ならボタンは出ません）
+- LLM（設定 → LLM）を構成すると「✨ 説明を生成」で**サーバー説明と未設定ツールの説明を 1 回でまとめて生成**できます（`server_bundle`。既存のツール説明は上書きせず空欄のみ流し込みます）。ツール行の ✨ と一括生成（「未設定を生成」「すべて再生成」）も `server_bundle` を使い、30 件ずつに分割して呼びます（未設定ならボタンは出ません）
 - 索引に入る語彙の設計根拠（実測パネル）を併設
