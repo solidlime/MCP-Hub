@@ -25,6 +25,9 @@ class HubConfig:
     log_level: str = "info"
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
     use_embeddings: bool = True
+    # LLM による説明文生成（/admin/api/llm/generate）の設定。
+    # {provider?, model?, api_key?, base_url?}。未設定／api_key 無し＝機能オフ。
+    llm: dict[str, Any] = field(default_factory=dict)
 
 
 def _data_dir() -> str:
@@ -78,6 +81,10 @@ def _parse_config(filepath: Path) -> HubConfig:
             "Invalid use_embeddings=%r — falling back to True", use_embeddings
         )
         use_embeddings = True
+    llm = raw.get("llm", {})
+    if not isinstance(llm, dict):
+        logger.warning("Invalid llm=%r — ignoring (feature stays off)", llm)
+        llm = {}
     raw_servers = raw.get("mcpServers", raw.get("servers", {}))
 
     if not isinstance(raw_servers, dict):
@@ -108,6 +115,7 @@ def _parse_config(filepath: Path) -> HubConfig:
         log_level=log_level,
         embedding_model=embedding_model,
         use_embeddings=use_embeddings,
+        llm=llm,
     )
 
 

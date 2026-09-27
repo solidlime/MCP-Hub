@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from .config import DEFAULT_EMBEDDING_MODEL
+from .masking import mask_text
 from .state import app_state
 from .validators import (
     MAX_DESCRIPTION_LENGTH,
@@ -83,11 +84,23 @@ class ServerConfig(BaseModel):
     headers: dict[str, str] = {}
     disabled: bool = False
     description: str | None = None
+    # ツール名 → 日本語1文（80字以内目安）。索引テキストに前置され意味検索の
+    # 語彙の壁を越える。表示用ではない（PATCH /servers/{name} の部分更新に乗る）。
+    tool_search_desc: dict[str, str] = {}
 
     def model_dump_for_config(self) -> dict:
         """空文字・空リストを除外した config dict を返す。"""
         raw = self.model_dump(exclude_none=True)
-        for key in ("url", "command", "args", "env", "tags", "headers", "description"):
+        for key in (
+            "url",
+            "command",
+            "args",
+            "env",
+            "tags",
+            "headers",
+            "description",
+            "tool_search_desc",
+        ):
             if key in raw and not raw[key]:
                 del raw[key]
         return raw
@@ -187,6 +200,7 @@ async def get_settings():
         "connect_timeout": data.get("connect_timeout"),
         "use_embeddings": _effective_use_embeddings(),
         "embedding_status": _effective_embedding_status(),
+        "llm": _llm_public(data.get("llm")),
     }
 
 
@@ -232,6 +246,20 @@ async def update_settings(body: dict):
             body.get("connect_timeout", data.get("connect_timeout")), "connect_timeout"
         )
         await registry.set_timeouts(client_timeout, connect_timeout)
+    if "llm" in body:
+        value = body["llm"]
+        if not isinstance(value, dict):
+            raise HTTPException(
+                status_code=422, detail="llm はオブジェクトである必要があります"
+            )
+        # 部分更新: 既存とマージする（api_key を毎回送らせない）。空 dict で機能オフ。
+        if not value:
+            await registry.set_llm({})
+        else:
+            data = await registry._read()
+            current = data.get("llm")
+            merged = (current if isinstance(current, dict) else {}) | value
+            await registry.set_llm(merged)
     data = await registry._read()
     return {
         "meta_mode": data.get("meta_mode", False),
@@ -240,6 +268,7 @@ async def update_settings(body: dict):
         "connect_timeout": data.get("connect_timeout"),
         "use_embeddings": _effective_use_embeddings(),
         "embedding_status": _effective_embedding_status(),
+        "llm": _llm_public(data.get("llm")),
     }
 
 
@@ -289,6 +318,179 @@ async def update_embedding_model(body: dict):
     await registry.set_embedding_model(model)
     data = await registry._read()
     return {"embedding_model": data.get("embedding_model", DEFAULT_EMBEDDING_MODEL)}
+
+
+# --- LLM による説明文生成（/llm/generate） ---
+
+# OpenAI 互換エンドポイントの既定。provider で base_url を選べる（不明な provider は
+# base_url を明示しない限り OpenAI にフォールバック）。
+_LLM_BASE_URLS: dict[str, str] = {"openai": "https://api.openai.com/v1"}
+_LLM_DEFAULT_PROVIDER = "openai"
+_LLM_DEFAULT_MODEL = "gpt-4o-mini"
+_LLM_TIMEOUT = 30.0
+_LLM_KINDS = ("server_description", "tool_search_desc")
+
+
+class LLMGenerateRequest(BaseModel):
+    kind: str
+    server: str
+    tool_name: str | None = None
+
+
+def _llm_public(llm: Any) -> dict:
+    """GET /settings 用: api_key の値は返さず、設定有無のみを公開する。"""
+    llm = llm if isinstance(llm, dict) else {}
+    return {
+        "provider": llm.get("provider"),
+        "model": llm.get("model"),
+        "base_url": llm.get("base_url"),
+        "api_key_set": bool(llm.get("api_key")),
+    }
+
+
+def _llm_prompt(
+    kind: str,
+    *,
+    server: str,
+    server_desc: str,
+    tool_name: str | None,
+    tool_desc: str,
+    tools: list[dict[str, Any]],
+) -> str:
+    """kind ごとの生成プロンプト。出力は日本語1文・80字以内を指示する。
+
+    プロンプトはサーバー側に置く（フロントには材料だけ渡す）。tool_search_desc は
+    ツールの docstring とサーバー説明を材料にし、検索ヒットしやすい語を含めさせる。
+    """
+    if kind == "server_description":
+        lines = [
+            f"- {t.get('name', '')}: {(t.get('description') or '').strip()[:200]}"
+            for t in tools
+        ]
+        material = "\n".join(lines) or "(ツール情報なし)"
+        return (
+            f"次の MCP サーバー '{server}' が提供する機能を、日本語の1文（80文字以内）で"
+            "説明してください。日本語で検索したときに見つけやすいよう、用途・対象・代表的な"
+            "操作語を含めてください。説明文だけを出力し、前後の引用符・見出し・箇条書きは"
+            "付けないでください。\n\n"
+            f"サーバー名: {server}\nツール一覧:\n{material}"
+        )
+    return (
+        f"次の MCP ツール '{tool_name}'（サーバー '{server}'）を、日本語の1文"
+        "（80文字以内）で要約してください。ユーザーが日本語で検索したときにヒットしやすい"
+        "語（用途・対象・同義語）を含めてください。要約だけを出力し、前後の引用符・見出しは"
+        "付けないでください。\n\n"
+        f"サーバー説明: {server_desc or '(なし)'}\n"
+        f"ツール説明: {tool_desc or '(なし)'}"
+    )
+
+
+@router.post("/llm/generate")
+async def llm_generate(body: LLMGenerateRequest):
+    """OpenAI 互換 API で日本語の説明文（1文）を生成する。
+
+    api_key 未設定は 400（フロントは ✨ を出さない設計）。kind は
+    server_description / tool_search_desc のどちらか。
+    """
+    registry = _get_registry()
+    data = await registry._read()
+    llm_raw = data.get("llm")
+    llm: dict[str, Any] = llm_raw if isinstance(llm_raw, dict) else {}
+    api_key = llm.get("api_key")
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="llm.api_key が未設定のため生成できません",
+        )
+    if body.kind not in _LLM_KINDS:
+        raise HTTPException(
+            status_code=422,
+            detail="kind は server_description か tool_search_desc を指定してください",
+        )
+
+    pm = _get_proxy_manager()
+    server = body.server
+    desc_fn = getattr(pm, "server_description", None)
+    raw_server_desc = desc_fn(server) if callable(desc_fn) else ""
+    server_desc = raw_server_desc if isinstance(raw_server_desc, str) else ""
+
+    proxy = pm.get_proxy(server)
+    if proxy is None:
+        raise HTTPException(
+            status_code=404, detail=f"Server '{server}' は接続されていません"
+        )
+    raw_tools = await pm.list_tools_for_server(server, proxy)
+    tools = [
+        {"name": t.name, "description": (t.description or "")} for t in raw_tools
+    ]
+
+    tool_desc = ""
+    if body.kind == "tool_search_desc":
+        if not body.tool_name:
+            raise HTTPException(
+                status_code=400,
+                detail="tool_search_desc には tool_name が必要です",
+            )
+        match = [t for t in tools if t["name"] == body.tool_name]
+        if not match:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Tool '{body.tool_name}' は '{server}' に見つかりません",
+            )
+        tool_desc = match[0]["description"].strip()
+
+    prompt = _llm_prompt(
+        body.kind,
+        server=server,
+        server_desc=server_desc,
+        tool_name=body.tool_name,
+        tool_desc=tool_desc,
+        tools=tools,
+    )
+
+    provider = str(llm.get("provider") or _LLM_DEFAULT_PROVIDER)
+    base_url = str(
+        llm.get("base_url")
+        or _LLM_BASE_URLS.get(provider)
+        or _LLM_BASE_URLS[_LLM_DEFAULT_PROVIDER]
+    ).rstrip("/")
+    model = str(llm.get("model") or _LLM_DEFAULT_MODEL)
+
+    # httpx は mcp の推移依存（主依存）。admin 起動を重くしないよう遅延 import。
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=_LLM_TIMEOUT) as client:
+            resp = await client.post(
+                f"{base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.3,
+                },
+            )
+    except httpx.HTTPError as e:
+        logger.warning("LLM request failed: %s", mask_text(str(e)))
+        raise HTTPException(
+            status_code=502, detail="LLM への接続に失敗しました"
+        ) from e
+
+    if resp.status_code >= 400:
+        logger.warning("LLM upstream error HTTP %s", resp.status_code)
+        raise HTTPException(
+            status_code=502,
+            detail=f"LLM がエラーを返しました (HTTP {resp.status_code})",
+        )
+    try:
+        text = resp.json()["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, ValueError) as e:
+        raise HTTPException(
+            status_code=502, detail="LLM の応答を解析できませんでした"
+        ) from e
+    if not isinstance(text, str) or not text.strip():
+        raise HTTPException(status_code=502, detail="LLM が空の応答を返しました")
+    return {"text": text.strip()}
 
 
 @router.get("/health")
@@ -357,9 +559,9 @@ async def get_logs(
 
 @router.get("/servers")
 async def list_servers(include_tools: bool = False):
-    """List all servers. include_tools=True (default) returns tool names (backward compat).
+    """List all servers. include_tools=False (default) returns a fast listing without per-server network calls.
 
-    Set include_tools=false for fast listing without per-server network calls.
+    Set include_tools=true to include tool names (one network call per server).
     """
     registry = _get_registry()
     pm = _get_proxy_manager()
@@ -516,6 +718,15 @@ async def patch_server(name: str, body: PatchServerRequest):
                 status_code=422,
                 detail=f"Description too long (max {MAX_DESCRIPTION_LENGTH} chars)",
             )
+    if "tool_search_desc" in merged_config:
+        tsd = merged_config["tool_search_desc"]
+        if not isinstance(tsd, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in tsd.items()
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="tool_search_desc は {ツール名: 文字列} のオブジェクトである必要があります",
+            )
 
     if rename:
         assert target_name is not None
@@ -543,8 +754,10 @@ async def patch_server(name: str, body: PatchServerRequest):
 
     # 恒久化（リネームなしの従来 PATCH）
     await registry.update_server(name, merged_config)
-    # tags / description のみの更新はプロキシ再生成が不要（サブプロセス再起動を防ぐ）
-    if set(updates) <= {"tags", "description"}:
+    # tags / description / tool_search_desc のみの更新はプロキシ再生成が不要
+    # （サブプロセス再起動を防ぐ）。update_config_only は tags_updated 通知で
+    # 索引再構築を起こすため、tool_search_desc も即座に検索へ反映される。
+    if set(updates) <= {"tags", "description", "tool_search_desc"}:
         await pm.update_config_only(name, merged_config)
     else:
         await pm.refresh_server(name, merged_config)

@@ -919,6 +919,65 @@
         .tool-action { margin-left: 10px; flex-shrink: 0; }
 
         /* ============================================================
+           TOOL SEARCH DESCRIPTION (per-tool 日本語1文 = precision レバー)
+           ツール行の「検索用の説明」エディタ。マークアップは
+           renderToolSearchDescField() が生成する。
+           ============================================================ */
+        .field-note {
+            font-size: 0.7rem;
+            line-height: 1.65;
+            color: var(--text-muted);
+        }
+        .tool-desc-field {
+            min-width: 260px;
+        }
+        .tool-desc-field.is-unset .desc-input {
+            border-style: dashed;
+        }
+        .tool-desc-field .desc-input {
+            font-size: 0.78rem;
+        }
+        .gen-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+            flex-wrap: wrap;
+        }
+        .tool-actions-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+            flex-wrap: wrap;
+        }
+        .kw-table td.cell-top { vertical-align: top; }
+        .kw-table td .status-badge { white-space: nowrap; }
+        .kw-row-unset td { background: var(--accent-amber-bg); }
+        .kw-row-unset:hover td { background: var(--accent-amber-bg); }
+        .desc-footer.between {
+            justify-content: space-between;
+        }
+        .len-note {
+            font-size: 0.66rem;
+            color: var(--accent-amber);
+            line-height: 1.4;
+        }
+        .status-badge.warn {
+            background: var(--accent-amber-bg);
+            color: var(--accent-amber);
+        }
+        .btn-ai {
+            border: 1px dashed var(--accent-primary) !important;
+            background: var(--accent-primary-bg);
+            color: var(--accent-primary);
+        }
+        .btn-ai:hover:not(:disabled) {
+            background: var(--accent-primary);
+            color: var(--text-on-accent);
+        }
+
+        /* ============================================================
            MODAL
            ============================================================ */
         .modal-overlay {
@@ -1394,6 +1453,214 @@
         }
 
         /* ============================================================
+           MASTER-DETAIL (サーバータブ: 左レール + 右ペイン)
+           ============================================================ */
+        .panel {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 16px;
+            box-shadow: var(--shadow-sm);
+        }
+        .panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .panel-title { font-size: 0.9rem; font-weight: 700; color: var(--text-primary); }
+        .panel-sub { font-size: 0.76rem; color: var(--text-muted); line-height: 1.6; }
+        .md-layout {
+            display: grid;
+            grid-template-columns: 320px minmax(0, 1fr);
+            gap: 18px;
+            align-items: start;
+            margin-bottom: 24px;
+        }
+        .md-layout > * { min-width: 0; }
+        .md-list { display: grid; gap: 8px; }
+        .md-item {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 6px 10px;
+            padding: 10px 12px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: all var(--transition-fast);
+        }
+        .md-item:hover { border-color: var(--accent-primary); background: var(--bg-hover); }
+        .md-item.is-active { border-color: var(--accent-primary); background: var(--accent-primary-bg); }
+        .md-item.is-off { opacity: 0.55; }
+        .md-item:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+        .md-item-name {
+            font-weight: 700;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+        .status-dot {
+            width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+            display: inline-block; background: var(--text-muted);
+        }
+        .status-dot.connected { background: var(--accent-green); }
+        .status-dot.error { background: var(--accent-red); }
+        .status-dot.connecting { background: var(--accent-blue); }
+        .status-dot.unknown { background: var(--text-muted); }
+        .md-item-sub {
+            grid-column: 1 / -1;
+            font-size: 0.68rem;
+            color: var(--text-muted);
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .md-item-sub .unset-num { color: var(--accent-amber); font-weight: 700; }
+        .md-detail {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            box-shadow: var(--shadow-sm);
+        }
+        .md-detail-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        .md-detail-head h2 {
+            margin: 0; font-size: 1rem; font-weight: 700;
+            color: var(--text-primary); overflow-wrap: anywhere;
+        }
+        .md-block { margin-bottom: 18px; }
+        .md-block-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+        .desc-gen-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+        .lever {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.64rem;
+            font-weight: 700;
+            padding: 2px 9px;
+            border-radius: var(--radius-pill);
+        }
+        .lever.recall { background: var(--accent-amber-bg); color: var(--accent-amber); }
+        .lever.precision { background: var(--accent-blue-bg); color: var(--accent-blue); }
+        .kw-count { font-size: 0.68rem; color: var(--text-muted); margin-left: 6px; font-weight: 500; }
+        .kw-table-wrap {
+            overflow-x: auto;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-sm);
+            margin-bottom: 0;
+        }
+        .kw-table td { vertical-align: top; }
+        .kw-table th { white-space: nowrap; }
+        .kw-tool-cell { font-family: var(--font-mono); font-size: 0.74rem; color: var(--text-primary); white-space: nowrap; }
+        .kw-desc-cell { font-size: 0.7rem; color: var(--text-muted); line-height: 1.55; overflow-wrap: anywhere; }
+        .kw-inherit { font-size: 0.68rem; color: var(--text-muted); }
+        .save-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            padding: 12px 18px;
+            margin-bottom: 12px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--accent-primary);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+        }
+        .save-bar .save-state { font-size: 0.78rem; color: var(--text-secondary); }
+        .save-bar .save-state strong { color: var(--accent-primary); }
+        .save-bar .save-state.is-success { color: var(--accent-green); font-weight: 600; }
+        .save-bar .save-state.is-error { color: var(--accent-red); font-weight: 600; }
+        .save-bar .save-state.is-saving { color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
+        .save-bar-spacer { margin-left: auto; }
+        /* 左レール: 検索 + タグフィルタ + 未設定のみ */
+        .rail-tools { display: grid; gap: 8px; margin-bottom: 10px; }
+        .rail-search {
+            width: 100%; box-sizing: border-box;
+            padding: 7px 10px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-sm);
+            background: var(--bg-surface);
+            color: var(--text-primary);
+            font-size: 0.8rem;
+        }
+        .rail-search:focus { outline: none; border-color: var(--accent-primary); }
+        .md-left .tag-filter-bar {
+            flex-wrap: wrap;
+            gap: 6px;
+            margin-bottom: 0;
+            padding: 8px 10px;
+        }
+        .rail-unset-toggle { width: 100%; justify-content: flex-start; box-sizing: border-box; }
+        .rail-unset-toggle .unset-badge {
+            margin-left: auto;
+            font-size: 0.68rem;
+            font-weight: 700;
+            color: var(--accent-amber);
+            background: var(--accent-amber-bg);
+            border-radius: var(--radius-pill);
+            padding: 1px 8px;
+        }
+        .rail-no-match {
+            padding: 18px 12px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+        }
+        .filter-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 12px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-sm);
+            background: var(--bg-surface);
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+        .filter-toggle input { accent-color: var(--accent-primary); }
+        .ba-note { font-size: 0.72rem; color: var(--text-muted); line-height: 1.65; margin-top: 10px; }
+        .warn-box {
+            display: flex;
+            gap: 10px;
+            padding: 12px 14px;
+            background: var(--accent-amber-bg);
+            border: 1px solid rgba(232, 200, 160, 0.35);
+            border-radius: var(--radius-md);
+            font-size: 0.75rem;
+            line-height: 1.65;
+            color: var(--text-secondary);
+        }
+        @media (max-width: 1100px) {
+            .md-layout { grid-template-columns: 1fr; }
+        }
+
+        /* ============================================================
            CONFIRM DIALOG
            ============================================================ */
         .confirm-dialog .modal { max-width: 400px; }
@@ -1687,32 +1954,88 @@
             </div>
         </div>
 
-        <!-- Tag Filter Bar -->
-        <div id="tagFilterBar" class="tag-filter-bar" style="display: none;" role="toolbar" aria-label="タグフィルター">
-            <span class="filter-label">🏷️ フィルター:</span>
-            <div id="tagFilterChips"></div>
-            <button class="tag-filter-clear" id="tagFilterClear" onclick="clearTagFilter()" style="display: none;">
-                ✕ クリア
-            </button>
+        <!-- Master-Detail: 左レール=サーバー一覧 / 右ペイン=選択サーバーの詳細 -->
+        <div class="md-layout">
+            <aside class="panel md-left" aria-label="MCP サーバー一覧">
+                <div class="panel-head">
+                    <div class="panel-title">🖥️ サーバー</div>
+                    <span class="status-badge unknown" id="serverCountBadge">0</span>
+                </div>
+                <div class="rail-tools">
+                    <input type="search" id="serverSearchInput" class="rail-search"
+                           placeholder="名前・説明・タグで検索" aria-label="サーバーを検索" autocomplete="off">
+                    <div id="tagFilterBar" class="tag-filter-bar" style="display: none;" role="toolbar" aria-label="タグフィルター">
+                        <span class="filter-label">🏷️</span>
+                        <div id="tagFilterChips"></div>
+                        <button class="tag-filter-clear" id="tagFilterClear" onclick="clearTagFilter()" style="display: none;">
+                            ✕ クリア
+                        </button>
+                    </div>
+                    <label class="filter-toggle rail-unset-toggle" title="検索用の説明が未設定のツールを持つサーバーだけを表示">
+                        <input type="checkbox" id="unsetOnlyToggle" aria-label="未設定のツールを持つサーバーのみ表示">
+                        未設定のみ
+                        <span class="unset-badge" id="unsetCountBadge">未設定 0</span>
+                    </label>
+                </div>
+                <div class="md-list" id="serversList" role="list" aria-label="MCP サーバー一覧">
+                    <!-- Dynamic content -->
+                </div>
+                <div id="railNoMatch" class="rail-no-match" style="display: none;" role="status">該当なし</div>
+                <div id="emptyState" class="empty-state" style="display: none;" role="status">
+                    <div class="empty-state-icon" aria-hidden="true">📡</div>
+                    <div class="empty-state-title">MCP サーバーが登録されていません</div>
+                    <div class="empty-state-description">
+                        「サーバー追加」ボタンから MCP サーバーを登録してください。<br>
+                        URL またはコマンドで接続できます。
+                    </div>
+                    <button class="btn btn-primary" onclick="openAddServerModal()" aria-label="最初の MCP サーバーを追加">
+                        最初のサーバーを追加
+                    </button>
+                </div>
+            </aside>
+            <section class="md-detail" id="serverDetail" aria-label="サーバー詳細">
+                <!-- Dynamic content -->
+            </section>
         </div>
 
-        <!-- Server List -->
-        <div id="serversList" class="servers-grid" role="list" aria-label="MCP サーバー一覧">
-            <!-- Dynamic content -->
-        </div>
-
-        <!-- Empty State -->
-        <div id="emptyState" class="empty-state" style="display: none;" role="status">
-            <div class="empty-state-icon" aria-hidden="true">📡</div>
-            <div class="empty-state-title">MCP サーバーが登録されていません</div>
-            <div class="empty-state-description">
-                「サーバー追加」ボタンから MCP サーバーを登録してください。<br>
-                URL またはコマンドで接続できます。
+        <!-- 実測 → 設計判断（この数字が入力欄の形と注意表示を決めている） -->
+        <section class="panel" role="region" aria-label="設計の実測根拠">
+            <div class="panel-head">
+                <div>
+                    <div class="panel-title">📊 なぜ「チップ」ではなく「日本語1文」なのか（実測 → 設計判断）</div>
+                    <div class="panel-sub">埋め込みあり・HA 関連6クエリ（#001）。この数字が入力欄の形と注意表示を決めている。</div>
+                </div>
             </div>
-            <button class="btn btn-primary" onclick="openAddServerModal()" aria-label="最初の MCP サーバーを追加">
-                最初のサーバーを追加
-            </button>
-        </div>
+            <div class="kw-table-wrap">
+                <table class="log-table kw-table">
+                    <thead>
+                        <tr><th style="width:170px">方式</th><th>実測 / → 反映した設計</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><b>日本語の説明文1文</b>（ja_desc）</td>
+                            <td>この1文が語彙4語を包含（室温 / 温度 / エアコン df=1、照明は元から df=11）・狙い top-3 同等（3/6）・<b>top-5 は上（4/6 vs 3/6）</b>・英語回帰ゼロ・差分 1文書 0.44s → <b>採用</b>（狙い top-5 3/6 → 4/6）</td>
+                        </tr>
+                        <tr>
+                            <td><b>full_doc_bm25</b>（全文索引）</td>
+                            <td>日本語に効かず<b>悪化</b>: 照明 1→2 / 電球 3→16 / ノート 9→21、BM25 トークン 310→906 → <b>不採用</b>（<code>_INDEX_DESC_CHARS = 400</code> 据え置き、docstring は参考表示のみ）</td>
+                        </tr>
+                        <tr>
+                            <td><b>ja_desc_all</b>（全ツールに1文）</td>
+                            <td>flooding は増えない（2.00 → 1.83）が英語 <code>backup</code> の top-5 が変わる回帰 → <b>必要なツールだけ</b>（未設定ハイライト＋行ごとの ✨ で誘導）</td>
+                        </tr>
+                        <tr>
+                            <td><b>文の長さ依存</b></td>
+                            <td>同じ語を含んでも<b>文が長いと順位が動く</b> → UI に「1文・80字」の目安＋カウンタ＋超過時の ⚠</td>
+                        </tr>
+                        <tr>
+                            <td><b>サーバー説明</b>（recall）</td>
+                            <td>全ツールの索引に前置済み（照明が説明だけで df=11）。recall は top-5 の HA 件数 2/6 → 4/6 → 説明欄は現状維持（専用の設定レバーは無いので注記のみ）</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
         </section>
 
         <!-- Log Tab -->
@@ -1990,6 +2313,42 @@
                 </div>
 
                 <div class="setting-group">
+                    <label class="setting-label">🤖 LLM（説明の自動生成）</label>
+                    <div class="settings-status" style="margin-bottom:8px;">
+                        <span class="status-indicator" id="llmStatusDot"></span>
+                        <span id="llmStatusText">読み込み中...</span>
+                    </div>
+                    <div class="setting-row">
+                        <label class="setting-label" style="min-width:120px; font-size:13px;">provider</label>
+                        <input type="text" id="llmProvider" class="setting-input"
+                               placeholder="openai / openrouter" aria-label="LLM provider">
+                    </div>
+                    <div class="setting-row" style="margin-top:8px;">
+                        <label class="setting-label" style="min-width:120px; font-size:13px;">model</label>
+                        <input type="text" id="llmModel" class="setting-input"
+                               placeholder="gpt-4o-mini" aria-label="LLM model">
+                    </div>
+                    <div class="setting-row" style="margin-top:8px;">
+                        <label class="setting-label" style="min-width:120px; font-size:13px;">base_url</label>
+                        <input type="text" id="llmBaseUrl" class="setting-input"
+                               placeholder="未設定（provider 既定）" aria-label="LLM base_url">
+                    </div>
+                    <div class="setting-row" style="margin-top:8px;">
+                        <label class="setting-label" style="min-width:120px; font-size:13px;">api_key</label>
+                        <input type="password" id="llmApiKey" class="setting-input"
+                               placeholder="空欄なら既存キーを維持" aria-label="LLM api_key">
+                    </div>
+                    <div class="setting-row" style="margin-top:8px; gap:8px; flex-wrap:wrap;">
+                        <button class="btn btn-sm btn-primary" onclick="saveLLMSettings()">保存</button>
+                        <button class="btn btn-sm btn-ghost" onclick="disableLLM()">無効化（オフ）</button>
+                    </div>
+                    <p class="setting-hint">
+                        説明の自動生成（✨）に使う LLM。api_key は GET では返さないため、変更しない場合は
+                        空欄のまま保存すると既存キーを維持します。「無効化」で機能オフ（✨ は表示されなくなります）。
+                    </p>
+                </div>
+
+                <div class="setting-group">
                     <label class="setting-label">📦 依存関係のインストール</label>
                     <div class="setting-row">
                         <select id="installManager" class="setting-input" style="max-width:128px; flex-shrink:0;" aria-label="パッケージマネージャー">
@@ -2044,7 +2403,17 @@
         let metaMode = null; // null = unknown, true/false = loaded
         let embeddingModel = null; // current embedding model name
         let fullInfoTools = []; // full_info_tools エントリ（"{server}_{tool}" 形式）
-        let expandedServers = new Set(); // アコーディオン開閉状態の保持
+        let llmConfigured = false; // LLM の api_key が設定済みか（未設定なら ✨ 生成は出さない）
+        let selectedServer = null; // マスター・ディテールで選択中のサーバー名
+        let serverSearchQuery = ''; // 左レール: 名前・説明・タグの絞り込み文字列
+        let unsetOnly = false;      // 左レール: 未設定ツールを持つサーバーのみ表示
+
+        // 自動保存（debounce 800ms）の状態。サーバー単位で dirty / in-flight を管理する
+        const AUTO_SAVE_DEBOUNCE_MS = 800;
+        const autoSaveTimers = new Map();   // serverName -> timeout id
+        const autoSaveDirty = new Set();    // 保存待ちのサーバー
+        const autoSaveInFlight = new Set(); // 保存中のサーバー（二重送信ガード）
+        const saveStatus = new Map();       // serverName -> { phase, secs, message }
 
         // ============================================================
         // THEME
@@ -2228,6 +2597,23 @@
                 return response.json();
             },
 
+            async generateLLM(payload) {
+                const response = await fetch('/admin/api/llm/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                if (!response.ok) {
+                    let msg = '生成に失敗しました';
+                    try {
+                        const err = await response.json();
+                        msg = err.detail || msg;
+                    } catch (_) {}
+                    throw new Error(msg);
+                }
+                return response.json();
+            },
+
             async getEmbeddingModel() {
                 const response = await fetch('/admin/api/settings/embedding-model');
                 if (!response.ok) throw new Error('埋め込みモデルの取得に失敗しました');
@@ -2349,113 +2735,395 @@
                 activeTagFilters.add(tag);
             }
             renderTagFilterBar();
-            applyTagFilter();
+            applyServerFilters();
         }
 
         function clearTagFilter() {
             activeTagFilters.clear();
             renderTagFilterBar();
-            applyTagFilter();
+            applyServerFilters();
         }
 
-        function applyTagFilter() {
-            const cards = document.querySelectorAll('.server-card');
-            cards.forEach(card => {
-                const name = card.getAttribute('data-server');
-                const server = servers.find(s => s.name === name);
-                if (!server) return;
+        // 検索用の説明が未設定（空）のツールを持つか
+        function hasUnsetTools(server) {
+            return (server.tools || []).some(t => !toolDescStored(server, t.name));
+        }
 
-                if (activeTagFilters.size === 0) {
-                    card.style.display = '';
-                    return;
-                }
+        // 左レールの絞り込み: 検索（名前/説明/タグ）AND タグ（OR）AND 未設定のみ
+        function serverMatchesFilters(server) {
+            const q = serverSearchQuery.trim().toLowerCase();
+            if (q) {
+                const hay = [server.name, serverDescValue(server), ...getServerTags(server)]
+                    .join(' ').toLowerCase();
+                if (!hay.includes(q)) return false;
+            }
+            if (activeTagFilters.size > 0 && !getServerTags(server).some(t => activeTagFilters.has(t))) {
+                return false;
+            }
+            if (unsetOnly && !hasUnsetTools(server)) return false;
+            return true;
+        }
 
-                const serverTags = getServerTags(server);
-                const matches = serverTags.some(t => activeTagFilters.has(t));
-                card.style.display = matches ? '' : 'none';
+        // 未設定ツール件数のバッジ（トグル併記）
+        function updateUnsetBadge() {
+            const el = document.getElementById('unsetCountBadge');
+            if (!el) return;
+            const total = servers.reduce(
+                (sum, s) => sum + (s.tools || []).filter(t => !toolDescStored(s, t.name)).length, 0);
+            el.textContent = `未設定 ${total}`;
+            el.style.display = total > 0 ? '' : 'none';
+        }
+
+        function applyServerFilters() {
+            updateUnsetBadge();
+            const items = document.querySelectorAll('#serversList .md-item');
+            let visible = 0;
+            items.forEach(item => {
+                const server = servers.find(s => s.name === item.getAttribute('data-server'));
+                const show = !!server && serverMatchesFilters(server);
+                item.style.display = show ? '' : 'none';
+                if (show) visible++;
             });
+            const total = servers.length;
+            const filtering = serverSearchQuery.trim() !== '' || activeTagFilters.size > 0 || unsetOnly;
+            const badge = document.getElementById('serverCountBadge');
+            if (badge) badge.textContent = filtering ? `${total}件中${visible}件` : String(total);
+            const noMatch = document.getElementById('railNoMatch');
+            if (noMatch) noMatch.style.display = (total > 0 && visible === 0) ? 'block' : 'none';
         }
 
         // ============================================================
-        // UI RENDERING
+        // UI RENDERING (master-detail)
         // ============================================================
         function renderServers() {
+            renderServerList();
+            renderServerDetail();
+        }
+
+        function renderServerList() {
             const container = document.getElementById('serversList');
             const emptyState = document.getElementById('emptyState');
+            const countBadge = document.getElementById('serverCountBadge');
 
             if (servers.length === 0) {
                 container.innerHTML = '';
-                emptyState.style.display = 'block';
+                if (emptyState) emptyState.style.display = 'block';
                 document.getElementById('tagFilterBar').style.display = 'none';
+                if (countBadge) countBadge.textContent = '0';
+                const noMatch = document.getElementById('railNoMatch');
+                if (noMatch) noMatch.style.display = 'none';
+                updateUnsetBadge();
                 return;
             }
 
-            emptyState.style.display = 'none';
-            container.innerHTML = servers.map(server => renderServerCard(server)).join('');
+            if (emptyState) emptyState.style.display = 'none';
+            if (!selectedServer || !servers.some(s => s.name === selectedServer)) {
+                selectedServer = servers[0].name;
+            }
+            container.innerHTML = servers.map(renderServerListItem).join('');
+            if (countBadge) countBadge.textContent = String(servers.length);
 
             renderTagFilterBar();
-            applyTagFilter();
+            applyServerFilters();
         }
 
-        function renderServerCard(server) {
+        function renderServerDetail() {
+            const pane = document.getElementById('serverDetail');
+            if (!pane) return;
+            const server = servers.find(s => s.name === selectedServer);
+            if (!server) {
+                pane.innerHTML = `<div class="empty-state">
+                    <div class="empty-state-title">サーバーを選択してください</div>
+                    <div class="empty-state-description">左の一覧からサーバーを選ぶと、説明とツールの検索用の説明を編集できます。</div>
+                </div>`;
+                return;
+            }
+            pane.innerHTML = renderServerDetailInner(server);
+        }
+
+        function serverStatusLabel(status) {
+            return status === 'connected' ? '接続済' : status === 'connecting' ? '接続中' : status === 'error' ? 'エラー' : '不明';
+        }
+
+        function serverStatusBadgeClass(status) {
+            return status === 'connected' ? 'success' : status === 'error' ? 'error' : status === 'connecting' ? 'loading' : 'unknown';
+        }
+
+        // ============================================================
+        // TOOL SEARCH DESCRIPTION (per-tool 日本語1文 = precision レバー)
+        // ============================================================
+        const TOOL_DESC_MAX = 80;          // 目安: 1文・80字（超過は警告のみ。保存は妨げない）
+        const TOOL_DESC_INPUT_MAX = 200;   // textarea のハード上限（80超を見せて警告するため余裕を取る）
+        const descDraft = new Map();      // 未保存の編集/提案: key=server 名 or server\0tool
+
+        function toolDescKey(serverName, toolName) {
+            return serverName + '\u0000' + toolName;
+        }
+
+        // 保存済みの値（server.config.tool_search_desc はバックエンドが追加予定。無ければ {}）
+        function toolDescStored(server, toolName) {
+            const map = (server.config && server.config.tool_search_desc) || {};
+            return map[toolName] || '';
+        }
+
+        // 表示に使う値（未保存の入力/提案があればそちらを優先し、再描画で消えないようにする）
+        function toolDescValue(server, toolName) {
+            const key = toolDescKey(server.name, toolName);
+            return descDraft.has(key) ? descDraft.get(key) : toolDescStored(server, toolName);
+        }
+
+        function toolDescBadge(value) {
+            if (!value) return { cls: 'unknown', label: '未設定' };
+            if (value.length > TOOL_DESC_MAX) return { cls: 'warn', label: '要短縮' };
+            return { cls: 'success', label: '設定済' };
+        }
+
+        // ツール行の入力コンポーネント（textarea + N/80 カウンタ + ⚠ + ✨）。
+        // (B) の表セル用。master-detail の形を変える場合はこの関数のマークアップだけを差し替える。
+        function renderToolSearchDescField(server, tool) {
+            const value = toolDescValue(server, tool.name);
+            const n = value.length;
+            const over = n > TOOL_DESC_MAX;
+            const unset = n === 0;
+            const hint = unset ? '未設定 — 元の英語 docstring だけが索引に入る' : `目安: 1文・${TOOL_DESC_MAX}字`;
+            return `
+                <div class="server-description tool-desc-field${unset ? ' is-unset' : ''}">
+                    <textarea class="desc-input tool-desc-input" rows="2" maxlength="${TOOL_DESC_INPUT_MAX}"
+                              data-limit="${TOOL_DESC_MAX}"
+                              data-server="${escapeAttr(server.name)}" data-tool="${escapeAttr(tool.name)}"
+                              placeholder="日本語1文を入力（または ✨ で生成）"
+                              aria-label="${escapeAttr(tool.name)} の検索用の説明">${escapeHtml(value)}</textarea>
+                    <div class="desc-footer between">
+                        <span class="len-note" data-len-warn ${over ? '' : 'style="display:none"'}>⚠ ${TOOL_DESC_MAX}字を超えています</span>
+                        <span class="len-note" data-len-hint ${over ? 'style="display:none"' : ''}>${escapeHtml(hint)}</span>
+                        <span class="desc-counter${over ? ' over-limit' : ''}">${n}/${TOOL_DESC_MAX}</span>
+                    </div>
+                </div>
+                ${llmConfigured ? `<div class="gen-row">
+                    <button class="btn btn-sm btn-ai" data-action="gen-tool-search-desc"
+                            data-server="${escapeAttr(server.name)}" data-tool="${escapeAttr(tool.name)}"
+                            aria-label="ツール ${escapeAttr(tool.name)} の検索用の説明を自動生成">
+                        ${unset ? '✨ 自動割り当て' : '✨ 説明を生成'}
+                    </button>
+                </div>` : ''}`;
+        }
+
+        function renderToolStatusBadge(value) {
+            const badge = toolDescBadge(value);
+            return `<span class="status-badge ${badge.cls}">${badge.label}</span>`;
+        }
+
+        // ツール行 1 つ（ツール / docstring / 検索用の説明 / 状態）
+        function renderToolRow(server, tool) {
+            const value = toolDescValue(server, tool.name);
+            const unset = value.length === 0;
+            return `
+                <tr class="${unset ? 'kw-row-unset' : ''}" data-unset="${unset ? 1 : 0}">
+                    <td class="kw-tool-cell">
+                        ${escapeHtml(tool.name)}
+                        <div class="tool-actions-row">
+                            <button class="btn btn-sm btn-secondary" data-action="open-tool" data-server="${escapeAttr(server.name)}" data-tool="${escapeAttr(tool.name)}"
+                                    aria-label="ツール ${escapeAttr(tool.name)} を実行">実行</button>
+                            <span class="full-info-toggle" style="${metaMode === true ? '' : 'display:none'}">
+                                <label class="toggle-switch toggle-switch-sm" title="ツールをフル公開（メタOFF）">
+                                    <input type="checkbox" ${fullInfoTools.includes(server.name + '_' + tool.name) ? 'checked' : ''}
+                                           data-action="toggle-fullinfo-tool" data-server="${escapeAttr(server.name)}" data-tool="${escapeAttr(tool.name)}"
+                                           aria-label="ツール ${escapeAttr(tool.name)} のフル公開切替">
+                                    <span class="toggle-track"></span>
+                                    <span class="toggle-thumb"></span>
+                                </label>
+                            </span>
+                        </div>
+                    </td>
+                    <td class="kw-desc-cell">${escapeHtml(tool.description || '説明なし')}</td>
+                    <td class="cell-top">${renderToolSearchDescField(server, tool)}</td>
+                    <td>${renderToolStatusBadge(value)}</td>
+                </tr>`;
+        }
+
+        // 保存/提案のあと、バッジ・行ハイライト・✨の文言・集計を再描画なしで合わせる
+        function syncToolDescField(input, value, proposalLabel) {
+            const rowEl = input.closest('tr') || input.closest('.tool-item');
+            const unset = !value;
+            if (rowEl) {
+                const isTr = rowEl.tagName === 'TR';
+                rowEl.classList.toggle(isTr ? 'kw-row-unset' : 'tool-unset', unset);
+                if (isTr) rowEl.dataset.unset = unset ? '1' : '0';
+            }
+            const field = input.closest('.tool-desc-field');
+            if (field) field.classList.toggle('is-unset', unset);
+            const genBtn = rowEl && rowEl.querySelector('[data-action="gen-tool-search-desc"]');
+            if (genBtn) genBtn.textContent = unset ? '✨ 自動割り当て' : '✨ 説明を生成';
+            const badgeEl = rowEl && rowEl.querySelector('.status-badge');
+            if (badgeEl) {
+                const info = proposalLabel ? { cls: 'loading', label: proposalLabel } : toolDescBadge(value);
+                badgeEl.className = 'status-badge ' + info.cls;
+                badgeEl.textContent = info.label;
+            }
+            updateToolDescCount(input.dataset.server);
+        }
+
+        function updateToolDescCount(name) {
+            const server = servers.find(s => s.name === name);
+            if (!server) return;
+            const tools = server.tools || [];
+            const setCount = tools.filter(t => toolDescStored(server, t.name)).length;
+            const pane = document.getElementById('serverDetail');
+            const el = pane && pane.querySelector('[data-desc-count]');
+            if (el) el.textContent = `説明 ${setCount}/${tools.length} 設定済`;
+            const leftEl = document.querySelector(`#serversList .md-item[data-server="${CSS.escape(name)}"] .desc-count`);
+            if (leftEl) leftEl.textContent = `🔍 説明 ${setCount}/${tools.length}`;
+            updateUnsetBadge();
+        }
+
+        // ✨ 検索用の説明を生成。提案は入力欄に流し込むだけで、保存するまで索引は変えない。
+        async function generateToolSearchDesc(serverName, toolName, btn) {
+            const scope = btn.closest('tr') || btn.closest('.tool-item');
+            const input = scope && scope.querySelector('.tool-desc-input');
+            if (!input) return;
+            const original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '生成中...';
+            try {
+                const data = await API.generateLLM({ kind: 'tool_search_desc', server: serverName, tool_name: toolName });
+                const text = ((data && data.text) || '').trim();
+                if (!text) throw new Error('提案が空でした');
+                input.value = text;
+                descDraft.set(toolDescKey(serverName, toolName), text);
+                updateDescriptionCounter(input);
+                syncToolDescField(input, text, '提案（未保存）');
+                scheduleAutoSave(serverName);
+                input.focus();
+                showToast('検索用の説明を提案しました（自動保存します）', 'info');
+            } catch (error) {
+                // バックエンド未実装（404/400）や接続失敗でも入力・保存は妨げない
+                showToast(`自動割り当てを使えませんでした: ${error.message}`, 'warning');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = original;
+            }
+        }
+
+        // ✨ サーバー説明を生成（recall レバー。提案は入力欄に流し込むだけ）
+        async function generateServerDescription(serverName, btn) {
+            const pane = document.getElementById('serverDetail');
+            const input = pane && pane.querySelector('.desc-input:not([data-tool])');
+            if (!input) return;
+            const original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '生成中...';
+            try {
+                const data = await API.generateLLM({ kind: 'server_description', server: serverName });
+                const text = ((data && data.text) || '').trim();
+                if (!text) throw new Error('提案が空でした');
+                input.value = text;
+                descDraft.set(serverName, text);
+                updateDescriptionCounter(input);
+                scheduleAutoSave(serverName);
+                input.focus();
+                showToast('サーバー説明を提案しました（自動保存します）', 'info');
+            } catch (error) {
+                showToast(`自動生成を使えませんでした: ${error.message}`, 'warning');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = original;
+            }
+        }
+
+        // ---- 左レールの1行（サーバー一覧） ----
+        function renderServerListItem(server) {
             const status = getServerStatus(server);
             const disabled = getServerDisabled(server);
             const tags = getServerTags(server);
-            const description = (server.config && server.config.description) || '';
-            const statusLabel = status === 'connected' ? '接続済' : status === 'connecting' ? '接続中' : status === 'error' ? 'エラー' : '不明';
-            const cardClasses = [
-                'server-card', 'fade-in',
-                disabled ? 'disabled-card' : '',
-                status === 'error' ? 'error-card' : '',
-                expandedServers.has(server.name) ? 'expanded' : ''
-            ].filter(Boolean).join(' ');
+            const tools = server.tools || [];
+            const total = server.tools_count != null ? server.tools_count : tools.length;
+            const setCount = tools.filter(t => toolDescStored(server, t.name)).length;
+            const unset = tools.length - setCount;
+            const classes = ['md-item', selectedServer === server.name ? 'is-active' : '', disabled ? 'is-off' : ''].filter(Boolean).join(' ');
+            return `
+                <div class="${classes}" data-server="${escapeAttr(server.name)}" role="listitem"
+                     data-action="select-server" tabindex="0"
+                     aria-current="${selectedServer === server.name ? 'true' : 'false'}"
+                     aria-label="サーバー ${escapeAttr(server.name)} の詳細を表示">
+                    <div class="md-item-name">
+                        <span class="status-dot ${status}" aria-hidden="true"></span>${escapeHtml(server.name)}
+                    </div>
+                    <label class="toggle-switch toggle-switch-sm" title="${disabled ? '有効にする' : '無効にする'}">
+                        <input type="checkbox" ${disabled ? '' : 'checked'}
+                               data-action="toggle-enabled" data-server="${escapeAttr(server.name)}"
+                               aria-label="サーバー ${escapeAttr(server.name)} の有効/無効切替">
+                        <span class="toggle-track"></span>
+                        <span class="toggle-thumb"></span>
+                    </label>
+                    <div class="md-item-sub">
+                        ${tags.length ? `<span class="md-item-tags">🏷️ ${tags.map(t => escapeHtml(t)).join(' / ')}</span>` : ''}
+                        <span>🔧 ${total} ツール</span>
+                        <span class="desc-count">🔍 説明 ${setCount}/${tools.length}</span>
+                        ${(!disabled && unset > 0) ? `<span class="unset-num">未設定 ${unset}</span>` : ''}
+                    </div>
+                </div>`;
+        }
+
+        // ---- 右ペイン（選択中サーバーの詳細） ----
+        function renderServerDetailInner(server) {
+            const status = getServerStatus(server);
+            const disabled = getServerDisabled(server);
+            const tags = getServerTags(server);
+            const description = serverDescValue(server);
+            const tools = server.tools || [];
+            const setCount = tools.filter(t => toolDescStored(server, t.name)).length;
+            const entries = tools.map(t => server.name + '_' + t.name);
+            const matched = entries.filter(e => fullInfoTools.includes(e)).length;
+            const fullInfoState = entries.length > 0 && matched === entries.length ? 'all' : matched === 0 ? 'none' : 'partial';
 
             return `
-                <div class="${cardClasses}" data-server="${escapeAttr(server.name)}" role="listitem">
-                    <div class="server-status-badge ${status}" aria-label="ステータス: ${statusLabel}">
-                        <span class="status-dot" aria-hidden="true"></span>
-                        <span>${statusLabel}</span>
-                    </div>
+                <div class="md-detail-head">
+                    <h2>${escapeHtml(server.name)}</h2>
+                    <span class="status-badge ${serverStatusBadgeClass(status)}">${serverStatusLabel(status)}</span>
+                    <span class="server-type">${server.config && server.config.url ? '🌐 HTTP' : '⌨️ stdio'}</span>
+                    <span class="kw-count">${server.tools_count || 0} ツール</span>
+                    <span class="save-bar-spacer"></span>
 
-                    <div class="server-header" data-action="toggle-server" data-server="${escapeAttr(server.name)}"
-                         role="button" tabindex="0" aria-expanded="${expandedServers.has(server.name)}"
-                         aria-label="サーバー ${escapeAttr(server.name)} の詳細を表示">
-                        <div>
-                            <div class="server-name">${escapeHtml(server.name)}</div>
-                            <div class="server-type">
-                                ${server.config.url ? '🌐 HTTP' : '⌨️ stdio'}
-                            </div>
-                        </div>
-                    </div>
+                    <label class="toggle-switch" title="${disabled ? '有効にする' : '無効にする'}">
+                        <input type="checkbox" ${disabled ? '' : 'checked'}
+                               data-action="toggle-enabled" data-server="${escapeAttr(server.name)}"
+                               aria-label="サーバー ${escapeAttr(server.name)} の有効/無効切替">
+                        <span class="toggle-track"></span>
+                        <span class="toggle-thumb"></span>
+                    </label>
+                    <span class="toggle-label">${disabled ? '無効' : '有効'}</span>
+                    ${metaMode === true ? `
+                    <span class="toggle-separator" aria-hidden="true"></span>
+                    <label class="toggle-switch ${fullInfoState === 'partial' ? 'indeterminate' : ''}" title="${fullInfoState === 'all' ? 'フル公開を解除' : '全ツールをフル公開'}">
+                        <input type="checkbox" ${fullInfoState === 'all' ? 'checked' : ''}
+                               data-action="toggle-fullinfo-server" data-server="${escapeAttr(server.name)}"
+                               aria-label="サーバー ${escapeAttr(server.name)} の全ツールフル公開切替">
+                        <span class="toggle-track"></span>
+                        <span class="toggle-thumb"></span>
+                    </label>
+                    <span class="toggle-label">全フル公開</span>` : ''}
 
-                    <div class="toggle-wrapper">
-                        <label class="toggle-switch" title="${disabled ? '有効にする' : '無効にする'}">
-                            <input type="checkbox" ${disabled ? '' : 'checked'}
-                                   data-action="toggle-enabled" data-server="${escapeAttr(server.name)}"
-                                   aria-label="サーバー ${escapeAttr(server.name)} の有効/無効切替">
-                            <span class="toggle-track"></span>
-                            <span class="toggle-thumb"></span>
-                        </label>
-                        <span class="toggle-label">${disabled ? '無効' : '有効'}</span>
-                        ${metaMode === true ? (() => {
-                            const toolNames = (server.tools || []).map(t => server.name + '_' + t.name);
-                            const total = toolNames.length;
-                            const matched = toolNames.filter(e => fullInfoTools.includes(e)).length;
-                            const state = total > 0 && matched === total ? 'all' : matched === 0 ? 'none' : 'partial';
-                            return `
-                        <span class="toggle-separator" aria-hidden="true"></span>
-                        <label class="toggle-switch ${state === 'partial' ? 'indeterminate' : ''}"
-                               title="${state === 'all' ? 'フル公開を解除' : '全ツールをフル公開'}">
-                            <input type="checkbox" ${state === 'all' ? 'checked' : ''}
-                                   data-action="toggle-fullinfo-server" data-server="${escapeAttr(server.name)}"
-                                   aria-label="サーバー ${escapeAttr(server.name)} の全ツールフル公開切替">
-                            <span class="toggle-track"></span>
-                            <span class="toggle-thumb"></span>
-                        </label>
-                        <span class="toggle-label">全フル公開</span>`;
-                        })() : ''}
-                    </div>
+                    <button class="btn btn-sm btn-secondary" data-action="test-connection" data-server="${escapeAttr(server.name)}" aria-label="サーバー ${escapeAttr(server.name)} の接続テスト">
+                        <span aria-hidden="true">🔌</span><span>テスト</span>
+                    </button>
+                    <button class="btn btn-sm btn-ghost" data-action="show-connection" data-server="${escapeAttr(server.name)}" aria-label="接続URLをコピー" title="接続URLをコピー">
+                        <span aria-hidden="true">🔗</span>
+                    </button>
+                    <button class="btn btn-sm btn-ghost" data-action="open-edit" data-server="${escapeAttr(server.name)}" aria-label="サーバー設定を編集">
+                        <span aria-hidden="true">✏️</span><span>編集</span>
+                    </button>
+                    <button class="btn btn-sm btn-danger" data-action="confirm-delete" data-server="${escapeAttr(server.name)}" aria-label="サーバー ${escapeAttr(server.name)} を削除">
+                        <span aria-hidden="true">🗑️</span><span>削除</span>
+                    </button>
+                </div>
 
+                <div class="md-block">
+                    <div class="md-block-label">サーバー説明</div>
+                    <div class="desc-gen-row">
+                        ${llmConfigured ? `<button class="btn btn-sm btn-ai" data-action="gen-server-desc" data-server="${escapeAttr(server.name)}">✨ 説明を自動生成</button>
+                        <span class="field-note" style="margin:0">ツール ${tools.length}件の名前と説明から生成 → そのまま編集できます</span>`
+                        : `<span class="field-note" style="margin:0">✨ 自動生成は LLM（設定 → LLM）を構成すると使えます</span>`}
+                    </div>
                     <div class="server-description">
                         <textarea class="desc-input" rows="2" maxlength="500"
                                   placeholder="説明を追加（500文字以内）"
@@ -2466,96 +3134,117 @@
                             <span class="desc-counter">${description.length}/500</span>
                         </div>
                     </div>
-
-                    ${tags.length > 0 ? `
-                    <div class="server-tags">
-                        ${tags.map(tag => `
-                            <span class="tag-chip" data-tag="${escapeAttr(tag)}" data-color="${tagColorIndex(tag)}">
-                                ${escapeHtml(tag)}
-                                <span class="tag-remove" data-action="remove-tag" data-server="${escapeAttr(server.name)}" data-tag="${escapeAttr(tag)}" title="タグを削除" aria-label="タグ ${escapeAttr(tag)} を削除">✕</span>
-                            </span>
-                        `).join('')}
-                        <button class="tag-add-btn" data-action="add-tag" data-server="${escapeAttr(server.name)}" aria-label="タグを追加" title="タグを追加">＋</button>
-                    </div>
-                    ` : `
-                    <div class="server-tags">
-                        <button class="tag-add-btn" data-action="add-tag" data-server="${escapeAttr(server.name)}" aria-label="タグを追加" title="タグを追加">＋</button>
-                    </div>
-                    `}
-
-                    <div class="server-meta">
-                        <div class="server-meta-item">
-                            <span class="meta-icon" aria-hidden="true">🔧</span>
-                            <span>${server.tools_count || 0} ツール</span>
-                        </div>
-                    </div>
-
-                    <div class="tools-container" role="region" aria-label="ツール一覧">
-                        <div class="tools-list">
-                            ${server.tools && server.tools.length > 0 ? server.tools.map(tool => `
-                                <div class="tool-item" role="listitem">
-                                    <div class="tool-info">
-                                        <div class="tool-name">${escapeHtml(tool.name)}</div>
-                                        <div class="tool-description">${escapeHtml(tool.description || '説明なし')}</div>
-                                    </div>
-                                    <div class="tool-action">
-                                        <button class="btn btn-sm btn-secondary" data-action="open-tool" data-server="${escapeAttr(server.name)}" data-tool="${escapeAttr(tool.name)}"
-                                                aria-label="ツール ${escapeAttr(tool.name)} を実行">
-                                            実行
-                                        </button>
-                                    </div>
-                                    <span class="full-info-toggle" ${metaMode === true ? '' : 'style="display:none"'}>
-                                        <label class="toggle-switch toggle-switch-sm" title="ツールをフル公開（メタOFF）">
-                                            <input type="checkbox" ${fullInfoTools.includes(server.name + '_' + tool.name) ? 'checked' : ''}
-                                                   data-action="toggle-fullinfo-tool" data-server="${escapeAttr(server.name)}" data-tool="${escapeAttr(tool.name)}"
-                                                   aria-label="ツール ${escapeAttr(tool.name)} のフル公開切替">
-                                            <span class="toggle-track"></span>
-                                            <span class="toggle-thumb"></span>
-                                        </label>
-                                        <span class="toggle-label">フル公開</span>
-                                    </span>
-                                </div>
-                            `).join('') : (server.tools === undefined && status === 'connecting') ? '<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem; display: flex; align-items: center; gap: 6px;"><span class="loading-spinner" style="width:12px;height:12px;"></span> ツールを検出中...</div>' : '<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem;">ツールがありません</div>'}
-                        </div>
-                        <div class="connection-section" id="conn-${escapeAttr(server.name)}" style="display: none;">
-                            <div class="conn-label">接続情報</div>
-                            <div class="connection-url-row">
-                                <input type="text" class="connection-url-input" id="conn-url-${escapeAttr(server.name)}" readonly aria-label="接続URL">
-                            </div>
-                            <div id="conn-header-${escapeAttr(server.name)}" class="connection-header-code" style="display: none;"></div>
-                        </div>
-                        <div class="server-extra" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
-                            <button class="btn btn-sm btn-ghost" data-action="show-resources" data-server="${escapeAttr(server.name)}">リソース</button>
-                            <button class="btn btn-sm btn-ghost" data-action="show-prompts" data-server="${escapeAttr(server.name)}">プロンプト</button>
-                            <button class="btn btn-sm btn-ghost" data-action="show-templates" data-server="${escapeAttr(server.name)}">テンプレート</button>
-                        </div>
-                        <pre class="server-extra-output" style="display:none;white-space:pre-wrap;font-size:11px;max-height:160px;overflow-y:auto;margin:8px 0 0;"></pre>
-                    </div>
-
-                    <div class="server-actions">
-                        <button class="btn btn-sm btn-secondary" data-action="test-connection" data-server="${escapeAttr(server.name)}"
-                                aria-label="サーバー ${escapeAttr(server.name)} の接続テスト">
-                            <span aria-hidden="true">🔌</span>
-                            <span>テスト</span>
-                        </button>
-                        <button class="btn btn-sm btn-ghost" data-action="show-connection" data-server="${escapeAttr(server.name)}"
-                                aria-label="接続URLをクリップボードにコピー">
-                            <span aria-hidden="true">🔗</span>
-                            <span>接続URL</span>
-                        </button>
-                        <button class="btn btn-sm btn-ghost" data-action="open-edit" data-server="${escapeAttr(server.name)}"
-                                aria-label="サーバー設定を編集">
-                            <span aria-hidden="true">✏️</span>
-                            <span>編集</span>
-                        </button>
-                        <button class="btn btn-sm btn-danger" data-action="confirm-delete" data-server="${escapeAttr(server.name)}"
-                                aria-label="サーバー ${escapeAttr(server.name)} を削除">
-                            <span aria-hidden="true">🗑️</span>
-                            <span>削除</span>
-                        </button>
-                    </div>
+                    <div class="field-note"><b>この説明は全ツールの索引に前置されます（サーバー単位の検索語彙として効きます）。</b> 実測: 「照明」は説明だけで df=11 ＝ recall はここで上げる（top-5 の HA 件数 2/6 → 4/6）。</div>
                 </div>
-                `;
+
+                ${renderServerTags(server, tags)}
+
+                <div class="md-block">
+                    <div class="md-block-label">
+                        ツール（編集主体＝この1文ずつ）
+                        <span class="field-note" style="margin:0"><span data-desc-count>説明 ${setCount}/${tools.length} 設定済</span> ・ 目安: 1文・80字（超過は保存可だが順位が動く）</span>
+                    </div>
+                    ${renderToolsSection(server)}
+                    <div class="connection-section" id="conn-${escapeAttr(server.name)}" style="display: none;">
+                        <div class="conn-label">接続情報</div>
+                        <div class="connection-url-row">
+                            <input type="text" class="connection-url-input" id="conn-url-${escapeAttr(server.name)}" readonly aria-label="接続URL">
+                        </div>
+                        <div id="conn-header-${escapeAttr(server.name)}" class="connection-header-code" style="display: none;"></div>
+                    </div>
+                    <div class="server-extra" style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+                        <button class="btn btn-sm btn-ghost" data-action="show-resources" data-server="${escapeAttr(server.name)}">リソース</button>
+                        <button class="btn btn-sm btn-ghost" data-action="show-prompts" data-server="${escapeAttr(server.name)}">プロンプト</button>
+                        <button class="btn btn-sm btn-ghost" data-action="show-templates" data-server="${escapeAttr(server.name)}">テンプレート</button>
+                    </div>
+                    <pre class="server-extra-output" style="display:none;white-space:pre-wrap;font-size:11px;max-height:160px;overflow-y:auto;margin:8px 0 0;"></pre>
+                </div>
+                ${renderSaveBar(server)}
+            `;
+        }
+
+        // 保存バー: 選択中サーバーの自動保存ステータスを表す（手動保存ボタンは廃止）
+        function saveBarInnerHtml(server) {
+            const name = server.name;
+            const st = saveStatus.get(name) || { phase: 'idle' };
+            const n = pendingCount(server);
+            let phase = st.phase || 'idle';
+            if ((phase === 'saved' || phase === 'idle') && n > 0) phase = 'dirty';
+
+            let state;
+            if (phase === 'saving') {
+                state = `<span class="save-state is-saving"><span class="loading-spinner"></span> 保存中…</span>`;
+            } else if (phase === 'error') {
+                state = `<span class="save-state is-error">保存に失敗しました: ${escapeHtml(st.message || '不明なエラー')}</span>`;
+            } else if (phase === 'saved' && n === 0) {
+                const secs = st.secs != null ? `（${st.rebuildReported ? '索引再構築' : '往復'} ${Number(st.secs).toFixed(2)}s）` : '';
+                state = `<span class="save-state is-success">保存しました${secs}</span>`;
+            } else if (n > 0) {
+                state = `<span class="save-state">未保存の変更 <strong>${n}</strong> 件 — <code>hub.config.json</code></span>`;
+            } else {
+                state = `<span class="save-state">未保存の変更なし — <code>hub.config.json</code></span>`;
+            }
+            const retry = phase === 'error'
+                ? `<button class="btn btn-sm btn-secondary" data-action="retry-save" data-server="${escapeAttr(name)}">再試行</button>`
+                : '';
+            const discardDisabled = n === 0 ? 'disabled' : '';
+            return `
+                    ${state}
+                    <span class="save-bar-spacer"></span>
+                    ${retry}
+                    <button class="btn btn-sm btn-ghost" data-action="discard-changes" data-server="${escapeAttr(name)}" ${discardDisabled}>破棄</button>`;
+        }
+
+        function renderSaveBar(server) {
+            return `
+                <div class="save-bar" data-save-bar data-server="${escapeAttr(server.name)}">${saveBarInnerHtml(server)}</div>
+                <div class="ba-note">サーバー説明＋ツールの検索用の説明は<b>自動保存</b>（入力停止 0.8 秒後、1 回の PATCH にまとめて差分 rebuild 1 文書 0.44s）。失敗時は「再試行」で送り直せます。</div>`;
+        }
+
+        function renderServerTags(server, tags) {
+            const chip = tag => `<span class="tag-chip" data-tag="${escapeAttr(tag)}" data-color="${tagColorIndex(tag)}">${escapeHtml(tag)}<span class="tag-remove" data-action="remove-tag" data-server="${escapeAttr(server.name)}" data-tag="${escapeAttr(tag)}" title="タグを削除" aria-label="タグ ${escapeAttr(tag)} を削除">✕</span></span>`;
+            return `<div class="server-tags">
+                ${tags.map(chip).join('')}
+                <button class="tag-add-btn" data-action="add-tag" data-server="${escapeAttr(server.name)}" aria-label="タグを追加" title="タグを追加">＋</button>
+            </div>`;
+        }
+
+        // ツール行: ツール / 元の docstring（英語・参考）/ 検索用の説明（日本語・1文）/ 状態
+        function renderToolsSection(server) {
+            const status = getServerStatus(server);
+            const tools = server.tools || [];
+            if (tools.length === 0) {
+                if (server.tools === undefined && status === 'connecting') {
+                    return `<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem; display: flex; align-items: center; gap: 6px;"><span class="loading-spinner" style="width:12px;height:12px;"></span> ツールを検出中...</div>`;
+                }
+                return `<div style="color: var(--text-muted); padding: 12px; font-size: 0.82rem;">ツールがありません</div>`;
+            }
+            return `<div class="kw-table-wrap">
+                <table class="log-table kw-table">
+                    <thead>
+                        <tr>
+                            <th style="width:150px">ツール</th>
+                            <th style="width:200px">元の docstring（英語・参考）</th>
+                            <th>検索用の説明（日本語・1文）— 索引の先頭に前置 / 応答には出ない</th>
+                            <th style="width:120px">状態</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tools.map(tool => renderToolRow(server, tool)).join('')}
+                    </tbody>
+                </table>
+            </div>`;
+        }
+
+        function selectServer(name) {
+            if (selectedServer === name) return;
+            selectedServer = name;
+            document.querySelectorAll('#serversList .md-item').forEach(el => {
+                const active = el.dataset.server === name;
+                el.classList.toggle('is-active', active);
+                el.setAttribute('aria-current', active ? 'true' : 'false');
+            });
+            renderServerDetail();
         }
 
         function updateServerCard(name) {
@@ -2563,19 +3252,27 @@
             if (!server) return;
 
             const container = document.getElementById('serversList');
-            const existingCard = container.querySelector(`[data-server="${CSS.escape(name)}"]`);
-            if (!existingCard) return;
+            const existing = container && container.querySelector(`.md-item[data-server="${CSS.escape(name)}"]`);
+            if (existing) {
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = renderServerListItem(server);
+                existing.replaceWith(tempDiv.firstElementChild);
+            }
 
-            // 入力中（debounce 未確定）の説明欄を再描画で消さない
-            // ponytail: フォーカス中はカード更新を保留する。周期リフレッシュ/他の操作による再描画で追いつく
-            if (existingCard.querySelector('.desc-input') === document.activeElement) return;
+            // 選択中サーバーなら右ペインも更新（入力中の説明欄は消さない）
+            if (name === selectedServer) updateServerDetail();
 
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = renderServerCard(server);
-            const newCard = tempDiv.firstElementChild;
+            applyServerFilters();
+        }
 
-            existingCard.replaceWith(newCard);
-            applyTagFilter();
+        function updateServerDetail() {
+            const pane = document.getElementById('serverDetail');
+            if (!pane) return;
+            // 入力中の説明欄を再描画で消さない（フォーカス中は保留。周期リフレッシュ/他の操作で追いつく）
+            if (pane.contains(document.activeElement) && document.activeElement.classList && document.activeElement.classList.contains('desc-input')) return;
+            const server = servers.find(s => s.name === selectedServer);
+            if (!server) return;
+            pane.innerHTML = renderServerDetailInner(server);
         }
 
         function updateMetrics() {
@@ -2724,8 +3421,7 @@
         }
 
         async function testServerConnection(name) {
-            const card = document.querySelector(`#serversList [data-server="${CSS.escape(name)}"]`);
-            const btn = card?.querySelector('.server-actions .btn-secondary');
+            const btn = document.querySelector('#serverDetail [data-action="test-connection"]');
 
             try {
                 if (btn) {
@@ -2833,15 +3529,6 @@
             } catch (error) {
                 showToast(error.message, 'error');
             }
-        }
-
-        function toggleServer(name) {
-            const card = document.querySelector(`#serversList [data-server="${CSS.escape(name)}"]`);
-            if (!card) return;
-            const header = card.querySelector('.server-header');
-            const isExpanded = card.classList.toggle('expanded');
-            header.setAttribute('aria-expanded', isExpanded.toString());
-            if (isExpanded) { expandedServers.add(name); } else { expandedServers.delete(name); }
         }
 
         // ============================================================
@@ -2956,120 +3643,238 @@
         }
 
         // ============================================================
-        // DESCRIPTION MANAGEMENT (inline on card / debounced autosave)
+        // DESCRIPTION MANAGEMENT (明示保存: 変更を集めて 1 回の PATCH にまとめる)
         // ============================================================
         const DESC_MAX_LENGTH = 500;
-        const DESC_SAVE_DEBOUNCE_MS = 600;
-        const descSaveStates = new Map(); // name -> { timer, pending, queued, latest }
 
-        function descriptionState(name) {
-            let state = descSaveStates.get(name);
-            if (!state) {
-                state = { timer: null, pending: false, queued: false, latest: null };
-                descSaveStates.set(name, state);
-            }
-            return state;
+        // サーバー説明（key=server 名）とツールの検索用の説明（key=server\0tool）で共用する
+        function descInputKey(input) {
+            const name = input.dataset.server;
+            return input.dataset.tool ? name + '\u0000' + input.dataset.tool : name;
         }
 
-        function setDescriptionSaving(name, saving) {
-            const card = document.querySelector(`#serversList .server-card[data-server="${CSS.escape(name)}"]`);
-            const dot = card && card.querySelector('.desc-saving');
-            if (dot) dot.classList.toggle('visible', saving);
+        function descLimit(input) {
+            const limit = parseInt(input.dataset.limit, 10);
+            return Number.isFinite(limit) && limit > 0 ? limit : DESC_MAX_LENGTH;
         }
 
         function updateDescriptionCounter(input) {
-            const counter = input.closest('.server-description')?.querySelector('.desc-counter');
-            if (!counter) return;
-            counter.textContent = `${input.value.length}/${DESC_MAX_LENGTH}`;
-            counter.classList.toggle('over-limit', input.value.length > DESC_MAX_LENGTH);
-        }
-
-        // maxlength / IME 確定をすり抜けた超過分は 500 字に巻き戻す
-        function readDescriptionInput(input) {
-            let value = input.value.trim();
-            if (value.length > DESC_MAX_LENGTH) {
-                value = value.slice(0, DESC_MAX_LENGTH);
-                input.value = value;
-                showToast(`説明は${DESC_MAX_LENGTH}文字以内で入力してください`, 'error');
+            const box = input.closest('.server-description');
+            if (!box) return;
+            const limit = descLimit(input);
+            const n = input.value.length;
+            const over = n > limit;
+            const counter = box.querySelector('.desc-counter');
+            if (counter) {
+                counter.textContent = `${n}/${limit}`;
+                counter.classList.toggle('over-limit', over);
             }
+            const warn = box.querySelector('[data-len-warn]');
+            if (warn) warn.style.display = over ? 'inline' : 'none';
+            const hint = box.querySelector('[data-len-hint]');
+            if (hint) {
+                hint.style.display = over ? 'none' : 'inline';
+                hint.textContent = n === 0
+                    ? '未設定 — 元の英語 docstring だけが索引に入る'
+                    : `目安: 1文・${limit}字`;
+            }
+        }
+
+        // maxlength / IME 確定をすり抜けた超過分は上限まで巻き戻す
+        function clampDesc(input) {
+            const max = input.maxLength > 0 ? input.maxLength : descLimit(input);
+            if (input.value.length > max) {
+                input.value = input.value.slice(0, max);
+                showToast(`説明は${max}文字以内で入力してください`, 'error');
+            }
+        }
+
+        // サーバー説明の表示値（未保存の編集中があればそちらを優先）
+        function serverDescValue(server) {
+            return descDraft.has(server.name) ? descDraft.get(server.name) : ((server.config && server.config.description) || '');
+        }
+
+        // 未保存のツール名一覧（ツール順）
+        function changedToolNames(server) {
+            const base = (server.config && server.config.tool_search_desc) || {};
+            const changed = [];
+            for (const t of (server.tools || [])) {
+                const key = toolDescKey(server.name, t.name);
+                if (!descDraft.has(key)) continue;
+                if (descDraft.get(key).trim() !== (base[t.name] || '')) changed.push(t.name);
+            }
+            return changed;
+        }
+
+        function pendingCount(server) {
+            const descChanged = descDraft.has(server.name)
+                && descDraft.get(server.name).trim() !== ((server.config && server.config.description) || '');
+            return (descChanged ? 1 : 0) + changedToolNames(server).length;
+        }
+
+        // ツールの検索用の説明は全量マップで送る（部分更新でも他ツールを消さないため）
+        function collectToolSearchDesc(server) {
+            const map = Object.assign({}, (server.config && server.config.tool_search_desc) || {});
+            for (const t of (server.tools || [])) {
+                const key = toolDescKey(server.name, t.name);
+                if (!descDraft.has(key)) continue;
+                const v = descDraft.get(key).trim();
+                if (v === '') delete map[t.name]; else map[t.name] = v;
+            }
+            return map;
+        }
+
+        // 入力欄の変更を draft に受け、debounce で自動保存を予約する
+        function handleDescInput(input) {
+            clampDesc(input);
+            descDraft.set(descInputKey(input), input.value);
             updateDescriptionCounter(input);
-            return value;
+            if (input.dataset.tool) syncToolDescField(input, input.value.trim());
+            updateToolDescCount(input.dataset.server);
+            scheduleAutoSave(input.dataset.server);
         }
 
-        function scheduleDescriptionSave(input) {
-            const name = input.dataset.server;
-            const state = descriptionState(name);
-            clearTimeout(state.timer);
-            state.timer = setTimeout(() => flushDescriptionSave(input), DESC_SAVE_DEBOUNCE_MS);
-            setDescriptionSaving(name, true);
-        }
-
-        // 最新値だけを直列送信する（連続入力/遅い応答でも最後の入力が勝つ）
-        function flushDescriptionSave(input) {
-            const name = input.dataset.server;
-            const state = descriptionState(name);
-            clearTimeout(state.timer);
-            state.timer = null;
-            const value = readDescriptionInput(input);
-            state.latest = value === '' ? null : value; // 空文字は description を削除(null)
-            state.queued = true;
-            if (state.pending) return; // 送信中は最新値に集約してループに任せる
-            state.pending = true;
-            (async () => {
-                while (state.queued) {
-                    state.queued = false;
-                    const next = state.latest;
-                    const server = servers.find(s => s.name === name);
-                    if (!server || (server.config.description || null) === next) continue;
-                    try {
-                        await API.patchServer(name, { description: next });
-                        server.config.description = next || '';
-                        syncDescriptionCard(name, next || '');
-                    } catch (error) {
-                        // 422 等は API 応答のメッセージをそのまま表示（入力値は残す）
-                        showToast(error.message, 'error');
-                    }
+        // 変更のあるフィールドだけを組み立てる（同一内容なら空 → 送らない）
+        function buildSavePayload(server) {
+            const payload = {};
+            if (descDraft.has(server.name)) {
+                const v = descDraft.get(server.name).trim();
+                if (v !== ((server.config && server.config.description) || '')) {
+                    payload.description = v === '' ? null : v;
                 }
-                state.pending = false;
-                if (!state.timer) setDescriptionSaving(name, false);
-            })();
+            }
+            if (changedToolNames(server).length) payload.tool_search_desc = collectToolSearchDesc(server);
+            return payload;
         }
 
-        // 再描画を挟んで表示が古いまま残ったときの同期（入力中は触らない）
-        function syncDescriptionCard(name, value) {
-            const card = document.querySelector(`#serversList .server-card[data-server="${CSS.escape(name)}"]`);
-            const input = card && card.querySelector('.desc-input');
-            if (!input || document.activeElement === input || input.value === value) return;
-            input.value = value;
-            updateDescriptionCounter(input);
+        // 保存済みの値と一致した draft だけを刈り込む（保存中に入った新しい編集は残す）
+        function reconcileDrafts(server) {
+            const name = server.name;
+            if (descDraft.has(name)
+                && descDraft.get(name).trim() === ((server.config && server.config.description) || '')) {
+                descDraft.delete(name);
+            }
+            const map = (server.config && server.config.tool_search_desc) || {};
+            for (const t of (server.tools || [])) {
+                const key = toolDescKey(name, t.name);
+                if (descDraft.has(key) && descDraft.get(key).trim() === (map[t.name] || '')) descDraft.delete(key);
+            }
+        }
+
+        // 変更検知 → 800ms 入力が途切れたら 1 回の PATCH にまとめる
+        function scheduleAutoSave(serverName) {
+            autoSaveDirty.add(serverName);
+            saveStatus.set(serverName, { phase: 'dirty' });
+            updateSaveBar(serverName);
+            const existing = autoSaveTimers.get(serverName);
+            if (existing) clearTimeout(existing);
+            autoSaveTimers.set(serverName, setTimeout(() => {
+                autoSaveTimers.delete(serverName);
+                flushAutoSave(serverName);
+            }, AUTO_SAVE_DEBOUNCE_MS));
+        }
+
+        async function flushAutoSave(serverName) {
+            const timer = autoSaveTimers.get(serverName);
+            if (timer) { clearTimeout(timer); autoSaveTimers.delete(serverName); }
+            if (autoSaveInFlight.has(serverName)) return; // 完了後の finally が再処理する
+            autoSaveDirty.delete(serverName);
+            const server = servers.find(s => s.name === serverName);
+            if (!server) return;
+
+            const payload = buildSavePayload(server);
+            if (Object.keys(payload).length === 0) {
+                saveStatus.set(serverName, { phase: 'idle' });
+                updateSaveBar(serverName);
+                return;
+            }
+
+            autoSaveInFlight.add(serverName); // await より前に同期で立てる（二重送信防止）
+            saveStatus.set(serverName, { phase: 'saving' });
+            updateSaveBar(serverName);
+            const t0 = Date.now();
+            try {
+                const data = await API.patchServer(serverName, payload);
+                if ('description' in payload) server.config.description = payload.description || '';
+                if ('tool_search_desc' in payload) server.config.tool_search_desc = payload.tool_search_desc;
+                reconcileDrafts(server); // 保存中に入った新しい編集は残す
+                // 応答に rebuild_seconds があればそれを、無ければ往復時間を表示（ラベルで区別する）
+                const rebuildReported = !!(data && typeof data.rebuild_seconds === 'number');
+                const secs = rebuildReported ? data.rebuild_seconds : (Date.now() - t0) / 1000;
+                saveStatus.set(serverName, { phase: 'saved', secs, rebuildReported });
+                updateServerCard(serverName); // 左レール/集計を再描画
+                updateSaveBar(serverName);    // テキスト入力中で詳細が再描画されなくても反映
+            } catch (error) {
+                // draft は保持（UI を壊さない）。「再試行」で送り直せる。
+                saveStatus.set(serverName, { phase: 'error', message: error.message });
+                updateSaveBar(serverName);
+                showToast(`保存に失敗しました: ${error.message}`, 'error');
+            } finally {
+                autoSaveInFlight.delete(serverName);
+                if (autoSaveDirty.has(serverName)) scheduleAutoSave(serverName); // 保存中の変更を捨てない
+            }
+        }
+
+        function retrySave(serverName) {
+            autoSaveDirty.add(serverName);
+            flushAutoSave(serverName);
+        }
+
+        function updateSaveBar(serverName) {
+            const bar = document.querySelector('#serverDetail [data-save-bar]');
+            if (!bar || bar.getAttribute('data-server') !== serverName) return;
+            const server = servers.find(s => s.name === serverName);
+            if (!server) return;
+            bar.innerHTML = saveBarInnerHtml(server);
+        }
+
+        function discardChanges(serverName) {
+            const server = servers.find(s => s.name === serverName);
+            const timer = autoSaveTimers.get(serverName);
+            if (timer) { clearTimeout(timer); autoSaveTimers.delete(serverName); }
+            autoSaveDirty.delete(serverName);
+            saveStatus.delete(serverName);
+            descDraft.delete(serverName);
+            for (const t of ((server && server.tools) || [])) descDraft.delete(toolDescKey(serverName, t.name));
+            updateServerDetail();
+            showToast('未保存の変更を破棄しました', 'info');
         }
 
         // Delegated actions (FIX-3b: no inline handlers with name interpolation; dataset carries raw values)
+        // 左レールの絞り込み: 検索入力は即時反映、未設定のみはトグルで絞り込む
+        document.getElementById('serverSearchInput')?.addEventListener('input', (e) => {
+            serverSearchQuery = e.target.value;
+            applyServerFilters();
+        });
+        document.getElementById('unsetOnlyToggle')?.addEventListener('change', (e) => {
+            unsetOnly = e.target.checked;
+            applyServerFilters();
+        });
+        // 説明欄の入力は draft に溜める（保存は debounce の自動保存に任せる）
         document.addEventListener('input', (e) => {
-            const input = e.target.closest('#serversList .desc-input');
+            const input = e.target.closest('#serverDetail .desc-input');
             if (!input) return;
-            updateDescriptionCounter(input);
-            if (e.isComposing) return; // IME 変換中は確定後にまとめて保存
-            scheduleDescriptionSave(input);
+            handleDescInput(input);
         });
-        // IME 確定・フォーカス移動（タグ編集ボタン押下等）で保留中の debounce を flush
         document.addEventListener('compositionend', (e) => {
-            const input = e.target.closest('#serversList .desc-input');
-            if (input) flushDescriptionSave(input);
-        });
-        document.addEventListener('focusout', (e) => {
-            const input = e.target.closest('#serversList .desc-input');
-            if (input) flushDescriptionSave(input); // 未変更なら内部で skip される
+            const input = e.target.closest('#serverDetail .desc-input');
+            if (input) handleDescInput(input);
         });
         document.addEventListener('click', (e) => {
             const tagChip = e.target.closest('#tagFilterBar [data-action="toggle-tag-filter"]');
             if (tagChip) { toggleTagFilter(tagChip.dataset.tag); return; }
             const editRm = e.target.closest('[data-action="remove-edit-tag"]');
             if (editRm) { removeEditTag(editRm.dataset.tag); return; }
-            const el = e.target.closest('#serversList [data-action]');
+            const el = e.target.closest('#serverTab [data-action]');
             if (!el) return;
             const action = el.dataset.action;
-            if (action === 'remove-tag') {
+            if (action === 'select-server') {
+                if (e.target.closest('.toggle-switch')) return; // トグル操作は選択に含めない
+                selectServer(el.dataset.server);
+            } else if (action === 'toggle-enabled') {
+                // change ハンドラが処理する（ラベルクリックを選択に伝播させない）
+                return;
+            } else if (action === 'remove-tag') {
                 e.stopPropagation();
                 removeTag(el.dataset.server, el.dataset.tag);
             } else if (action === 'add-tag') {
@@ -3077,8 +3882,18 @@
                 startAddTag(el.dataset.server, el);
             } else if (action === 'open-tool') {
                 openToolModal(el.dataset.server, el.dataset.tool);
-            } else if (action === 'toggle-server') {
-                toggleServer(el.dataset.server);
+            } else if (action === 'gen-server-desc') {
+                e.stopPropagation();
+                generateServerDescription(el.dataset.server, el);
+            } else if (action === 'gen-tool-search-desc') {
+                e.stopPropagation();
+                generateToolSearchDesc(el.dataset.server, el.dataset.tool, el);
+            } else if (action === 'retry-save') {
+                e.stopPropagation();
+                retrySave(el.dataset.server);
+            } else if (action === 'discard-changes') {
+                e.stopPropagation();
+                discardChanges(el.dataset.server);
             } else if (action === 'test-connection') {
                 e.stopPropagation();
                 testServerConnection(el.dataset.server);
@@ -3097,7 +3912,7 @@
             }
         });
         document.addEventListener('change', (e) => {
-            const el = e.target.closest('#serversList [data-action]');
+            const el = e.target.closest('#serverTab [data-action]');
             if (!el) return;
             if (el.dataset.action === 'toggle-enabled') {
                 e.stopPropagation();
@@ -3111,9 +3926,9 @@
             }
         });
         document.addEventListener('keydown', (e) => {
-            if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-action="toggle-server"]')) {
+            if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-action="select-server"]')) {
                 e.preventDefault();
-                toggleServer(e.target.dataset.server);
+                selectServer(e.target.dataset.server);
             }
         });
 
@@ -3164,8 +3979,8 @@
         }
 
         async function showServerExtra(kind, name, btnEl) {
-            const card = btnEl.closest('.server-card');
-            const out = card?.querySelector('.server-extra-output');
+            const pane = btnEl.closest('#serverDetail');
+            const out = pane?.querySelector('.server-extra-output');
             if (!out) return;
             out.style.display = 'block';
             out.textContent = '読込中...';
@@ -3759,6 +4574,7 @@
                 const settings = await API.getSettings();
                 metaMode = settings.meta_mode;
                 fullInfoTools = settings.full_info_tools || [];
+                applyLLMState(settings);
                 document.getElementById('metaModeToggle').checked = metaMode;
                 const useEmbEl = document.getElementById('useEmbeddingsToggle');
                 if (useEmbEl) useEmbEl.checked = !!settings.use_embeddings;
@@ -3778,6 +4594,58 @@
                 statusDot.style.background = 'var(--accent-red)';
                 statusText.textContent = '設定の取得に失敗';
                 console.error('Settings load error:', error);
+            }
+        }
+
+        // LLM 設定（説明の自動生成）の表示反映。api_key は GET では返らないので空欄にリセットする。
+        function applyLLMState(settings) {
+            const llm = (settings && settings.llm) || {};
+            llmConfigured = !!llm.api_key_set;
+            const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+            setVal('llmProvider', llm.provider || '');
+            setVal('llmModel', llm.model || '');
+            setVal('llmBaseUrl', llm.base_url || '');
+            setVal('llmApiKey', '');
+            const dot = document.getElementById('llmStatusDot');
+            const txt = document.getElementById('llmStatusText');
+            if (dot) dot.style.background = llmConfigured ? 'var(--accent-green)' : 'var(--text-muted)';
+            if (txt) txt.textContent = llmConfigured
+                ? `設定済み（${llm.provider || '?'} / ${llm.model || '?'}）`
+                : '未設定 — ✨ 説明の自動生成は使えません';
+        }
+
+        async function saveLLMSettings() {
+            const payload = {};
+            const provider = document.getElementById('llmProvider').value.trim();
+            const model = document.getElementById('llmModel').value.trim();
+            const baseUrl = document.getElementById('llmBaseUrl').value.trim();
+            const apiKey = document.getElementById('llmApiKey').value.trim();
+            if (provider) payload.provider = provider;
+            if (model) payload.model = model;
+            if (baseUrl) payload.base_url = baseUrl;
+            if (apiKey) payload.api_key = apiKey; // 空欄なら既存キーを維持（サーバー側でマージ）
+            if (Object.keys(payload).length === 0) {
+                showToast('LLM 設定が空です（機能を止めるには「無効化」）', 'info');
+                return;
+            }
+            try {
+                const settings = await API.patchSettings({ llm: payload });
+                applyLLMState(settings);
+                if (servers && servers.length) renderServers();
+                showToast('LLM 設定を保存しました', 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        async function disableLLM() {
+            try {
+                const settings = await API.patchSettings({ llm: {} });
+                applyLLMState(settings);
+                if (servers && servers.length) renderServers();
+                showToast('LLM を無効化しました', 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
             }
         }
 

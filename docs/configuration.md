@@ -53,6 +53,7 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `meta_mode` | bool | `true`（バンドル設定からシード） | Meta モード（Progressive Discovery）の有効/無効。`true` のとき `search_tools` / `execute_tool` / `get_schema` の 3 ツールのみ公開。設定未保存時はバンドルされた `hub.config.json` の値が初回起動時にシードされます。 |
 | `full_info_tools` | array\<string\> | `[]` | フル公開するツールのリスト。要素は `"{server}_{tool}"` 形式（例: `"fetch_fetch"`）。Meta モード時、ここに指定したツールのみ `tools/list` に通常ツールとしてフル公開され、`tools/call` で直接呼び出せる。未指定（空配列）なら現行の挙動と互換。 |
 | `use_embeddings` | bool | `true` | セマンティック検索（fastembed）の有効/無効。`false` で BM25 のみ。fastembed が未インストールの場合は実効値が常に `false` になる（ハードゲート）。Web UI の「⚙️ Hub 設定」からも変更可（ランタイム反映・検索インデックス再構築あり）。 |
+| `llm` | object | `{}`（＝機能オフ） | LLM による説明文生成（`POST /admin/api/llm/generate`）の設定。`{provider?, model?, api_key?, base_url?}`。`api_key` 未設定なら機能オフ（生成エンドポイントは `400`）。`PATCH /admin/api/settings` の `llm` で更新する（部分マージ。空 object で全削除＝オフ）。 |
 | `mcpServers` | object | `{}` | MCP サーバー定義のマップ。キーがサーバー名。 |
 
 ### 埋め込みモデルの移行（既存インストール向け）
@@ -75,6 +76,8 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `env` | object (string→string) | 任意 | 子サーバーに設定する環境変数。`${VAR}` テンプレート使用可。`url` サーバーの場合、`TOKEN` / `API_KEY` / `SECRET` / `PASSWORD` / `AUTH` を含む変数がちょうど 1 つだけなら `Authorization: Bearer <値>` ヘッダーに自動変換（2 つ以上ある場合は曖昧なため無視）。 |
 | `headers` | object (string→string) | 任意 | HTTP 接続時に送信するカスタムヘッダー。 |
 | `tags` | string[] | 任意 | サーバーに付与するタグ。タグフィルタリングに使用。 |
+| `description` | string | 任意 | サーバーの一行説明（最大 500 字）。検索インデックスの索引テキストに前置され、`search_tools` の結果で返る。 |
+| `tool_search_desc` | object (string→string) | 任意 | ツール名 → 日本語1文（80 字以内目安）のマップ。索引テキストに前置され、日本語検索が英語 docstring の語彙の壁を越えるための検索ヒント。表示には使わない（`description` は不変）。`PATCH /admin/api/servers/{name}` の部分更新、または管理 WebUI の「検索用の説明」欄（自動保存）で設定。 |
 | `disabled` | boolean | `false` | `true` でサーバーをスキップ。 |
 
 #### `command` と `url` の排他ルール

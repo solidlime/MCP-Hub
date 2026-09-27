@@ -242,6 +242,19 @@ class JsonStore:
             data["embedding_model"] = model_name
             await self._write_internal(data)
 
+    async def set_llm(self, llm: dict) -> None:
+        """Atomically update llm config in the store.
+
+        {provider?, model?, api_key?, base_url?}。空 dict は機能オフ（キー削除）。
+        """
+        async with self._lock:
+            data = await self._read_locked()
+            if llm:
+                data["llm"] = dict(llm)
+            else:
+                data.pop("llm", None)
+            await self._write_internal(data)
+
     async def set_use_embeddings(self, enabled: bool) -> None:
         """Atomically update use_embeddings. Uses lock to prevent read-modify-write races."""
         async with self._lock:

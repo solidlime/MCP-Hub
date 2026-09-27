@@ -246,9 +246,17 @@ X-API-Key: your-api-key-here
   "client_timeout": null,
   "connect_timeout": null,
   "use_embeddings": true,
-  "embedding_status": "active"
+  "embedding_status": "active",
+  "llm": {
+    "provider": null,
+    "model": null,
+    "base_url": null,
+    "api_key_set": false
+  }
 }
 ```
+
+`llm`（additive）は LLM 生成機能の設定状態。**`api_key` の値は返さず**、設定有無のみを `api_key_set` で公開する。
 
 `embedding_status`（実効状態。取り得る値は `GET /admin/api/health` と同じ）は additive フィールドです。`use_embeddings` は設定意図ではなく実効値のため、embed 失敗により降格している場合は `use_embeddings=false` かつ `embedding_status="error:*"` になります。
 
@@ -284,6 +292,20 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 }
 ```
 
+`llm` で LLM 生成機能（`POST /admin/api/llm/generate`）を設定します。object でない場合は `422`。**部分マージ**（既存設定にマージするので、`api_key` を毎回送る必要はない）。空 object `{}` を送ると全削除＝機能オフ（`{"llm": {"provider": null}}` のように `null` を送ると値が `null` のまま保存されるので、オフにしたいときは `{}` を使う）。
+
+**Request Body:**
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "api_key": "sk-...",
+    "base_url": "https://api.example.com/v1"
+  }
+}
+```
+
 **Response:**
 ```json
 {
@@ -292,7 +314,13 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
   "client_timeout": 180.0,
   "connect_timeout": 30.0,
   "use_embeddings": true,
-  "embedding_status": "active"
+  "embedding_status": "active",
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "base_url": "https://api.example.com/v1",
+    "api_key_set": true
+  }
 }
 ```
 
@@ -427,7 +455,8 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 #### `PATCH /admin/api/servers/{name}`
 
 サーバー設定を部分更新します。送信されたフィールドのみ既存設定にマージされます。
-更新後、プロキシの再生成と再マウントが行われます。
+更新後、プロキシの再生成と再マウントが行われます（`tags` / `description` /
+`tool_search_desc` **のみ**の更新は例外で、プロキシ再生成を行わず設定のみ更新する）。
 
 **Request Body:** `ServerConfig` の部分適用（`POST /servers` の `config` と同構造）
 
@@ -435,6 +464,17 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 {
   "tags": ["new-tag"],
   "disabled": true
+}
+```
+
+`tool_search_desc` は `{ツール名: 日本語1文}` の object（それ以外は `422`）。索引テキストに
+前置され、**保存と同時に**インデックスが再構築されて検索へ反映される（プロキシの再生成は不要）。
+
+```json
+{
+  "tool_search_desc": {
+    "ha_search": "照明や電球を操作し室温を確認する"
+  }
 }
 ```
 
@@ -604,8 +644,54 @@ pip / uv の install コマンドは自動的に `--target`（pip-extras 永続�
 
 ---
 
+### LLM 生成
+
+#### `POST /admin/api/llm/generate`
+
+OpenAI 互換 API（`{base_url}/chat/completions`、`Authorization: Bearer {api_key}`）で
+日本語の説明文（1文・80字以内を指示）を生成します。プロンプトはサーバー側に置く。
+
+**注意:** `base_url` は管理者が指定した URL へそのままリクエストを送ります（`{base_url}/chat/completions` に `Authorization: Bearer {api_key}` を付けて POST。SSRF 耐性は admin 認証が前提）。プロンプトには対象のサーバー名・ツール名・docstring / サーバー説明が材料として補間されます。
+
+**Request Body:**
+```json
+{
+  "kind": "server_description",
+  "server": "my-server"
+}
+```
+
+| フィールド | 必須 | 説明 |
+|---|---|---|
+| `kind` | 必須 | `"server_description"` または `"tool_search_desc"`（それ以外は `422`）。 |
+| `server` | 必須 | 接続済みサーバー名（未接続は `404`）。 |
+| `tool_name` | `tool_search_desc` のとき必須 | 対象ツール名（無いと `400`、見つからないと `404`）。 |
+
+**Response:**
+```json
+{
+  "text": "照明や電球を操作し室温を確認する"
+}
+```
+
+**Errors:**
+
+| Status | 条件 |
+|---|---|
+| `400` | `llm.api_key` 未設定（`PATCH /admin/api/settings` で設定）。または `tool_search_desc` で `tool_name` なし。 |
+| `404` | `server` が未接続、または `tool_name` が当該サーバーに見つからない。 |
+| `422` | `kind` が不正。 |
+| `502` | 上流 LLM への接続失敗、上流 HTTP エラー、応答の解析失敗、空応答。 |
+
+---
+
 ## Admin Web UI
 
 ### `GET /admin/`
 
-ブラウザベースの管理インターフェース。サーバーの一覧表示、追加、編集、削除、タグ管理が行えます。
+ブラウザベースの管理インターフェース。左レールにサーバー一覧（名前・説明・タグでの絞り込み、「未設定のみ」トグル、件数表示）、右ペインに選択中サーバーの詳細（説明・ツール・ログ・接続情報）を表示する master-detail 構成です。
+
+- サーバーの追加・編集・削除・タグ管理・有効/無効トグル・接続テスト
+- **サーバー説明**と**ツールの検索用の説明**（`tool_search_desc`）は**自動保存**（入力停止 0.8 秒後に 1 回の `PATCH` にまとめて送信）。保存バーに「未保存の変更 N件／保存中…／保存しました／保存に失敗しました」を表示し、失敗時は「再試行」で送り直せます
+- LLM（設定 → LLM）を構成すると「✨ 説明を生成」でサーバー説明・検索用の説明を自動生成できます（未設定ならボタンは出ません）
+- 索引に入る語彙の設計根拠（実測パネル）を併設

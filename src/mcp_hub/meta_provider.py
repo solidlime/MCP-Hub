@@ -699,8 +699,9 @@ class ToolIndex:
         Each document: {server, name, description, index_text, full_description,
         inputSchema}. Caller is responsible for building the document list. The
         index text uses ``index_text`` when present (callers build it as
-        ``サーバー説明 + ツール説明（_INDEX_DESC_CHARS 上限）`` so server-level
-        (often Japanese) context enters both BM25 and embedding retrieval) and
+        ``サーバー説明 + tool_search_desc（ツール単位の日本語1文）+ ツール説明
+        （_INDEX_DESC_CHARS 上限）`` so server-level (often Japanese) context and
+        per-tool Japanese glosses enter both BM25 and embedding retrieval) and
         falls back to ``description`` otherwise. ``description`` is the display
         string; ``full_description`` is the untruncated raw tool description
         (``get_schema``).
@@ -1450,11 +1451,16 @@ async def create_meta_app(
         all_tools = []
         failed: list[str] = []
         desc_fn = getattr(proxy_manager, "server_description", None)
+        # ツール単位の日本語1文（tool_search_desc）。英語 docstring の語彙の壁を越える。
+        tsd_fn = getattr(proxy_manager, "server_tool_search_desc", None)
         for server_name, proxy in proxy_manager.get_connected_servers().items():
             srv_desc = desc_fn(server_name) if callable(desc_fn) else ""
             if not isinstance(srv_desc, str):
                 srv_desc = ""
             srv_desc = srv_desc.strip()
+            tsd_map = tsd_fn(server_name) if callable(tsd_fn) else {}
+            if not isinstance(tsd_map, dict):
+                tsd_map = {}
             try:
                 if isinstance(proxy_manager, _ProxyManager):
                     tools = await proxy_manager.list_tools_for_server(
@@ -1464,9 +1470,23 @@ async def create_meta_app(
                     tools = await asyncio.wait_for(proxy.list_tools(), timeout=30.0)
                 for t in tools:
                     raw_desc = (t.description or "").strip()
-                    # 索引テキスト: サーバー説明（日本語）を前置し、ツール説明は
-                    # _INDEX_DESC_CHARS で切る。BM25 トークンと埋め込みはこれから作る。
-                    index_text = f"{srv_desc} {raw_desc[:_INDEX_DESC_CHARS]}".strip()
+                    tool_desc = tsd_map.get(t.name, "")
+                    if not isinstance(tool_desc, str):
+                        tool_desc = ""
+                    # 索引テキスト: サーバー説明（日本語）とツール単位の日本語1文
+                    # （tool_search_desc）を前置し、ツール説明は _INDEX_DESC_CHARS で切る。
+                    # 空要素は落として単一空白で連結する（tool_search_desc 未設定時に
+                    # 余分な空白を入れない。既存の索引テキスト契約を保つ）。
+                    # BM25 トークンと埋め込みはこれから作る。
+                    index_text = " ".join(
+                        part
+                        for part in (
+                            srv_desc,
+                            tool_desc.strip(),
+                            raw_desc[:_INDEX_DESC_CHARS],
+                        )
+                        if part
+                    ).strip()
                     # 表示用: サーバー前置なし。切り詰めた時だけ "…" を付ける。
                     if len(raw_desc) > _DISPLAY_DESC_CHARS:
                         display_desc = raw_desc[:_DISPLAY_DESC_CHARS] + "…"

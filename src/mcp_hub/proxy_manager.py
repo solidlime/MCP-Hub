@@ -643,6 +643,15 @@ class ProxyManager:
         """サーバーの一行説明。無ければ空文字。meta カタログ用。"""
         return self._server_configs.get(name, {}).get("description", "")
 
+    def server_tool_search_desc(self, name: str) -> dict[str, str]:
+        """ツール単位の日本語1文（config.tool_search_desc）。無ければ空 dict。
+
+        meta index が索引テキストに前置する。英語 docstring の語彙の壁を越えるための
+        検索ヒントで、表示用ではない。
+        """
+        value = self._server_configs.get(name, {}).get("tool_search_desc", {})
+        return value if isinstance(value, dict) else {}
+
     def get_connected_servers(self) -> dict[str, Any]:
         """Return snapshot of connected proxy instances.
 
