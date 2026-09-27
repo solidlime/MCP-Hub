@@ -907,7 +907,7 @@ class TestCompactSchemaContract:
             }
         )
 
-        data = json.loads(await app.meta_tools.search_tools("rich_tool", top_k=5))
+        data = json.loads(await app.meta_tools.search_tools("rich_tool", top_k=5, detail="all"))
         result = next(r for r in data["results"] if r["name"] == "rich_tool")
         compact = result["inputSchema"]
 
@@ -936,6 +936,157 @@ class TestCompactSchemaContract:
         # 深いネストは {"type": ...} に畳まれる
         assert props["options"] == {"type": "object"}
         assert props["tags"]["items"] == {"type": "string"}
+
+
+def _searchable(n: int) -> list:
+    """クエリ "search tool" が n 件ヒットするツール群。"""
+    return [
+        SimpleNamespace(
+            name=f"tool_{i}",
+            description=f"search tool number {i}",
+            parameters={"type": "object", "properties": {"q": {"type": "string"}}},
+        )
+        for i in range(n)
+    ]
+
+
+class TestSearchDetailLevels:
+    """MCP 公式 3 層準拠: 既定 brief / schema は上位1件のみ / all は従来互換。"""
+
+    async def test_brief_is_default_and_has_no_schema(self):
+        _pm, app = await _app_from({"srv": _searchable(3)})
+        data = json.loads(await app.meta_tools.search_tools("search tool"))
+        assert data["results"]
+        for r in data["results"]:
+            assert "inputSchema" not in r
+            assert set(r) == {
+                "server",
+                "name",
+                "description",
+                "search_desc",
+                "tags",
+                "score",
+            }
+        # note は get_schema へ誘導する
+        assert "get_schema" in data["note"]
+
+    async def test_default_detail_equals_brief(self):
+        _pm, app = await _app_from({"srv": _searchable(3)})
+        assert await app.meta_tools.search_tools(
+            "search tool"
+        ) == await app.meta_tools.search_tools("search tool", detail="brief")
+
+    async def test_schema_attaches_schema_only_to_top_hit(self):
+        _pm, app = await _app_from({"srv": _searchable(3)})
+        data = json.loads(
+            await app.meta_tools.search_tools("search tool", detail="schema")
+        )
+        assert len(data["results"]) >= 2
+        assert "inputSchema" in data["results"][0]
+        # 圧縮形（param の description は落ちる）
+        for prop in data["results"][0]["inputSchema"]["properties"].values():
+            assert "description" not in prop
+        for r in data["results"][1:]:
+            assert "inputSchema" not in r
+
+    async def test_all_keeps_legacy_shape(self):
+        _pm, app = await _app_from({"srv": _searchable(3)})
+        data = json.loads(await app.meta_tools.search_tools("search tool", detail="all"))
+        assert all("inputSchema" in r for r in data["results"])
+        # all は従来互換（検索応答の旧 note を維持し、search_desc は載せない）
+        assert data["note"] == (
+            "inputSchema は要約です。完全な仕様は get_schema(server, tool_name) で"
+            "取得してください。"
+        )
+        assert all("search_desc" not in r for r in data["results"])
+
+    async def test_default_top_k_is_three(self):
+        _pm, app = await _app_from({"srv": _searchable(5)})
+        data = json.loads(await app.meta_tools.search_tools("search tool"))
+        assert len(data["results"]) == 3
+        # 明示指定は従来どおり効く
+        five = json.loads(await app.meta_tools.search_tools("search tool", top_k=5))
+        assert len(five["results"]) == 5
+
+
+class TestSearchDescField:
+    """search_desc: tool_search_desc（日本語1文）を brief に載せる。"""
+
+    async def test_search_desc_carried_in_brief(self):
+        pm = _build_mock_proxy_manager()
+        pm._proxies["srv"] = _build_mock_proxy(
+            [
+                SimpleNamespace(
+                    name="alpha_tool",
+                    description="Alpha tool",
+                    parameters={"type": "object"},
+                )
+            ]
+        )
+        pm.server_tool_search_desc = MagicMock(
+            return_value={"alpha_tool": "アルファの説明。"}
+        )
+        app = await create_meta_app(pm, use_embeddings=False)
+        await app.rebuild_index()
+
+        data = json.loads(await app.meta_tools.search_tools("alpha_tool"))
+        r = next(x for x in data["results"] if x["name"] == "alpha_tool")
+        assert r["search_desc"] == "アルファの説明。"
+
+    async def test_search_desc_empty_when_absent(self):
+        _pm, app = await _app_from({"srv": _searchable(2)})
+        data = json.loads(await app.meta_tools.search_tools("search tool"))
+        assert all(r["search_desc"] == "" for r in data["results"])
+
+
+class TestGetSchemaCompact:
+    """get_schema(compact=True) は検索応答と同じ圧縮スキーマを返す。"""
+
+    async def test_compact_returns_compressed_schema(self):
+        _pm, app = await _app_from(
+            {
+                "srv": [
+                    SimpleNamespace(
+                        name="rich_tool",
+                        description="Rich",
+                        parameters=_rich_schema(),
+                    )
+                ]
+            }
+        )
+        full = json.loads(await app.meta_tools.get_schema("srv", "rich_tool"))
+        comp = json.loads(
+            await app.meta_tools.get_schema("srv", "rich_tool", compact=True)
+        )
+        # 既定 (compact=False) は完全形
+        assert full["inputSchema"]["properties"]["mode"]["description"].startswith(
+            "short enum"
+        )
+        # compact は圧縮形で、完全形より小さい
+        assert comp["inputSchema"]["required"] == ["mode"]
+        for prop in comp["inputSchema"]["properties"].values():
+            assert "description" not in prop
+        assert len(json.dumps(comp, ensure_ascii=False)) < len(
+            json.dumps(full, ensure_ascii=False)
+        )
+
+    async def test_compact_does_not_mutate_index(self):
+        _pm, app = await _app_from(
+            {
+                "srv": [
+                    SimpleNamespace(
+                        name="rich_tool",
+                        description="Rich",
+                        parameters=_rich_schema(),
+                    )
+                ]
+            }
+        )
+        await app.meta_tools.get_schema("srv", "rich_tool", compact=True)
+        still = app.index.get_schema("srv", "rich_tool")
+        assert still["inputSchema"]["properties"]["mode"]["description"].startswith(
+            "short enum"
+        )
 
 
 class TestSearchToolsNonDestructive:
@@ -1074,7 +1225,7 @@ class TestSearchResponseSize:
                 ]
             }
         )
-        out = await app.meta_tools.search_tools("big_tool", top_k=5)
+        out = await app.meta_tools.search_tools("big_tool", top_k=5, detail="all")
         assert len(out) < raw_size * 0.5
 
 

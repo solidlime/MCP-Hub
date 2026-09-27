@@ -64,9 +64,9 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
 
 | ツール | 説明 |
 |---|---|
-| `search_tools(query, top_k=10)` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。結果に `tags`（サーバータグ配列）を含む。`top_k` は最大 50 にクランプされる（巨大な値を渡しても返り値が肥大しない） |
+| `search_tools(query, top_k=3, detail="brief")` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。結果に `tags`（サーバータグ配列）を含む。`top_k` は最大 50 にクランプされる（巨大な値を渡しても返り値が肥大しない）。`detail` は `"brief"`（既定、inputSchema なし）/ `"schema"`（上位 1 件のみ圧縮 inputSchema）/ `"all"`（全件に圧縮 inputSchema、従来互換） |
 | `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行。互換のため `{"arguments": {...}}` に `server` / `tool_name` / `arguments` を折り畳んだ形式（LLM が生成しがちなフラット呼び出し）も受け付ける。サーバー名の大文字小文字は case-insensitive に解決される |
-| `get_schema(server, tool_name)` | `search_tools` の `inputSchema` は要約なので、実行前に完全なパラメータ仕様が必要な時に呼ぶ。切り詰めなしの `description` と完全な `inputSchema` を返す。サーバー名は case-insensitive に解決される |
+| `get_schema(server, tool_name, compact=False)` | `search_tools` の `inputSchema` は既定で省かれるので、実行前に仕様が必要な時に呼ぶ。既定 (`compact=False`) は切り詰めなしの `description` と完全な `inputSchema`。`compact=True` は `search_tools` と同じ圧縮 `inputSchema`（名前 / 型 / 必須）を返す。サーバー名は case-insensitive に解決される |
 
 ##### `search_tools` のレスポンス形式
 
@@ -77,31 +77,30 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
       "server": "filesystem",
       "name": "read_file",
       "description": "Read a file's contents",
+      "search_desc": "ファイルを読む。",
       "tags": ["local"],
-      "inputSchema": {
-        "type": "object",
-        "required": ["path"],
-        "properties": { "path": { "type": "string" } }
-      },
       "score": 1.2345
     }
   ],
   "servers": { "filesystem": "ローカルファイル操作" },
-  "note": "inputSchema は要約です。完全な仕様は get_schema(server, tool_name) で取得してください。"
+  "note": "スキーマが必要な場合は get_schema(server, tool_name) を呼んでください（compact=True で圧縮版）。"
 }
 ```
 
 - `results[].description` は**表示用のツール説明**（サーバー説明の前置なし）。`_DISPLAY_DESC_CHARS = 600` 字で切り詰め、切った時だけ末尾に `"…"` を付ける。
-- `results[].inputSchema` は**圧縮形**。`type` / `required` と各パラメータの `type`・短い `enum`（5 個以下かつ連結 80 字以下）・短い `default`（数値・真偽、または文字列化 40 字以下）のみで、`description` と深いネストは落とす。完全な仕様は `get_schema(server, tool_name)` で取得する（往復を増やさず `execute_tool` を呼べるよう、名前・型・必須は残す）。
-- `note` は inputSchema が要約であることの案内。**成功時のみ**付き、0 件やタグ全滅の早期 return では付かない。
+- `results[].search_desc` は**ツール単位の日本語 1 文**（`tool_search_desc`。admin UI / `PATCH /servers/{name}` で投入）。未設定なら空文字。英語 docstring の語彙の壁を越える検索補助と同時に、結果の一行要約として返す。
+- **既定 (`detail="brief"`) の `results[]` は `inputSchema` を含まない**（フィールドは `server` / `name` / `description` / `search_desc` / `tags` / `score`）。スキーマが要る時は `detail="schema"`（上位 1 件のみ）か `get_schema(server, tool_name)` を呼ぶ。
+- `detail="schema"` は**上位 1 件のみ**に圧縮 `inputSchema` を付け、残りは brief。`detail="all"` は全件に圧縮 `inputSchema` を付け、従来と同じ応答（同じ `note` を含む）を返す。
+- `results[].inputSchema`（`schema` / `all` 時）は**圧縮形**。`type` / `required` と各パラメータの `type`・短い `enum`（5 個以下かつ連結 80 字以下）・短い `default`（数値・真偽、または文字列化 40 字以下）のみで、`description` と深いネストは落とす。完全な仕様は `get_schema(server, tool_name)`、`get_schema(server, tool_name, compact=True)` で同じ圧縮形を取得できる。
+- `note` はスキーマ取得方法の案内。**成功時のみ**付き、0 件やタグ全滅の早期 return では付かない。`detail="all"` だけは従来互換の文言を保つ。
 - `servers` は**結果に現れたサーバーのみ**を対象にした `{server_name: server_description}` マップ（未ヒットのサーバーは含まない）。表示 `description` からサーバー前置を外した代わりに、LLM がサーバー文脈を得る経路。
-- 検索（BM25 トークン・埋め込み）が使う**索引テキスト**は別物で、`サーバー説明 + ツール説明（_INDEX_DESC_CHARS = 400 字上限）` を前置付きで持つ（結果には出さない）。
+- 検索（BM25 トークン・埋め込み）が使う**索引テキスト**は別物で、`サーバー説明 + tool_search_desc（ツール単位の日本語 1 文）+ ツール説明（_INDEX_DESC_CHARS = 400 字上限）` を前置付きで持つ（結果には出さない）。
 
 `search_tools` が 0 件を返す場合、`{"message": "No matching tools found", "hint": ...}` を返します。`X-MCP-Hub-Tags` によるタグフィルタで全件除外された場合は、`hint` に「タグフィルタ ... により全件除外された可能性」を含めます（0 件ヒットの主因。additive で既存キーは不変）。
 
 ##### `get_schema` のレスポンス形式
 
-`search_tools` の `inputSchema` は要約なので、実行前に完全なパラメータ仕様が必要な時に呼びます。`server` / `tool_name` は `search_tools` の結果の値を渡します（`server` は case-insensitive に解決されます）。
+`search_tools` は既定で `inputSchema` を省くので、実行前に仕様が必要な時に呼びます。`server` / `tool_name` は `search_tools` の結果の値を渡します（`server` は case-insensitive に解決されます）。`compact=True` を渡すと `search_tools` と同じ**圧縮** `inputSchema`（名前 / 型 / 必須）を返します。
 
 ```json
 {
@@ -117,7 +116,7 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
 ```
 
 - `description` は切り詰めなしの**フル説明**（`full_description`。無ければ `description`）。
-- `inputSchema` は上流ツールの**完全な** JSON Schema。
+- `inputSchema` は上流ツールの**完全な** JSON Schema。`compact=True` の場合は `search_tools` と同じ圧縮形（`description` と深いネストを落とす）。
 - 見つからない場合（ツール不在、`server` / `tool_name` が空、タグフィルタ範囲外）は `{"message": "Tool not found", "hint": "search_tools で server / tool_name を確認してください。"}` を返します。
 
 #### フル公開ツール（`full_info_tools`）

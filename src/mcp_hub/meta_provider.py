@@ -91,6 +91,22 @@ _DISPLAY_DESC_CHARS = 600
 # 75 件列挙のような正当な全量取得はほぼ許す上限として 50。
 _MAX_TOP_K = 50
 
+# search_tools の既定 top_k。MCP 公式 Client Best Practices の 3 層パターン
+# （Layer1 検索 = brief / Layer2 Inspect = 対象1件の完全スキーマ / Layer3 Execute）
+# に合わせ、既定では少数の候補だけを軽く返す。
+_DEFAULT_TOP_K = 3
+
+# search_tools 成功応答のトップレベル誘導文。brief/schema はスキーマを省くので
+# get_schema へ誘導する。
+_SEARCH_NOTE = (
+    "スキーマが必要な場合は get_schema(server, tool_name) を呼んでください"
+    "（compact=True で圧縮版）。"
+)
+# detail="all" は従来互換モード。旧 note をそのまま返し、応答をバイト単位で保つ。
+_SEARCH_NOTE_LEGACY = (
+    "inputSchema は要約です。完全な仕様は get_schema(server, tool_name) で取得してください。"
+)
+
 MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 
 
@@ -834,8 +850,11 @@ class ToolIndex:
 
         Returns list of {server, name, description, tags, inputSchema, score}.
 
-        inputSchema is included so the LLM can proceed directly to execute_tool without
-        a separate get_tool_schema call.
+        ``inputSchema`` is returned by the index, but the MCP ``search_tools``
+        layer strips it in the default ``detail="brief"`` mode (Layer 1 of the
+        progressive-disclosure pattern: search → get_schema → execute_tool).
+        ``detail="schema"`` keeps it for the top hit only; ``detail="all"`` is
+        the legacy byte-compatible shape.
 
         Read-only with respect to search state — the index, BM25 corpus and
         embeddings are not modified, so no lock is needed. The only write is
@@ -1059,6 +1078,17 @@ class ToolIndex:
                 }
         return None
 
+    def get_search_desc(self, server: str, tool_name: str) -> str:
+        """検索用の日本語1文（tool_search_desc）。無ければ空文字。Read-only。
+
+        search_tools の brief 応答に載せる。get_schema と同じ索引走査で引き、
+        索引 doc は変更しない。
+        """
+        for doc in self._documents:
+            if doc["server"] == server and doc["name"] == tool_name:
+                return doc.get("search_desc") or ""
+        return ""
+
     def list_servers(self) -> list[str]:
         """List all indexed server names."""
         return sorted(set(d["server"] for d in self._documents))
@@ -1209,12 +1239,20 @@ class MetaTools:
         """Remove results from servers not in *allowed*."""
         return [r for r in results if r["server"] in allowed]
 
-    async def search_tools(self, query: str, top_k: int = 10) -> str:
+    async def search_tools(
+        self, query: str, top_k: int = _DEFAULT_TOP_K, detail: str = "brief"
+    ) -> str:
         """Search upstream tools. Always call FIRST before execute_tool.
+
+        既定 (detail="brief") は inputSchema を省き、name / server / description /
+        search_desc / tags / score のみ返す（MCP 公式 Layer1）。スキーマが要る時は
+        detail="schema"（上位1件のみ）か get_schema を使う。
 
         Args:
             query: What you want to do (e.g. "read files", "search web")
-            top_k: Max results (default 10)
+            top_k: Max results (default 3)
+            detail: "brief" (default, no schema) | "schema" (top hit only) |
+                "all" (every hit, legacy format)
         """
         results = self._index.search(query, top_k)
         allowed = self._get_allowed_servers()
@@ -1260,21 +1298,46 @@ class MetaTools:
             if srv not in servers:
                 desc = self._get_server_description(srv)
                 servers[srv] = desc if isinstance(desc, str) else ""
-        # ② 応答肥大の主因は inputSchema の説明文・深いネスト。検索結果でも
-        # 「名前 / 型 / 必須」だけ残し、完全な仕様は get_schema に逃がす。
-        # 元 dict を変更しない（{**r} で新規 dict、schema は圧縮コピー）。
-        compact_results = [
-            {**r, "inputSchema": _compact_input_schema(r.get("inputSchema"))}
-            for r in results
-        ]
+        # 応答肥大の主因は inputSchema。MCP 公式の 3 層に合わせ、既定 (brief) は
+        # スキーマを省いて get_schema に逃がす。detail で段階を選べる:
+        #   brief  — 全件 brief（inputSchema なし）。既定。
+        #   schema — 上位1件のみ圧縮 inputSchema、残りは brief。
+        #   all    — 全件に圧縮 inputSchema。従来とバイト単位で同一（旧 note を維持）。
+        if detail == "all":
+            payload = [
+                {**r, "inputSchema": _compact_input_schema(r.get("inputSchema"))}
+                for r in results
+            ]
+            note = _SEARCH_NOTE_LEGACY
+        else:
+            payload = [
+                {
+                    **self._brief_result(r),
+                    **({"inputSchema": _compact_input_schema(r.get("inputSchema"))}
+                       if detail == "schema" and i == 0 else {}),
+                }
+                for i, r in enumerate(results)
+            ]
+            note = _SEARCH_NOTE
         return json.dumps(
-            {
-                "results": compact_results,
-                "servers": servers,
-                "note": "inputSchema は要約です。完全な仕様は get_schema(server, tool_name) で取得してください。",
-            },
+            {"results": payload, "servers": servers, "note": note},
             ensure_ascii=False,
         )
+
+    def _brief_result(self, r: dict) -> dict:
+        """検索結果1件を brief 形（inputSchema なし）に整える。
+
+        search_desc は index の tool_search_desc。未投入なら空文字を返す
+        （description / tags と同じく常にキーを持たせる既存の流儀に合わせる）。
+        """
+        return {
+            "server": r["server"],
+            "name": r["name"],
+            "description": r.get("description", ""),
+            "search_desc": self._index.get_search_desc(r["server"], r["name"]),
+            "tags": r.get("tags", []),
+            "score": r.get("score"),
+        }
 
     async def execute_tool(
         self,
@@ -1372,12 +1435,14 @@ class MetaTools:
             )
         return await self._execute_tool(server, tool_name, arguments)
 
-    async def get_schema(self, server: str, tool_name: str) -> str:
-        """search_tools が見つけたツールの完全な仕様を返す。
+    async def get_schema(
+        self, server: str, tool_name: str, compact: bool = False
+    ) -> str:
+        """search_tools が見つけたツールの仕様を返す。
 
-        search_tools の inputSchema は「名前 / 型 / 必須」の要約なので、実行前に
-        完全なパラメータ仕様が必要な時に呼ぶ。description は表示用に切り詰めない
-        full_description（無ければ description）を使う。
+        既定 (compact=False) は完全な inputSchema。compact=True では search_tools
+        の schema 応答と同じ圧縮形（名前 / 型 / 必須）を返す。description は表示用に
+        切り詰めない full_description（無ければ description）を使う。
         """
         not_found = json.dumps(
             {
@@ -1397,6 +1462,12 @@ class MetaTools:
         schema = self._index.get_schema(resolved, tool_name)
         if schema is None:
             return not_found
+        if compact:
+            # search_tools と同じ圧縮形。元 dict / 索引は変更しない（新規 dict）。
+            schema = {
+                **schema,
+                "inputSchema": _compact_input_schema(schema.get("inputSchema")),
+            }
         return json.dumps(schema, ensure_ascii=False)
 
 
@@ -1498,6 +1569,7 @@ async def create_meta_app(
                             "name": t.name,
                             "description": display_desc,
                             "index_text": index_text,
+                            "search_desc": tool_desc.strip(),
                             "full_description": raw_desc,
                             "tags": list(proxy_manager.server_tags(server_name)),
                             "inputSchema": getattr(t, "parameters", {}),
@@ -1552,17 +1624,25 @@ async def create_meta_app(
 
     # Register meta tools via FastMCP tool decorator
     @mcp.tool()
-    async def search_tools(query: str, top_k: int = 10) -> str:
+    async def search_tools(
+        query: str, top_k: int = _DEFAULT_TOP_K, detail: str = "brief"
+    ) -> str:
         """Search upstream tools. Always call FIRST before execute_tool.
 
         Include English keywords alongside your own language in the same query
         (e.g. "室温 temperature") to match tools described in English.
 
+        既定 (detail="brief") は inputSchema を返しません（name / server /
+        description / search_desc / tags / score のみ）。スキーマが必要なら
+        detail="schema"（上位1件のみ）か get_schema(server, tool_name) を呼んでください。
+
         Args:
             query: What you want to do (e.g. "read files", "search web")
-            top_k: Max results (default 10)
+            top_k: Max results (default 3)
+            detail: "brief" (default, no schema) | "schema" (top hit only) |
+                "all" (every hit, legacy format)
         """
-        return await meta.search_tools(query, top_k)
+        return await meta.search_tools(query, top_k, detail)
 
     @mcp.tool()
     async def execute_tool(
@@ -1583,16 +1663,18 @@ async def create_meta_app(
         return await meta.execute_tool(server, tool_name, arguments)
 
     @mcp.tool()
-    async def get_schema(server: str, tool_name: str) -> str:
-        """Get the full spec (description + inputSchema) of a tool found by search_tools.
+    async def get_schema(server: str, tool_name: str, compact: bool = False) -> str:
+        """Get the spec (description + inputSchema) of a tool found by search_tools.
 
-        search_tools の inputSchema は要約です。実行前に完全な仕様が必要ならこれを呼ぶ。
+        既定 (compact=False) は完全な inputSchema。compact=True は search_tools の
+        schema 応答と同じ圧縮形（名前 / 型 / 必須）を返す。
 
         Args:
             server: From search_tools results
             tool_name: From search_tools results
+            compact: True で圧縮 inputSchema（既定 False は完全な仕様）
         """
-        return await meta.get_schema(server, tool_name)
+        return await meta.get_schema(server, tool_name, compact)
 
     # 登録直後の素の description を捕捉（以降の焼き込みはここから再構成）。
     # FastMCP 4.0.2: get_tool() は local provider の stored instance を返し、
