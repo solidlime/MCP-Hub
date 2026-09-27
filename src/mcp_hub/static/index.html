@@ -944,6 +944,26 @@
             margin-top: 6px;
             flex-wrap: wrap;
         }
+        /* ツール表ヘッダー右寄せ: 一括生成ボタン＋進捗 */
+        .bulk-gen-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-left: auto;
+            font-weight: 500;
+        }
+        .bulk-gen-status {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            white-space: nowrap;
+        }
+        .bulk-gen-errors {
+            margin: 0 0 8px;
+            font-size: 0.72rem;
+            color: var(--accent-red);
+        }
+        .bulk-gen-errors div { line-height: 1.5; word-break: break-word; }
         .tool-actions-row {
             display: flex;
             align-items: center;
@@ -1365,6 +1385,7 @@
         .toast.success { border-left: 3px solid var(--accent-green); }
         .toast.error { border-left: 3px solid var(--accent-red); }
         .toast.info { border-left: 3px solid var(--accent-blue); }
+        .toast.warning { border-left: 3px solid var(--accent-amber); }
         .toast-icon {
             font-size: 1rem;
             flex-shrink: 0;
@@ -1373,6 +1394,7 @@
         .toast.success .toast-icon { color: var(--accent-green); }
         .toast.error .toast-icon { color: var(--accent-red); }
         .toast.info .toast-icon { color: var(--accent-blue); }
+        .toast.warning .toast-icon { color: var(--accent-amber); }
         .toast-message { flex: 1; }
         .toast-close {
             background: none;
@@ -2404,6 +2426,10 @@
         let embeddingModel = null; // current embedding model name
         let fullInfoTools = []; // full_info_tools エントリ（"{server}_{tool}" 形式）
         let llmConfigured = false; // LLM の api_key が設定済みか（未設定なら ✨ 生成は出さない）
+        // ツール説明の一括生成（逐次実行・キャンセル可）。表示中サーバーの再描画でも消えないよう
+        // 状態はここに保持し、レンダラが読み出す。bulkGenResult は直近の結果（失敗理由の表示用）。
+        let bulkGenState = null; // { server, running, total, index, ok, failed: [], cancelled }
+        const bulkGenResult = new Map(); // serverName -> { total, ok, failed: [{tool, message}], cancelled }
         let selectedServer = null; // マスター・ディテールで選択中のサーバー名
         let serverSearchQuery = ''; // 左レール: 名前・説明・タグの絞り込み文字列
         let unsetOnly = false;      // 左レール: 未設定ツールを持つサーバーのみ表示
@@ -2609,7 +2635,9 @@
                         const err = await response.json();
                         msg = err.detail || msg;
                     } catch (_) {}
-                    throw new Error(msg);
+                    const error = new Error(msg);
+                    error.status = response.status; // 一括生成の失敗理由表示（HTTP ステータス）に使う
+                    throw error;
                 }
                 return response.json();
             },
@@ -3030,6 +3058,137 @@
             }
         }
 
+        // ---- ツール説明の一括生成（逐次実行・キャンセル可） ----
+        function bulkGenSummary(r) {
+            if (r.cancelled) return `中止しました（${r.index}/${r.total} 実行・${r.ok}件生成）`;
+            if (r.failed.length) return `${r.total}件中${r.ok}件を生成（${r.failed.length}件失敗）`;
+            return `${r.total}件中${r.ok}件を生成しました`;
+        }
+
+        // 失敗理由（HTTP ステータス＋メッセージ）はコンソールではなく UI に出す
+        function bulkGenErrorsHtml(server) {
+            const r = bulkGenResult.get(server.name);
+            if (!r || !r.failed.length) return '';
+            return r.failed.map(f => `<div>✕ ${escapeHtml(f.tool)}: ${escapeHtml(f.message)}</div>`).join('');
+        }
+
+        // ヘッダーの一括生成ボタン＋進捗。状態は bulkGenState に置き、
+        // ツール表が再描画されてもここから復元する（進捗が消えない）。
+        function bulkGenControlsHtml(server) {
+            const tools = server.tools || [];
+            if (!tools.length || !llmConfigured) return '';
+            const running = !!(bulkGenState && bulkGenState.running);
+            const runningHere = running && bulkGenState.server === server.name;
+            const unsetCount = tools.filter(t => !toolDescValue(server, t.name).trim()).length;
+            let status = '';
+            if (runningHere) {
+                status = `<span class="bulk-gen-status" role="status" aria-live="polite">生成中… ${bulkGenState.index}/${bulkGenState.total}</span>`;
+            } else if (running) {
+                status = `<span class="bulk-gen-status">生成中（${escapeHtml(bulkGenState.server)}）…</span>`;
+            } else if (bulkGenResult.has(server.name)) {
+                status = `<span class="bulk-gen-status">${escapeHtml(bulkGenSummary(bulkGenResult.get(server.name)))}</span>`;
+            }
+            const cancel = running
+                ? `<button class="btn btn-sm btn-secondary" data-action="gen-bulk-cancel" data-server="${escapeAttr(bulkGenState.server)}">キャンセル</button>`
+                : '';
+            return `
+                <button class="btn btn-sm btn-ai" data-action="gen-bulk-unset" data-server="${escapeAttr(server.name)}"
+                        ${(!running && unsetCount > 0) ? '' : 'disabled'}
+                        aria-label="検索用の説明が未設定の ${unsetCount} ツールをまとめて生成">✨ 未設定を生成（${unsetCount}件）</button>
+                <button class="btn btn-sm btn-ai" data-action="gen-bulk-regen" data-server="${escapeAttr(server.name)}"
+                        ${running ? 'disabled' : ''}
+                        aria-label="全 ${tools.length} ツールの検索用の説明を再生成">✨ すべて再生成</button>
+                ${cancel}
+                ${status}`;
+        }
+
+        // 表示中ペインのヘッダーだけを差し替える（textarea を触らない＝入力中でも壊れない）
+        function refreshBulkGenUI() {
+            const pane = document.getElementById('serverDetail');
+            if (!pane) return;
+            const server = servers.find(s => s.name === selectedServer);
+            if (!server) return;
+            const row = pane.querySelector('[data-bulk-gen]');
+            if (row) row.innerHTML = bulkGenControlsHtml(server);
+            const errBox = pane.querySelector('[data-bulk-errors]');
+            if (errBox) {
+                const html = bulkGenErrorsHtml(server);
+                errBox.innerHTML = html;
+                errBox.style.display = html ? '' : 'none';
+            }
+        }
+
+        // 1件分の提案を textarea と draft に流し込む（保存は既存の自動保存に乗せる）
+        function applyToolDescText(server, toolName, text) {
+            descDraft.set(toolDescKey(server.name, toolName), text);
+            const input = document.querySelector(
+                `#serverDetail .tool-desc-input[data-server="${CSS.escape(server.name)}"][data-tool="${CSS.escape(toolName)}"]`);
+            if (input) {
+                input.value = text;
+                updateDescriptionCounter(input);
+                syncToolDescField(input, text, '提案（未保存）');
+            }
+            scheduleAutoSave(server.name);
+        }
+
+        // mode='unset': 説明が空のツールだけ / mode='regen': 全ツール（確認ダイアログあり）
+        async function runBulkGenerate(serverName, mode) {
+            if (bulkGenState && bulkGenState.running) return;
+            const server = servers.find(s => s.name === serverName);
+            if (!server) return;
+            const tools = server.tools || [];
+            const targets = tools.filter(t => mode === 'regen' || !toolDescValue(server, t.name).trim());
+            if (!targets.length) {
+                showToast('未設定のツールはありません', 'info');
+                return;
+            }
+            if (mode === 'regen') {
+                const existing = targets.filter(t => toolDescValue(server, t.name).trim()).length;
+                if (!confirm(`既存の説明 ${existing}件を上書きします。よろしい？`)) return;
+            }
+            // 生成中は debounce を止め、完了時に 1 回の PATCH へまとめる
+            const pending = autoSaveTimers.get(serverName);
+            if (pending) { clearTimeout(pending); autoSaveTimers.delete(serverName); }
+            bulkGenResult.delete(serverName);
+            bulkGenState = { server: serverName, running: true, total: targets.length, index: 0, ok: 0, failed: [], cancelled: false };
+            refreshBulkGenUI();
+            try {
+                for (const tool of targets) {
+                    if (bulkGenState.cancelled) break;
+                    try {
+                        const data = await API.generateLLM({ kind: 'tool_search_desc', server: serverName, tool_name: tool.name });
+                        const text = ((data && data.text) || '').trim();
+                        if (!text) throw new Error('提案が空でした');
+                        applyToolDescText(server, tool.name, text);
+                        bulkGenState.ok += 1;
+                    } catch (error) {
+                        // 1件失敗しても継続し、理由は最後に UI へ列挙する
+                        const message = error.status ? `HTTP ${error.status} — ${error.message}` : error.message;
+                        bulkGenState.failed.push({ tool: tool.name, message });
+                    }
+                    bulkGenState.index += 1;
+                    refreshBulkGenUI();
+                }
+            } finally {
+                const result = {
+                    total: bulkGenState.total, ok: bulkGenState.ok, failed: bulkGenState.failed,
+                    cancelled: bulkGenState.cancelled, index: bulkGenState.index,
+                };
+                bulkGenState.running = false;
+                bulkGenResult.set(serverName, result);
+                refreshBulkGenUI();
+                // 保留していた自動保存をここで 1 回にまとめて送る
+                if (autoSaveDirty.has(serverName)) scheduleAutoSave(serverName);
+                if (result.cancelled) {
+                    showToast(`生成を中止しました（${result.index}/${result.total} 実行・${result.ok}件生成）`, 'info');
+                } else if (result.failed.length) {
+                    showToast(`${result.total}件中${result.ok}件を生成（${result.failed.length}件失敗）`, 'warning');
+                } else {
+                    showToast(`${result.total}件中${result.ok}件を生成しました（自動保存します）`, 'success');
+                }
+            }
+        }
+
         // ---- 左レールの1行（サーバー一覧） ----
         function renderServerListItem(server) {
             const status = getServerStatus(server);
@@ -3143,7 +3302,9 @@
                     <div class="md-block-label">
                         ツール（編集主体＝この1文ずつ）
                         <span class="field-note" style="margin:0"><span data-desc-count>説明 ${setCount}/${tools.length} 設定済</span> ・ 目安: 1文・80字（超過は保存可だが順位が動く）</span>
+                        <span class="bulk-gen-row" data-bulk-gen>${bulkGenControlsHtml(server)}</span>
                     </div>
+                    <div class="bulk-gen-errors" data-bulk-errors${bulkGenErrorsHtml(server) ? '' : ' style="display:none"'}>${bulkGenErrorsHtml(server)}</div>
                     ${renderToolsSection(server)}
                     <div class="connection-section" id="conn-${escapeAttr(server.name)}" style="display: none;">
                         <div class="conn-label">接続情報</div>
@@ -3766,6 +3927,7 @@
             autoSaveDirty.add(serverName);
             saveStatus.set(serverName, { phase: 'dirty' });
             updateSaveBar(serverName);
+            if (bulkGenState && bulkGenState.running) return; // 一括生成中は保留（完了時に1回で送る）
             const existing = autoSaveTimers.get(serverName);
             if (existing) clearTimeout(existing);
             autoSaveTimers.set(serverName, setTimeout(() => {
@@ -3888,6 +4050,15 @@
             } else if (action === 'gen-tool-search-desc') {
                 e.stopPropagation();
                 generateToolSearchDesc(el.dataset.server, el.dataset.tool, el);
+            } else if (action === 'gen-bulk-unset' || action === 'gen-bulk-regen') {
+                e.stopPropagation();
+                runBulkGenerate(el.dataset.server, action === 'gen-bulk-regen' ? 'regen' : 'unset');
+            } else if (action === 'gen-bulk-cancel') {
+                e.stopPropagation();
+                if (bulkGenState && bulkGenState.running) {
+                    bulkGenState.cancelled = true; // 実行中の1件は完了させてから止まる
+                    refreshBulkGenUI();
+                }
             } else if (action === 'retry-save') {
                 e.stopPropagation();
                 retrySave(el.dataset.server);
@@ -4531,6 +4702,7 @@
             const icons = {
                 success: '✓',
                 error: '✕',
+                warning: '⚠',
                 info: 'ℹ'
             };
 
