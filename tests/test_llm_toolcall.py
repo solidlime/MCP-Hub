@@ -103,7 +103,8 @@ async def _hub_with_echo(name: str = "stdio-echo"):
     pm = ProxyManager(mcp, registry)
     meta_app = await create_meta_app(pm)
     await meta_app.rebuild_index()
-    pm.on_change(lambda: meta_app.rebuild_index())
+    # ProxyManager._notify_change は cb(name, event, detail) の3引数で呼ぶ
+    pm.on_change(lambda name, event, detail=None: meta_app.rebuild_index())
 
     await pm.register_server(name, {"command": sys.executable, "args": [_SCRIPT]})
     for _ in range(60):

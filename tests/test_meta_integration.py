@@ -7,6 +7,7 @@ Uses a mock proxy manager to avoid needing real MCP server connections.
 
 import json
 import logging
+import re
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -742,8 +743,13 @@ class TestCatalogBaking:
         """tools/list の search_tools description にカタログが乗る。"""
         parsed = _post_tools_list(client)
         st = next(t for t in parsed["result"]["tools"] if t["name"] == "search_tools")
-        assert "Registered servers:" in st["description"]
-        assert "- filesystem: tools: file_read, file_write" in st["description"]
+        assert (
+            'Registered servers (4). Add an English keyword alongside your query '
+            '(e.g. "室温 temperature") to match tools described in English:'
+        ) in st["description"]
+        # 「絞り込み(narrow)」は実測と逆（BM25 は語の和）なので再発させない
+        assert "narrow" not in st["description"]
+        assert "- filesystem (2 tools): file_read, file_write" in st["description"]
 
     async def test_description_mutation_reaches_wire(self, meta_app):
         """description を設定 → rebuild で search_tools.description に反映される。"""
@@ -751,8 +757,11 @@ class TestCatalogBaking:
         pm.server_description.side_effect = lambda name: f"{name} server"
         await meta_app.state.meta_app.rebuild_index()
         desc = await self._desc(meta_app.state.meta_app)
-        assert "Registered servers:" in desc
-        assert "- filesystem: filesystem server" in desc
+        assert (
+            'Registered servers (4). Add an English keyword alongside your query '
+            '(e.g. "室温 temperature") to match tools described in English:'
+        ) in desc
+        assert "- filesystem (2 tools): filesystem server" in desc
 
     async def test_catalog_empty(self):
         """proxy 0 件: description は base のみ、search_tools 自体は呼べる。"""
@@ -772,7 +781,7 @@ class TestCatalogBaking:
         pm.server_description.side_effect = lambda name: ""
         await meta_app.state.meta_app.rebuild_index()
         desc = await self._desc(meta_app.state.meta_app)
-        assert "- filesystem: tools: file_read, file_write" in desc
+        assert "- filesystem (2 tools): file_read, file_write" in desc
 
     async def test_catalog_reflects_new_server(self, meta_app):
         """rebuild 後に新しいサーバーがカタログへ反映される。"""
@@ -782,10 +791,14 @@ class TestCatalogBaking:
         )
         await meta_app.state.meta_app.rebuild_index()
         desc = await self._desc(meta_app.state.meta_app)
-        assert "- fresh-server: tools: fresh_tool" in desc
+        assert "- fresh-server (1 tool): fresh_tool" in desc
 
     async def test_catalog_length_cap(self, meta_app):
-        """多数サーバーでも description は base + 1200 字 + 余白に収まる。"""
+        """多数サーバーでも description は base + 1200 字 + 余白に収まる。
+
+        上限は「ヘッダーを除いたカタログ本体」に対して効いている必要がある。
+        description 全体だけを見ると cap を殺しても余白に隠れて通ってしまう。
+        """
         pm = meta_app.state.proxy_manager
         for i in range(50):
             pm._proxies[f"srv{i:03d}"] = _build_mock_proxy(
@@ -795,7 +808,26 @@ class TestCatalogBaking:
         base = m.base_descriptions["search_tools"]
         await m.rebuild_index()
         desc = await self._desc(m)
-        assert len(desc) <= len(base) + 1200 + 80
+        assert len(desc) <= len(base) + 1200 + 200
+        # ヘッダー（件数＋指南）を切り落とし、本体そのものを _CATALOG_MAX_CHARS
+        # と比較する（fixture 4 + 追加 50 = 54 サーバー。本体は 1200 字を超える）。
+        n = len(pm._proxies)
+        header = (
+            f"\n\nRegistered servers ({n}). Add an English keyword alongside your "
+            'query (e.g. "室温 temperature") to match tools described in English:\n'
+        )
+        assert desc.startswith(base + header)
+        catalog = desc[len(base) + len(header):]
+        # n=54 で本体は 1200 を超えるので、打ち切りマーカーが出ている必要がある。
+        # マーカーを除いた本体は打ち切り判定（len(out)+len(line)+1 > 1200）に
+        # より 1200 以下。cap を殺す変異（``if False:`` / 上限拡大）では
+        # マーカーが消えるか本体が 1200 を超えるので FAILED になる。
+        assert re.search(r"\.\.\. and \d+ more servers$", catalog), catalog[-80:]
+        body = catalog.rsplit("\n... and ", 1)[0]
+        assert len(body) <= 1200, len(body)
+        # 打ち切られたサーバーがあることは件数と突き合わせて確認できる
+        head_count = catalog.count("\n- ") + (1 if catalog.startswith("- ") else 0)
+        assert head_count < n
 
     async def test_catalog_idempotent(self, meta_app):
         """2 回 rebuild しても base description が複製されない。"""
@@ -807,6 +839,83 @@ class TestCatalogBaking:
         second = await self._desc(m)
         assert first == second
         assert second.count(base) == 1
+
+
+class TestHubSelfDescription:
+    """ハブ自身の自己紹介（initialize.instructions）とサーバー名。
+
+    初見のモデルが「なぜ3ツールしか無いのか」「上流ツールはどう探すのか」を
+    initialize で把握できるようにする。上流サーバー一覧本体は search_tools の
+    description にあり、instructions には書かない（二重課金防止）。
+    """
+
+    async def test_server_name_is_mcp_hub(self, meta_app):
+        """内部用語 "Meta" を外し "MCP Hub" にする。"""
+        assert meta_app.state.meta_app.mcp.name == "MCP Hub"
+
+    async def test_instructions_present_and_mentions_meta_tools(self, meta_app):
+        instr = meta_app.state.meta_app.mcp.instructions
+        assert instr
+        for token in ("MCP Hub", "search_tools", "get_schema", "execute_tool"):
+            assert token in instr
+        # サーバー一覧は search_tools 側。instructions には載せない。
+        assert "Registered servers" not in instr
+
+    async def test_instructions_server_count_updates_on_rebuild(self, meta_app):
+        """fixture は 4 サーバー。rebuild で数が更新される（固定焼き込みしない）。"""
+        m = meta_app.state.meta_app
+        await m.rebuild_index()
+        assert "in front of 4 upstream MCP servers" in m.mcp.instructions
+        pm = meta_app.state.proxy_manager
+        pm._proxies["fresh-server"] = _build_mock_proxy(
+            [SimpleNamespace(name="fresh_tool", description="", parameters={})]
+        )
+        await m.rebuild_index()
+        assert "in front of 5 upstream MCP servers" in m.mcp.instructions
+
+    async def test_instructions_reach_wire(self, client):
+        """initialize 応答に serverInfo.name と instructions が乗る。"""
+        r = client.post(
+            "/mcp-meta/",
+            json={
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "probe", "version": "0"},
+                },
+                "id": "init",
+            },
+            headers=_META_HEADERS,
+        )
+        assert r.status_code == 200
+        result = parse_sse(r)["result"]
+        assert result["serverInfo"]["name"] == "MCP Hub"
+        assert "search_tools" in result["instructions"]
+
+    async def test_instructions_present_before_first_rebuild(self):
+        """rebuild 前（0サーバー期）でも instructions が空でない。
+
+        create_meta_app の ``instructions=_build_instructions(0)`` は、
+        startup の rebuild（main.py）が走るまでの窓を守る保険。ここを拘束しないと
+        丸ごと外しても全テストが緑のままになる。
+        """
+        pm = _build_mock_proxy_manager()
+        app = await create_meta_app(pm)
+        instr = app.mcp.instructions
+        assert instr
+        assert "MCP Hub" in instr
+        # サーバー0件相当の文面（数を焼き込まない既定形）
+        assert "in front of upstream MCP servers" in instr
+        assert "in front of 0 upstream" not in instr
+
+    async def test_instructions_idempotent(self, meta_app):
+        m = meta_app.state.meta_app
+        await m.rebuild_index()
+        first = m.mcp.instructions
+        await m.rebuild_index()
+        assert m.mcp.instructions == first
 
 
 # ── ②④ search_tools 圧縮 / get_schema（設計 02-04 §5）────────────────────────

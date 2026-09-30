@@ -114,27 +114,29 @@ def _build_catalog(server_entries: list[dict]) -> str:
     """サーバー一覧の一行カタログを組む（search_tools の導線用）。
 
     各 entry は {"server": str, "description": str, "tools": list[str]}。
-    description があればそれを使い、無ければツール名（ソート・先頭8件、
-    超過は +N more）にフォールバックする。サーバー名 asc。ツール 0 件は
-    "(no tools listed)"。行単位で積み _CATALOG_MAX_CHARS を超えたら
-    "... and N more servers" で打ち切る。
+    各行はツール数付き（``- <name> (<N> tools): ...``）。description が
+    あればそれを使い、無ければツール名（ソート・先頭8件、超過は +N more）に
+    フォールバックする。サーバー名 asc。ツール 0 件は "(no tools listed)"。
+    行単位で積み _CATALOG_MAX_CHARS を超えたら "... and N more servers" で打ち切る。
     """
     lines: list[str] = []
     for entry in sorted(server_entries, key=lambda e: e["server"]):
         name = entry["server"]
         desc = entry.get("description") or ""
+        tools = sorted(entry.get("tools") or [])
+        count = len(tools)
+        noun = "tool" if count == 1 else "tools"
+        prefix = f"- {name} ({count} {noun}): "
         if desc:
-            line = f"- {name}: {desc}"
+            line = prefix + desc
+        elif not tools:
+            line = prefix + "(no tools listed)"
         else:
-            tools = sorted(entry.get("tools") or [])
-            if not tools:
-                line = f"- {name}: (no tools listed)"
-            else:
-                listed = ", ".join(tools[:_MAX_CATALOG_TOOL_NAMES])
-                extra = len(tools) - _MAX_CATALOG_TOOL_NAMES
-                if extra > 0:
-                    listed += f" +{extra} more"
-                line = f"- {name}: tools: {listed}"
+            listed = ", ".join(tools[:_MAX_CATALOG_TOOL_NAMES])
+            extra = len(tools) - _MAX_CATALOG_TOOL_NAMES
+            if extra > 0:
+                listed += f" +{extra} more"
+            line = prefix + listed
         lines.append(line[:_CATALOG_LINE_MAX_CHARS])
 
     out = ""
@@ -144,6 +146,26 @@ def _build_catalog(server_entries: list[dict]) -> str:
             break
         out += line + "\n"
     return out.rstrip("\n")
+
+
+def _build_instructions(server_count: int) -> str:
+    """ハブ自身の自己紹介（MCP initialize の ``instructions``）。
+
+    rebuild のたびに呼び、接続サーバー数を含めて更新する（数を固定で焼き込むと
+    サーバー増減で古い値を配り続けるため）。0 の時は数を省く。上流サーバーの
+    一覧本体は search_tools の description にあり、ここには書かない
+    （毎セッション二重にトークンを払わない）。
+    """
+    n = f"{server_count} " if server_count else ""
+    return (
+        f"MCP Hub — a gateway in front of {n}upstream MCP servers, exposing them "
+        "through three meta-tools: search_tools (find), get_schema (inspect), "
+        "execute_tool (run).\n\n"
+        "Upstream tools are NOT listed here. Find them with search_tools, then "
+        "inspect with get_schema before calling execute_tool. The registered "
+        "server list is shown in the search_tools description."
+    )
+
 
 _SUPPORTED_MODELS_CACHE: dict[str, str] | None = None
 
@@ -1242,7 +1264,9 @@ class MetaTools:
     async def search_tools(
         self, query: str, top_k: int = _DEFAULT_TOP_K, detail: str = "brief"
     ) -> str:
-        """Search upstream tools. Always call FIRST before execute_tool.
+        """MCP Hub gateway: entry point — upstream tools are NOT listed directly.
+        Call search_tools FIRST to find a tool, then get_schema to inspect it,
+        then execute_tool to run it.
 
         既定 (detail="brief") は inputSchema を省き、name / server / description /
         search_desc / score のみ返す（MCP 公式 Layer1）。スキーマが要る時は
@@ -1496,19 +1520,38 @@ async def create_meta_app(
     use_embeddings: bool = True,
 ) -> MetaApp:
     """Create a MetaApp with meta-tools."""
-    mcp = FastMCP("MCP Hub Meta")
+    mcp = FastMCP("MCP Hub", instructions=_build_instructions(0))
     index = ToolIndex(embedding_model=embedding_model, use_embeddings=use_embeddings)
     base_descriptions: dict[str, str] = {}
 
     # search_tools の description を毎回 base から再構成する（idempotent）。
-    # catalog が空でも base のみを書き戻す。
-    async def _apply_catalog(catalog: str) -> None:
+    # catalog が空でも base のみを書き戻す。instructions は接続サーバー数を
+    # 含めて毎 rebuild 更新する（数を固定で焼き込まない）。
+    async def _apply_catalog(catalog: str, server_count: int) -> None:
+        # FastMCP 4.0.2 の ``instructions`` は getter/setter 付き property で
+        # 公開API（``self._mcp_server.instructions`` を読み書きする）。get_tool()
+        # 同様 frozen ではない。``fastmcp>=4.0,<5.0``（pyproject.toml）の範囲で妥当。
+        mcp.instructions = _build_instructions(server_count)
         tool = await mcp.get_tool("search_tools")
         if tool is None:
             return
         base_desc = base_descriptions.get("search_tools", tool.description or "")
         if catalog:
-            tool.description = base_desc + "\n\nRegistered servers:\n" + catalog
+            # ヘッダーの使い方指南は実測に合わせる。0件だったクエリに英語キーワードを
+            # 足すと救済される（例: "室温" 0件 → "室温 temperature" 5件）のと、
+            # 英語で書かれた索引のツールへ到達できるのが確認済み。件数は増える方向
+            # （BM25 は語の和＝OR。top_k=50 実測: 室温 3→7, 天気 21→28, ノート 42→49）
+            # なので「絞り込み(narrow)」とは書かない。0件時のヒント文
+            # （"Try adding English keywords to the same query"）と同じ誘導に揃える。
+            # 「サーバー名で絞れる」はライブ実測で 11/16 しか成立せず（ハイフン/
+            # 数字/アンダースコア入りの名前で崩れる）、未検証なので書かない。
+            tool.description = (
+                base_desc
+                + f"\n\nRegistered servers ({server_count}). Add an English keyword "
+                'alongside your query (e.g. "室温 temperature") to match tools '
+                "described in English:\n"
+                + catalog
+            )
         else:
             tool.description = base_desc
 
@@ -1594,7 +1637,7 @@ async def create_meta_app(
                     "tools": names,
                 }
             )
-        await _apply_catalog(_build_catalog(entries))
+        await _apply_catalog(_build_catalog(entries), len(entries))
         return failed
 
     # Live-proxy accessor for MetaTools (execution bypasses the index).
@@ -1627,7 +1670,9 @@ async def create_meta_app(
     async def search_tools(
         query: str, top_k: int = _DEFAULT_TOP_K, detail: str = "brief"
     ) -> str:
-        """Search upstream tools. Always call FIRST before execute_tool.
+        """MCP Hub gateway: this server is the entry point — upstream tools are
+        NOT listed directly. Call search_tools FIRST to find a tool, then
+        get_schema to inspect it, then execute_tool to run it.
 
         Include English keywords alongside your own language in the same query
         (e.g. "室温 temperature") to match tools described in English.

@@ -35,7 +35,8 @@ async def _hub_with_echo(name: str = "stdio-echo"):
     pm = ProxyManager(mcp, registry)
     meta_app = await create_meta_app(pm)
     await meta_app.rebuild_index()
-    pm.on_change(lambda: meta_app.rebuild_index())
+    # ProxyManager._notify_change は cb(name, event, detail) の3引数で呼ぶ
+    pm.on_change(lambda name, event, detail=None: meta_app.rebuild_index())
 
     await pm.register_server(name, {"command": sys.executable, "args": [_SCRIPT]})
     for _ in range(60):
@@ -77,7 +78,11 @@ class TestLLMAgentFlow:
         tool = await meta_app.mcp.get_tool("search_tools")
         assert tool is not None
         desc = tool.description or ""
-        assert "Registered servers:" in desc
+        assert (
+            'Registered servers (1). Add an English keyword alongside your query '
+            '(e.g. "室温 temperature") to match tools described in English:'
+        ) in desc
+        assert "narrow" not in desc
         assert "echo-srv" in desc
 
         # Verify via index directly too
