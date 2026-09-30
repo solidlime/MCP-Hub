@@ -28,6 +28,7 @@ from fastmcp.tools.base import Tool
 
 from mcp_hub.meta_provider import (
     CATALOG_MARKER,
+    _TOOL_FORBIDDEN,
     _TOOL_NOT_FOUND,
     MetaTools,
     ToolIndex,
@@ -285,20 +286,47 @@ class TestSearchToolsServerArg:
         out = await meta.search_tools("search tool", top_k=5, server="ghost")
         assert out == _TOOL_NOT_FOUND
 
-    async def test_tag_out_of_range_server_is_not_found(self):
-        """タグ範囲外は「存在するが隠している」を漏らさず not found（get_schema と同一）。"""
+    async def test_tag_out_of_range_is_forbidden(self):
+        """タグ範囲外の 3 経路は権限なしの統一応答（not found と区別）。"""
         meta, _ = await _search_meta(
             {"alpha": _searchable(2, "a_"), "secret": _searchable(2, "s_")},
             tags={"alpha": ["dev"], "secret": ["nope"]},
         )
         request_tags.set(["dev"])
         try:
-            out = await meta.search_tools("search tool", top_k=5, server="secret")
+            search_out = await meta.search_tools("search tool", top_k=5, server="secret")
+            schema_out = await meta.get_schema("secret", "s_tool_0")
+            exec_out = await meta.execute_tool("secret", "s_tool_0", {})
         finally:
             request_tags.set(None)
-        assert out == _TOOL_NOT_FOUND
+        assert search_out == _TOOL_FORBIDDEN
+        assert schema_out == _TOOL_FORBIDDEN
+        assert exec_out == _TOOL_FORBIDDEN
+        assert _TOOL_FORBIDDEN != _TOOL_NOT_FOUND
+        for out in (search_out, schema_out, exec_out):
+            assert "server_tags" not in json.loads(out)
         # 範囲内だが 0 件のヒント（サーバー名 + 件数）とは別物であること
-        assert "このサーバーのツール" not in out
+        assert "このサーバーのツール" not in search_out
+
+    async def test_unknown_server_stays_not_found(self):
+        """不存在サーバーは _TOOL_FORBIDDEN ではなく _TOOL_NOT_FOUND のまま。"""
+        meta, _ = await _search_meta(
+            {"alpha": _searchable(2, "a_")}, tags={"alpha": ["dev"]}
+        )
+        # タグ無しは従来どおり。タグ付きでも index 不在は存在ゲート先行。
+        assert (
+            await meta.search_tools("search tool", top_k=5, server="ghost")
+            == _TOOL_NOT_FOUND
+        )
+        assert await meta.get_schema("ghost", "x_tool") == _TOOL_NOT_FOUND
+        request_tags.set(["dev"])
+        try:
+            assert (
+                await meta.search_tools("search tool", top_k=5, server="ghost")
+                == _TOOL_NOT_FOUND
+            )
+        finally:
+            request_tags.set(None)
 
     async def test_searches_deeper_than_top_k(self):
         """top_k より深く引いてから絞る（他サーバーが上位を占有しても見つかる）。"""

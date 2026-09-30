@@ -682,9 +682,12 @@ class TestServerResolutionErrors:
         assert len(avail) == 11
         assert avail[-1] == "... and 9 more"
 
-    def test_tag_mismatch_exposes_server_tags(self, client):
-        """Connected server whose tags miss the filter → tag-filter error that
-        includes the server's real tags so the mismatch is debuggable."""
+    def test_tag_mismatch_is_forbidden_without_exposing_server_tags(self, client):
+        """Connected server whose tags miss the filter → 権限なしの統一応答。
+
+        旧契約は実タグ（server_tags）をデバッグ用に返していたが、タグ範囲外は
+        存在を漏らさない _TOOL_FORBIDDEN に統一された。
+        """
         pm = client.app.state.proxy_manager
         pm.server_tags.side_effect = lambda name: {
             "brave-search": ["search"],
@@ -701,8 +704,8 @@ class TestServerResolutionErrors:
         finally:
             request_tags.set(None)
         data = json.loads(_get_text_content(parsed))
-        assert "tag filter" in data["error"]
-        assert data["server_tags"] == ["search"]
+        assert data["message"] == "Tool not available"
+        assert "server_tags" not in data
 
 
 class TestRebuildIndex:
@@ -1274,7 +1277,7 @@ class TestGetSchemaTool:
             data = json.loads(await mt.get_schema(server, tool_name))
             assert data["message"] == "Tool not found", (server, tool_name)
 
-    async def test_tag_filtered_server_returns_not_found(self):
+    async def test_tag_filtered_server_returns_forbidden(self):
         pm, app = await _app_from(
             {
                 "filesystem": [
@@ -1292,7 +1295,7 @@ class TestGetSchemaTool:
             data = json.loads(await app.meta_tools.get_schema("filesystem", "file_read"))
         finally:
             request_tags.set(None)
-        assert data["message"] == "Tool not found"
+        assert data["message"] == "Tool not available"
 
     async def test_server_name_resolved_case_insensitively(self):
         _pm, app = await _app_from(

@@ -140,6 +140,17 @@ _TOOL_NOT_FOUND = json.dumps(
     ensure_ascii=False,
 )
 
+# タグフィルタ範囲外（権限なし）の統一応答。実タグ一覧は返さない
+# （どのタグなら見えるかは漏らさない）。
+_TOOL_FORBIDDEN = json.dumps(
+    {
+        "message": "Tool not available",
+        "hint": "このサーバーは現在のタグフィルタでは利用できません。"
+        "X-MCP-Hub-Tags ヘッダーを確認するか、タグなしで接続してください。",
+    },
+    ensure_ascii=False,
+)
+
 
 def _build_catalog(server_entries: list[dict]) -> str:
     """サーバー一覧の一行カタログを組む（search_tools の導線用）。
@@ -1317,13 +1328,15 @@ class MetaTools:
         """
         allowed = self._get_allowed_servers()
         if server is not None:
-            # get_schema と同じ流儀: タグ範囲外・index 不在は区別せず同一の
-            # not-found を返し、存在の有無を漏らさない。
+            # タグ範囲外＝権限なし（_TOOL_FORBIDDEN）と index 不在（not found）は
+            # 区別する。どちらも実在の有無は漏らさない。
             resolved = self._resolve_server_name(server)
-            if (
-                allowed is not None and resolved not in allowed
-            ) or resolved not in self._index.list_servers():
+            # execute_tool と同じ存在ゲート先行: index 不在は not found、
+            # index にあるがタグ範囲外なら権限なし（_TOOL_FORBIDDEN）。
+            if resolved not in self._index.list_servers():
                 return _TOOL_NOT_FOUND
+            if allowed is not None and resolved not in allowed:
+                return _TOOL_FORBIDDEN
             # index.search は冒頭で top_k を _MAX_TOP_K(50) にクランプし、内部候補
             # 深度は candidates = max(top_k, _RRF_CANDIDATES=20)。順位は query の
             # スコアのみで決まるので top_k を増やしても上位の順位は変わらない。
@@ -1505,15 +1518,7 @@ class MetaTools:
         if tags:
             server_tags = self._get_server_tags(server)
             if not _tags_match(tags, server_tags):
-                return json.dumps(
-                    {
-                        "error": f"Server '{server}' is not available with current tag filter.",
-                        "hint": "Check your X-MCP-Hub-Tags header or connect without tag filtering.",
-                        # 実タグを返すことで「フィルタ不一致」をデバッグ可能に
-                        "server_tags": list(server_tags),
-                    },
-                    ensure_ascii=False,
-                )
+                return _TOOL_FORBIDDEN
 
         # Verify tool exists on the live proxy (index may be stale/missing).
         try:
@@ -1547,8 +1552,8 @@ class MetaTools:
         resolved = self._resolve_server_name(server)
         allowed = self._get_allowed_servers()
         if allowed is not None and resolved not in allowed:
-            # タグフィルタ範囲外は存在の有無を漏らさず not found 扱い。
-            return not_found
+            # タグフィルタ範囲外は「権限なし」。存在の有無は漏らさない。
+            return _TOOL_FORBIDDEN
         schema = self._index.get_schema(resolved, tool_name)
         if schema is None:
             return not_found
