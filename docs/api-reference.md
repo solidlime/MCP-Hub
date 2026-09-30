@@ -64,9 +64,11 @@ meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツール
 
 | ツール | 説明 |
 |---|---|
-| `search_tools(query, top_k=3, detail="brief")` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。結果に `tags`（サーバータグ配列）を含む。`top_k` は最大 50 にクランプされる（巨大な値を渡しても返り値が肥大しない）。`detail` は `"brief"`（既定、inputSchema なし）/ `"schema"`（上位 1 件のみ圧縮 inputSchema）/ `"all"`（全件に圧縮 inputSchema、従来互換） |
+| `search_tools(query, top_k=3, detail="brief", server=None)` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。`top_k` は最大 50 にクランプされる（巨大な値を渡しても返り値が肥大しない）。`detail` は `"brief"`（既定、inputSchema なし）/ `"schema"`（上位 1 件のみ圧縮 inputSchema）/ `"all"`（全件に圧縮 inputSchema、従来互換）。`server` を渡すと結果をその 1 サーバーに絞る（大小文字は無視）。タグフィルタ範囲外・未接続のサーバーを `server` に指定した場合は `get_schema` と同じ `Tool not found` を返し、存在の有無を漏らさない |
 | `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行。互換のため `{"arguments": {...}}` に `server` / `tool_name` / `arguments` を折り畳んだ形式（LLM が生成しがちなフラット呼び出し）も受け付ける。サーバー名の大文字小文字は case-insensitive に解決される |
 | `get_schema(server, tool_name, compact=False)` | `search_tools` の `inputSchema` は既定で省かれるので、実行前に仕様が必要な時に呼ぶ。既定 (`compact=False`) は切り詰めなしの `description` と完全な `inputSchema`。`compact=True` は `search_tools` と同じ圧縮 `inputSchema`（名前 / 型 / 必須）を返す。サーバー名は case-insensitive に解決される |
+
+`search_tools` の description には接続中のサーバー一覧（カタログ）が含まれます。`X-MCP-Hub-Tags` ヘッダによるタグフィルタが有効な場合、このカタログは**可視のサーバーのみ**に差し替えられます（タグ範囲外のサーバーは検索結果と同様、カタログからも見えません）。
 
 ##### `search_tools` のレスポンス形式
 

@@ -109,6 +109,37 @@ _SEARCH_NOTE_LEGACY = (
 
 MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 
+# search_tools description のカタログセクションの目印。タグフィルタ時の差し替え
+# （tag_filter.MetaCatalogMiddleware）はこの文字列を境界にする。文言を変えると
+# 差し替えが no-op になり、タグ範囲外サーバーが再びカタログに漏れる。
+CATALOG_MARKER = "Registered servers"
+
+
+def _catalog_section(server_count: int, server_entries: list[dict]) -> str:
+    """カタログセクション（目印 + 件数 + 使い方指南 + 本体）。
+
+    _apply_catalog（タグ無しの焼き込み）と MetaApp.catalog_for_tags（タグ
+    フィルタ時の差し替え）で共有し、文言と組立を1箇所に保つ。先頭の改行は
+    含まない（焼き込み側が base との間に "\n\n" を入れる）。
+    """
+    return (
+        f"{CATALOG_MARKER} ({server_count}). Add an English keyword "
+        'alongside your query (e.g. "室温 temperature") to match tools '
+        "described in English:\n"
+        + _build_catalog(server_entries)
+    )
+
+
+# search_tools / get_schema の not-found 応答。タグ範囲外と存在しないサーバーで
+# 同一の応答を返し、存在の有無を漏らさないための単一の文面。
+_TOOL_NOT_FOUND = json.dumps(
+    {
+        "message": "Tool not found",
+        "hint": "search_tools で server / tool_name を確認してください。",
+    },
+    ensure_ascii=False,
+)
+
 
 def _build_catalog(server_entries: list[dict]) -> str:
     """サーバー一覧の一行カタログを組む（search_tools の導線用）。
@@ -1262,7 +1293,11 @@ class MetaTools:
         return [r for r in results if r["server"] in allowed]
 
     async def search_tools(
-        self, query: str, top_k: int = _DEFAULT_TOP_K, detail: str = "brief"
+        self,
+        query: str,
+        top_k: int = _DEFAULT_TOP_K,
+        detail: str = "brief",
+        server: str | None = None,
     ) -> str:
         """MCP Hub gateway: entry point — upstream tools are NOT listed directly.
         Call search_tools FIRST to find a tool, then get_schema to inspect it,
@@ -1277,43 +1312,80 @@ class MetaTools:
             top_k: Max results (default 3)
             detail: "brief" (default, no schema) | "schema" (top hit only) |
                 "all" (every hit, legacy format)
+            server: Optional. カタログにあるサーバー名（大小文字は無視）。
+                既にサーバーが分かっている時に結果をその 1 サーバーに絞る。
         """
-        results = self._index.search(query, top_k)
         allowed = self._get_allowed_servers()
-        if allowed is not None:
-            filtered = self._filter_search_results(results, allowed)
-            if results and not filtered:
-                # A3: タグフィルタで全件除外されたケース（0件ヒットの主因）を
-                # additive な hint で明示する。既存の message キーは不変。
-                active = request_tags.get() or []
+        if server is not None:
+            # get_schema と同じ流儀: タグ範囲外・index 不在は区別せず同一の
+            # not-found を返し、存在の有無を漏らさない。
+            resolved = self._resolve_server_name(server)
+            if (
+                allowed is not None and resolved not in allowed
+            ) or resolved not in self._index.list_servers():
+                return _TOOL_NOT_FOUND
+            # index.search は冒頭で top_k を _MAX_TOP_K(50) にクランプし、内部候補
+            # 深度は candidates = max(top_k, _RRF_CANDIDATES=20)。順位は query の
+            # スコアのみで決まるので top_k を増やしても上位の順位は変わらない。
+            # サーバーで絞ると上位スコアを他サーバーのツールが占有しうるため、
+            # 引ける最大深度で一度引いてから絞り、最後に top_k で切る。
+            depth = max(top_k * 5, _MAX_TOP_K)
+            results = [
+                r for r in self._index.search(query, depth) if r["server"] == resolved
+            ][:top_k]
+            if not results:
+                # 可視（タグ内・index 内）と確認済みのサーバーなので件数を出してよい。
+                n = len(
+                    self._index.get_tools_by_server().get(resolved, [])
+                )
                 return json.dumps(
                     {
                         "results": [],
                         "servers": {},
                         "message": "No matching tools found",
                         "hint": (
-                            f"タグフィルタ {', '.join(map(str, active))} により"
-                            "全件除外された可能性があります。より広いタグ"
-                            "（またはタグ無し）で再試行してください。"
+                            f"server={resolved} で絞り込みましたが一致なし。"
+                            f"このサーバーのツール: {n} 件"
                         ),
                     },
                     ensure_ascii=False,
                 )
-            results = filtered
-        if not results:
-            return json.dumps(
-                {
-                    "results": [],
-                    "servers": {},
-                    "message": "No matching tools found",
-                    "hint": (
-                        "Try adding English keywords to the same query "
-                        "(e.g. '室温 temperature'), broader keywords, "
-                        "or check server connections."
-                    ),
-                },
-                ensure_ascii=False,
-            )
+        else:
+            results = self._index.search(query, top_k)
+            if allowed is not None:
+                filtered = self._filter_search_results(results, allowed)
+                if results and not filtered:
+                    # A3: タグフィルタで全件除外されたケース（0件ヒットの主因）を
+                    # additive な hint で明示する。既存の message キーは不変。
+                    active = request_tags.get() or []
+                    return json.dumps(
+                        {
+                            "results": [],
+                            "servers": {},
+                            "message": "No matching tools found",
+                            "hint": (
+                                f"タグフィルタ {', '.join(map(str, active))} により"
+                                "全件除外された可能性があります。より広いタグ"
+                                "（またはタグ無し）で再試行してください。"
+                            ),
+                        },
+                        ensure_ascii=False,
+                    )
+                results = filtered
+            if not results:
+                return json.dumps(
+                    {
+                        "results": [],
+                        "servers": {},
+                        "message": "No matching tools found",
+                        "hint": (
+                            "Try adding English keywords to the same query "
+                            "(e.g. '室温 temperature'), broader keywords, "
+                            "or check server connections."
+                        ),
+                    },
+                    ensure_ascii=False,
+                )
         # 結果に現れたサーバーの一行説明をトップレベルに添える（表示 description から
         # サーバー前置を外したため、LLM がサーバー文脈を得る経路をここに移す）。
         servers: dict[str, str] = {}
@@ -1468,13 +1540,7 @@ class MetaTools:
         の schema 応答と同じ圧縮形（名前 / 型 / 必須）を返す。description は表示用に
         切り詰めない full_description（無ければ description）を使う。
         """
-        not_found = json.dumps(
-            {
-                "message": "Tool not found",
-                "hint": "search_tools で server / tool_name を確認してください。",
-            },
-            ensure_ascii=False,
-        )
+        not_found = _TOOL_NOT_FOUND
         if not server or not tool_name:
             return not_found
         # execute_tool と同じく live 接続名へ case-insensitive に解決してから照会。
@@ -1505,6 +1571,8 @@ class MetaApp:
         meta: MetaTools,
         rebuild_fn,
         base_descriptions: dict[str, str],
+        catalog_entries: list[dict] | None = None,
+        get_server_tags: Callable[[str], list[str]] | None = None,
     ):
         self.mcp = mcp
         self.index = index
@@ -1512,6 +1580,30 @@ class MetaApp:
         self.rebuild_index = rebuild_fn
         # 焼き込み前の素の tool description（毎回ここから再構成して冪等化）
         self.base_descriptions = base_descriptions
+        # rebuild が使ったカタログ素材（{"server", "description", "tools"}）。
+        # rebuild_index と共有する可変リスト（slice 代入で更新される）なので、
+        # ここから読めば常に最新。
+        self._catalog_entries: list[dict] = catalog_entries if catalog_entries is not None else []
+        self._get_server_tags = get_server_tags or (lambda _: [])
+
+    def catalog_for_tags(self, tags: list[str] | None) -> str:
+        """タグ可視のサーバーだけで組んだカタログセクション。
+
+        _apply_catalog が焼き込むセクションと同一の組立（_catalog_section）を通す
+        ため、打ち切り（"... and N more servers"）も自動で正しい。
+        タグが空なら全件（= 焼き込みと同一内容）。可視サーバーが零なら空文字を
+        返す（呼び出し側はカタログセクションごと取り除く）。
+        """
+        entries = self._catalog_entries
+        if tags:
+            entries = [
+                e
+                for e in entries
+                if _tags_match(tags, self._get_server_tags(e["server"]))
+            ]
+            if not entries:
+                return ""
+        return _catalog_section(len(entries), entries)
 
 
 async def create_meta_app(
@@ -1523,37 +1615,39 @@ async def create_meta_app(
     mcp = FastMCP("MCP Hub", instructions=_build_instructions(0))
     index = ToolIndex(embedding_model=embedding_model, use_embeddings=use_embeddings)
     base_descriptions: dict[str, str] = {}
+    # rebuild_index が埋めるカタログ素材。MetaApp と共有する（同じ list を
+    # slice 代入で更新するので、rebuild 後は必ず最新が見える）。
+    catalog_entries: list[dict] = []
 
     # search_tools の description を毎回 base から再構成する（idempotent）。
     # catalog が空でも base のみを書き戻す。instructions は接続サーバー数を
     # 含めて毎 rebuild 更新する（数を固定で焼き込まない）。
-    async def _apply_catalog(catalog: str, server_count: int) -> None:
+    async def _apply_catalog(server_entries: list[dict]) -> None:
         # FastMCP 4.0.2 の ``instructions`` は getter/setter 付き property で
         # 公開API（``self._mcp_server.instructions`` を読み書きする）。get_tool()
         # 同様 frozen ではない。``fastmcp>=4.0,<5.0``（pyproject.toml）の範囲で妥当。
+        server_count = len(server_entries)
         mcp.instructions = _build_instructions(server_count)
         tool = await mcp.get_tool("search_tools")
         if tool is None:
             return
         base_desc = base_descriptions.get("search_tools", tool.description or "")
-        if catalog:
-            # ヘッダーの使い方指南は実測に合わせる。0件だったクエリに英語キーワードを
-            # 足すと救済される（例: "室温" 0件 → "室温 temperature" 5件）のと、
-            # 英語で書かれた索引のツールへ到達できるのが確認済み。件数は増える方向
-            # （BM25 は語の和＝OR。top_k=50 実測: 室温 3→7, 天気 21→28, ノート 42→49）
-            # なので「絞り込み(narrow)」とは書かない。0件時のヒント文
-            # （"Try adding English keywords to the same query"）と同じ誘導に揃える。
-            # 「サーバー名で絞れる」はライブ実測で 11/16 しか成立せず（ハイフン/
-            # 数字/アンダースコア入りの名前で崩れる）、未検証なので書かない。
-            tool.description = (
-                base_desc
-                + f"\n\nRegistered servers ({server_count}). Add an English keyword "
-                'alongside your query (e.g. "室温 temperature") to match tools '
-                "described in English:\n"
-                + catalog
-            )
-        else:
+        if not server_entries:
             tool.description = base_desc
+            return
+        # ヘッダーの使い方指南は実測に合わせる。0件だったクエリに英語キーワードを
+        # 足すと救済される（例: "室温" 0件 → "室温 temperature" 5件）のと、
+        # 英語で書かれた索引のツールへ到達できるのが確認済み。件数は増える方向
+        # （BM25 は語の和＝OR。top_k=50 実測: 室温 3→7, 天気 21→28, ノート 42→49）
+        # なので「絞り込み(narrow)」とは書かない。0件時のヒント文
+        # （"Try adding English keywords to the same query"）と同じ誘導に揃える。
+        # 「サーバー名で絞れる」はライブ実測で 11/16 しか成立せず（ハイフン/
+        # 数字/アンダースコア入りの名前で崩れる）、未検証なので書かない。
+        # 描画は _catalog_section に一本化（タグフィルタ時の差し替えと同一の
+        # 組立を通すため、alter する場合は両経路が同時に変わる）。
+        tool.description = (
+            base_desc + "\n\n" + _catalog_section(server_count, server_entries)
+        )
 
     # Build initial index from all connected proxy tools
     async def rebuild_index() -> list[str]:
@@ -1637,7 +1731,8 @@ async def create_meta_app(
                     "tools": names,
                 }
             )
-        await _apply_catalog(_build_catalog(entries), len(entries))
+        await _apply_catalog(entries)
+        catalog_entries[:] = entries
         return failed
 
     # Live-proxy accessor for MetaTools (execution bypasses the index).
@@ -1668,7 +1763,10 @@ async def create_meta_app(
     # Register meta tools via FastMCP tool decorator
     @mcp.tool()
     async def search_tools(
-        query: str, top_k: int = _DEFAULT_TOP_K, detail: str = "brief"
+        query: str,
+        top_k: int = _DEFAULT_TOP_K,
+        detail: str = "brief",
+        server: str | None = None,
     ) -> str:
         """MCP Hub gateway: this server is the entry point — upstream tools are
         NOT listed directly. Call search_tools FIRST to find a tool, then
@@ -1686,8 +1784,10 @@ async def create_meta_app(
             top_k: Max results (default 3)
             detail: "brief" (default, no schema) | "schema" (top hit only) |
                 "all" (every hit, legacy format)
+            server: Optional. カタログにあるサーバー名（大小文字は無視）。
+                既にサーバーが分かっている時に結果をその 1 サーバーに絞る。
         """
-        return await meta.search_tools(query, top_k, detail)
+        return await meta.search_tools(query, top_k, detail, server)
 
     @mcp.tool()
     async def execute_tool(
@@ -1728,13 +1828,23 @@ async def create_meta_app(
     if _search_tool is not None:
         base_descriptions["search_tools"] = _search_tool.description or ""
 
-    return MetaApp(
+    meta_app = MetaApp(
         mcp=mcp,
         index=index,
         meta=meta,
         rebuild_fn=rebuild_index,
         base_descriptions=base_descriptions,
+        catalog_entries=catalog_entries,
+        get_server_tags=proxy_manager.server_tags,
     )
+
+    # メタ経路のタグフィルタ（normal 側の TagFilterMiddleware はここには無い）。
+    # rebuild が焼き込んだカタログを X-MCP-Hub-Tags で可視のサーバーだけに差し替える。
+    # main.py の ToolLog / FullInfo と並ぶ登録で、順序は無関係（disjoint な変更）。
+    from .tag_filter import MetaCatalogMiddleware
+
+    mcp.add_middleware(MetaCatalogMiddleware(meta_app.catalog_for_tags))
+    return meta_app
 
 
 # import 時に 1 回だけ: fastembed 標準外モデル（E5-small）を登録する。

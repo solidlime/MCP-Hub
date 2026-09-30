@@ -11,7 +11,7 @@ Registered on the hub's FastMCP instance during lifespan startup.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 import mcp.types as mt
@@ -25,6 +25,70 @@ if TYPE_CHECKING:
     from .proxy_manager import ProxyManager
 
 logger = logging.getLogger(__name__)
+
+
+class MetaCatalogMiddleware(Middleware):
+    """メタ経路 (``meta_app.mcp``) 専用: search_tools description のカタログを
+    X-MCP-Hub-Tags で可視のサーバーだけに差し替える。
+
+    ``TagFilterMiddleware`` は normal アプリにしか登録されておらず、メタ経路の
+    タグフィルタは ``meta_provider`` が ``request_tags`` ContextVar を直接読んで
+    実装している。そのためカタログ文字列（rebuild 時に焼き込まれる
+    "Registered servers" セクション）は誰も直しておらず、タグ範囲外のサーバーが
+    漏れていた（実測: dev,herta でも microsandbox / puppeteer が見え、
+    ``search_tools`` は 0 件を返す）。ここで揃える。
+
+    既存の全ツールを保持し、search_tools の 1 要素だけを差し替えた新リストを
+    返す（FullInfoMiddleware が追記した full_info_tools を落とさないため）。
+    """
+
+    def __init__(self, catalog_fn: Callable[[list[str] | None], str]) -> None:
+        super().__init__()
+        # (tags) -> カタログセクション全体（先頭に改行を含まない）
+        self._catalog_fn = catalog_fn
+
+    async def on_list_tools(
+        self,
+        context: MiddlewareContext[mt.ListToolsRequest],
+        call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
+    ) -> Sequence[Tool]:
+        tools = list(await call_next(context))
+        tags = self._get_request_tags()
+        if not tags:
+            # タグ無しはバイト単位で現状と同一（焼き込まれたカタログのまま）。
+            return tools
+        return [self._redescribe(t, tags) for t in tools]
+
+    @staticmethod
+    def _get_request_tags() -> list[str] | None:
+        """ASGI 層の tag_middleware が set した contextvar を読む（実測で可視）。"""
+        from .state import request_tags
+
+        return request_tags.get()
+
+    def _redescribe(self, tool: Any, tags: list[str]) -> Any:
+        """search_tools だけカタログを差し替えたコピーを返す（他は素通し）。"""
+        from .meta_provider import CATALOG_MARKER
+
+        if getattr(tool, "name", None) != "search_tools":
+            return tool
+        desc = tool.description or ""
+        # 焼き込み時は base とセクションの間に "\n\n" が入る（_apply_catalog）。
+        # セクション先頭をその 2 文字ごと見つけないと、base 中の語を誤って
+        # 境界にする危険がある。見つからなければ未焼き込み（〜0 サーバー）＝不変。
+        boundary = "\n\n" + CATALOG_MARKER
+        idx = desc.find(boundary)
+        if idx < 0:
+            return tool
+        section = self._catalog_fn(tags)
+        head = desc[:idx]
+        new_desc = head + ("\n\n" + section if section else "")
+        if new_desc == desc:
+            return tool
+        # Tool は pydantic モデル（extra=forbid）。model_copy は元オブジェクトを
+        # 変更しない（実測）。破壊的代入は stored tool を汚染してリクエスト間で
+        # リークするため使わない。
+        return tool.model_copy(update={"description": new_desc})
 
 
 class TagFilterMiddleware(Middleware):
