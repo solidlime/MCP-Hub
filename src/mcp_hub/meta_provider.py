@@ -1550,6 +1550,10 @@ class MetaTools:
             return not_found
         # execute_tool と同じく live 接続名へ case-insensitive に解決してから照会。
         resolved = self._resolve_server_name(server)
+        # search_tools / execute_tool と同じ存在ゲート先行: index 不在は not found。
+        # タグ範囲外の forbidden と混同しない（3経路の契約を揃える）。
+        if resolved not in self._index.list_servers():
+            return not_found
         allowed = self._get_allowed_servers()
         if allowed is not None and resolved not in allowed:
             # タグフィルタ範囲外は「権限なし」。存在の有無は漏らさない。

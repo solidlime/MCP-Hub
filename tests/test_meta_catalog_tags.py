@@ -325,8 +325,21 @@ class TestSearchToolsServerArg:
                 await meta.search_tools("search tool", top_k=5, server="ghost")
                 == _TOOL_NOT_FOUND
             )
+            # タグ付きでも index 不在は存在ゲート先行（forbidden にしない）。
+            assert await meta.get_schema("ghost", "x_tool") == _TOOL_NOT_FOUND
         finally:
             request_tags.set(None)
+
+    async def test_tagged_ghost_execute_tool_is_not_found(self):
+        """タグ付き接続でも ghost は forbidden ではなく not found（存在ゲート先行）。"""
+        meta, _ = await _search_meta({"alpha": _searchable(2, "a_")}, tags={"alpha": ["dev"]})
+        request_tags.set(["dev"])
+        try:
+            out = await meta.execute_tool("ghost", "x_tool", {})
+        finally:
+            request_tags.set(None)
+        assert out != _TOOL_FORBIDDEN
+        assert "not found" in out
 
     async def test_searches_deeper_than_top_k(self):
         """top_k より深く引いてから絞る（他サーバーが上位を占有しても見つかる）。"""
