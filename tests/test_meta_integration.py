@@ -1441,3 +1441,96 @@ class TestZeroResultShape:
         assert "hint" in empty
         # 多言語キーワード併記の誘導が hint に含まれる
         assert "室温 temperature" in empty["hint"]
+
+
+class TestStringifiedArgumentsCompat:
+    """Compat shim: some LLM clients send `arguments` as a JSON *string*
+    (prod: models see anyOf[object,null] in the schema and stringify it, so
+    FastMCP/pydantic rejected the call with `Input should be a valid
+    dictionary [type=dict_type]` before the tool body ever ran — 4 consecutive
+    failures observed in the pi harness). The string is parsed once inside
+    MetaTools.execute_tool; malformed JSON (or non-object JSON) degrades to
+    "no arguments" rather than a 422."""
+
+    def test_json_string_arguments_execute(self, client):
+        """JSON string → parsed → tool runs with the decoded arguments."""
+        pm = client.app.state.proxy_manager
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {
+                "server": "filesystem",
+                "tool_name": "file_read",
+                "arguments": json.dumps({"path": "/tmp/x.txt"}),
+            },
+            "t-str",
+        )
+        assert _get_text_content(parsed) == "ok"
+        pm.call_tool.assert_awaited_once_with(
+            "filesystem", "file_read", {"path": "/tmp/x.txt"}
+        )
+
+    def test_json_string_flattened_call_still_lifts(self, client):
+        """Stringified *flattened* call composes with the lift shim."""
+        pm = client.app.state.proxy_manager
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {
+                "arguments": json.dumps(
+                    {"server": "filesystem", "tool_name": "file_read",
+                     "path": "/p"}
+                )
+            },
+            "t-str-flat",
+        )
+        assert _get_text_content(parsed) == "ok"
+        pm.call_tool.assert_awaited_once_with("filesystem", "file_read", {"path": "/p"})
+
+    def test_invalid_json_string_degrades_to_no_arguments(self, client):
+        """Malformed JSON → arguments ignored (empty dict), execution succeeds
+        instead of a pydantic 422 / validation error."""
+        pm = client.app.state.proxy_manager
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"server": "filesystem", "tool_name": "file_read",
+             "arguments": "{not json"},
+            "t-str-bad",
+        )
+        assert _get_text_content(parsed) == "ok"
+        pm.call_tool.assert_awaited_once_with("filesystem", "file_read", {})
+
+    def test_non_object_json_string_degrades_to_no_arguments(self, client):
+        """Valid JSON that is not an object (list) → arguments ignored."""
+        pm = client.app.state.proxy_manager
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"server": "filesystem", "tool_name": "file_read",
+             "arguments": '["/tmp/x.txt"]'},
+            "t-str-list",
+        )
+        assert _get_text_content(parsed) == "ok"
+        pm.call_tool.assert_awaited_once_with("filesystem", "file_read", {})
+
+    def test_dict_arguments_unchanged(self, client):
+        """Regression: the normal dict call is byte-for-byte unaffected."""
+        pm = client.app.state.proxy_manager
+        parsed = _call_tool(
+            client,
+            "execute_tool",
+            {"server": "filesystem", "tool_name": "file_read",
+             "arguments": {"path": "/p"}},
+            "t-dict",
+        )
+        assert _get_text_content(parsed) == "ok"
+        pm.call_tool.assert_awaited_once_with("filesystem", "file_read", {"path": "/p"})
+
+    def test_schema_declares_object_or_string(self, client):
+        """Reachability proof: the annotated type of `arguments` on the wire
+        must admit a string, otherwise FastMCP rejects it before our shim."""
+        parsed = _post_tools_list(client)
+        et = next(t for t in parsed["result"]["tools"] if t["name"] == "execute_tool")
+        arg_schema = et["inputSchema"]["properties"]["arguments"]
+        assert "string" in json.dumps(arg_schema), arg_schema
