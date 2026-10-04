@@ -16,9 +16,17 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from mcp_hub.meta_provider import create_meta_app
-from mcp_hub.state import request_tags
+from mcp_hub.state import app_state, request_tags
 
 logger = logging.getLogger(__name__)
+
+
+@pytest.fixture
+def clean_buffer():
+    """ToolLogMiddleware 記録バッファの隔離（test_log_middleware.py と同型）。"""
+    app_state.clear_logs()
+    yield
+    app_state.clear_logs()
 
 # ── test fixtures ────────────────────────────────────────────────────────────
 
@@ -1451,6 +1459,48 @@ class TestStringifiedArgumentsCompat:
     failures observed in the pi harness). The string is parsed once inside
     MetaTools.execute_tool; malformed JSON (or non-object JSON) degrades to
     "no arguments" rather than a 422."""
+
+    def test_json_string_arguments_survive_tool_log_middleware(
+        self, meta_app, clean_buffer
+    ):
+        """Review P1 follow-up: prod mounts ToolLogMiddleware on meta_app.mcp
+        (main.py L182). Prove a stringified-arguments execute_tool call passes
+        through the middleware chain without AttributeError (params.arguments
+        arrives as a dict; resolve_server reads it) — 200, "ok", and a
+        status="success" tool_call log entry.
+
+        Note: added *after* the fixture's http_app creation here; FastMCP
+        reads self.middleware at dispatch time so a late add_middleware is
+        still effective (verified experimentally). Prod registers it before.
+        """
+        from mcp_hub.middleware import ToolLogMiddleware
+
+        pm = meta_app.state.proxy_manager
+        meta_app.state.meta_app.mcp.add_middleware(ToolLogMiddleware(pm))
+        with TestClient(meta_app) as client:
+            parsed = _call_tool(
+                client,
+                "execute_tool",
+                {
+                    "server": "filesystem",
+                    "tool_name": "file_read",
+                    "arguments": json.dumps({"path": "/tmp/x.txt"}),
+                },
+                "t-str-mw",
+            )
+        assert _get_text_content(parsed) == "ok"
+        pm.call_tool.assert_awaited_once_with(
+            "filesystem", "file_read", {"path": "/tmp/x.txt"}
+        )
+        success = [
+            e
+            for e in app_state.snapshot_logs()
+            if e.type == "tool_call"
+            and e.status == "success"
+            and e.server == "filesystem"
+            and e.tool == "file_read"
+        ]
+        assert success, "ToolLogMiddleware did not record a success entry"
 
     def test_json_string_arguments_execute(self, client):
         """JSON string → parsed → tool runs with the decoded arguments."""
