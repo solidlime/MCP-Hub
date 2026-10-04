@@ -88,6 +88,11 @@ class FullInfoMiddleware(Middleware):
         server, tool_name = split_qualified_name(name, connected)
         if server == "-":
             return ToolResult(is_error=True, content=[TextContent(type="text", text=f"Server for {name!r} not found")])
+        # NOTE: arguments の str 正規化は不要。wire 層 pydantic が
+        # CallToolRequestParams.arguments を dict[str, Any] | None として検証するため
+        # str がここに届く経路は存在しない（meta_provider.execute_tool の shim は
+        # anyOf[object,null] スキーマを持つ meta ツール専用の互換）。nest された
+        # "arguments" 値が文字列のまま下流に渡るケースは、下流 inputSchema が検証する。
         arguments = context.message.arguments or {}
         try:
             return await self._pm.call_tool(server, tool_name, arguments)
