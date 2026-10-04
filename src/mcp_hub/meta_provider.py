@@ -1452,15 +1452,26 @@ class MetaTools:
         self,
         server: str = "",
         tool_name: str = "",
-        arguments: dict[str, Any] | None = None,
+        arguments: dict[str, Any] | str | None = None,
     ) -> Any:
         """Execute a tool discovered via search_tools.
 
         Args:
             server: From search_tools results
             tool_name: From search_tools results
-            arguments: Use inputSchema from search_tools results
+            arguments: Use inputSchema from search_tools results. A JSON string
+                is also tolerated (compat) — see the parse below.
         """
+        # Tolerate clients that stringify `arguments` (observed in the wild:
+        # models see anyOf[object,null] and send a JSON string). Parse it once
+        # here — pydantic rejects a str before our code runs otherwise.
+        if isinstance(arguments, str):
+            try:
+                parsed = json.loads(arguments)
+                arguments = parsed if isinstance(parsed, dict) else None
+            except (json.JSONDecodeError, ValueError):
+                arguments = None
+
         # Compat shim: some LLM clients flatten ALL params into `arguments`
         # (prod logs: {"arguments": {"query": ..., "server": "Exa",
         # "tool_name": "web_search_exa"}}), which pydantic rejected before this
@@ -1802,14 +1813,17 @@ async def create_meta_app(
     async def execute_tool(
         server: str = "",
         tool_name: str = "",
-        arguments: dict[str, Any] | None = None,
+        arguments: dict[str, Any] | str | None = None,
     ) -> Any:
         """Execute a tool discovered via search_tools.
 
         Args:
             server: From search_tools results
             tool_name: From search_tools results
-            arguments: Use inputSchema from search_tools results
+            arguments: Use inputSchema from search_tools results. A JSON string
+                is also tolerated (compat): FastMCP validates this annotation,
+                so `dict` alone rejected stringified calls (dict_type) before
+                MetaTools.execute_tool could parse them.
         """
         # Defaults are optional (not required) so flattened LLM calls — where
         # server/tool_name ride inside `arguments` — reach the lift shim in
