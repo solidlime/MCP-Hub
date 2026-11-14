@@ -4,6 +4,7 @@ FastMCP の create_proxy + mount を管理。
 """
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -11,7 +12,7 @@ import time
 import traceback
 from collections.abc import Callable
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from fastmcp import FastMCP
@@ -24,8 +25,16 @@ from fastmcp.server.providers import proxy as _proxy_providers
 from fastmcp.server.providers.proxy import FastMCPProxy
 
 from .env_expand import expand_env_vars
+from .schema_diff import (
+    SCHEMA_CHANGED_EVENT,
+    SchemaDiffEntry,
+    diff_items,
+    item_fingerprints,
+    tool_fingerprints,
+)
 from .store import JsonStore
-from .validators import bearer_headers_from_env
+from .state import app_state
+from .validators import ValidationError, bearer_headers_from_env, validate_limits
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +64,22 @@ _proxy_providers.default_proxy_roots_handler = _resilient_default_roots
 
 RETRYABLE_EXCEPTIONS = (ConnectionError, TimeoutError, OSError)
 
+# ツール結果キャッシュ（tool_cache）を無効化するライフサイクルイベント
+_CACHE_INVALIDATING_EVENTS = frozenset(
+    {"connected", "recovered", "updated", "removed", "renamed"}
+)
+
 
 class StaleConnectError(RuntimeError):
     """接続中に世代が変わった（削除/再登録/改名）ことを示す。_create_proxy が送出する。"""
+
+
+class RateLimitExceeded(RuntimeError):
+    """サーバー単位レート制限に引っかかった（待機が rate_window を超える）。"""
+
+
+class CallTimeout(RuntimeError):
+    """サーバー単位の call_timeout を超えた。"""
 
 
 class ProxyManager:
@@ -90,8 +112,24 @@ class ProxyManager:
             _max_calls = 1
         self._call_semaphore = asyncio.Semaphore(_max_calls)
         self._tool_cache: dict[str, tuple[float, list[Any]]] = {}  # server_name -> (timestamp, tools)
+        # server_name -> {kind: {name: fingerprint}}（差分検知のベースライン）
+        self._schema_snapshots: dict[str, dict[str, dict[str, str]]] = {}
         self._health_failures: dict[str, int] = {}  # server_name -> consecutive health-check failures
         self._last_recovery_fail: dict[str, float] = {}  # server_name -> last recovery attempt time
+        # サーバー単位の同時実行 / レート制限状態（limits 設定時のみ使う）
+        self._server_sems: dict[str, tuple[int, asyncio.Semaphore]] = {}
+        self._rate_state: dict[str, tuple[float, float]] = {}  # name -> (tokens, last_ts)
+        self._rate_lock = asyncio.Lock()
+        # 接続状態（API/UI 用）: 連続失敗数・最終成功時刻・直近エラー・カタログ件数
+        self._consecutive_failures: dict[str, int] = {}
+        self._last_success: dict[str, float] = {}
+        self._last_error: dict[str, dict] = {}
+        self._resource_counts: dict[str, int] = {}
+        self._prompt_counts: dict[str, int] = {}
+        # バックグラウンド接続タスク（ホットリロード/終了処理が待機できるよう保持）
+        self._bg_tasks: set[asyncio.Task] = set()
+        # グレースフルシャットダウン中フラグ（True の間は新規ツール呼び出しを拒否）
+        self._draining = False
 
     @staticmethod
     def _retry_env() -> tuple[int, float]:
@@ -124,6 +162,207 @@ class ProxyManager:
         if db is not None:
             return float(db)
         return float(os.environ.get("MCP_HUB_CONNECT_TIMEOUT", "30.0"))
+
+    # --- per-server 呼び出し制限（timeout / 同時実行 / レート） ---
+
+    def server_limits(self, name: str) -> dict:
+        """サーバー設定 config["limits"] を正規化して返す。未知/壊れた値は無視。"""
+        raw = self._server_configs.get(name, {}).get("limits")
+        if not isinstance(raw, dict):
+            raw = {}
+        try:
+            validated = validate_limits(raw)
+        except ValidationError as e:
+            logger.warning("Server %s の limits が不正のため既定値使用: %s", name, e)
+            validated = {}
+        return {
+            "call_timeout": validated.get("call_timeout"),
+            "max_concurrent": validated.get("max_concurrent"),
+            "rate_limit": validated.get("rate_limit"),
+            "rate_burst": validated.get("rate_burst") or validated.get("rate_limit"),
+            "rate_window": validated.get("rate_window") or 1.0,
+        }
+
+    def known_servers(self) -> dict[str, Any]:
+        """limits 解決用のサーバー名集合（設定済み + 接続済み）。
+
+        制限は設定値なので未接続サーバーにも効く必要がある。接続済みを後に
+        重ねるのは resolve_server が最長一致で名前だけ見るため実害はない。
+        """
+        return {**self._server_configs, **self._proxies}
+
+    def server_call_timeout(self, name: str) -> float | None:
+        """呼び出しタイムアウト（秒）。サーバー上書き → MCP_HUB_CALL_TOOL_TIMEOUT → 30。
+
+        0 以下は無効（無制限）として None を返す。
+        """
+        override = self.server_limits(name)["call_timeout"]
+        if override is not None:
+            return override
+        try:
+            env = float(os.environ.get("MCP_HUB_CALL_TOOL_TIMEOUT", "30"))
+        except ValueError:
+            env = 30.0
+        return env if env > 0 else None
+
+    @contextlib.asynccontextmanager
+    async def call_slot(self, server_name: str, tool_name: str = "-"):
+        """per-server のレート制限と同時実行スロットを取得する。
+
+        レート制限はトークンバケット。待機が rate_window を超える場合は
+        即座に RateLimitExceeded（無限定な待機でクライアントを固めない）。
+        """
+        limits = self.server_limits(server_name)
+        if limits["rate_limit"]:
+            await self._acquire_rate(server_name, limits)
+        max_concurrent = limits["max_concurrent"]
+        if not max_concurrent:
+            yield limits
+            return
+        sem = self._server_semaphore(server_name, max_concurrent)
+        async with sem:
+            yield limits
+
+    def _server_semaphore(self, name: str, max_concurrent: int) -> asyncio.Semaphore:
+        """max_concurrent ごとに生成・キャッシュ。値が変われば作り直す。"""
+        entry = self._server_sems.get(name)
+        if entry is not None and entry[0] == max_concurrent:
+            return entry[1]
+        # shortcut: 上限変更時に旧 Semaphore の待機者は旧上限のまま解放される。
+        # 1 回の上限変更で数呼び出し分の遅延しか出ないため許容。
+        sem = asyncio.Semaphore(max_concurrent)
+        self._server_sems[name] = (max_concurrent, sem)
+        return sem
+
+    async def _acquire_rate(self, name: str, limits: dict) -> None:
+        """トークンバケットで 1 トークン消費する（待機はロック内＝保守的直列化）。"""
+        rate = limits["rate_limit"] / limits["rate_window"]  # tokens/sec
+        capacity = float(max(limits["rate_burst"] or 1, 1))
+        async with self._rate_lock:
+            now = time.monotonic()
+            tokens, ts = self._rate_state.get(name, (capacity, now))
+            tokens = min(capacity, tokens + max(0.0, now - ts) * rate)
+            if tokens < 1.0:
+                wait = (1.0 - tokens) / rate
+                # 待機が窓のほぼ全体（99%）になる＝この窓内では払えない。無限定な
+                # 待機でクライアントを固めず即座に拒否する。境界を内側に取るのは、
+                # 直前の呼び出しから数µs 分のトークンが既に補充されていて厳密な
+                # 等号比較が成立しないため。
+                if wait >= limits["rate_window"] * 0.99:
+                    raise RateLimitExceeded(
+                        f"Rate limit exceeded for server {name!r}: "
+                        f"{limits['rate_limit']:g} calls / {limits['rate_window']:g}s "
+                        f"(burst {capacity:g}) — retry later"
+                    )
+                wait = (1.0 - tokens) / rate
+                await asyncio.sleep(wait)
+                now = time.monotonic()
+                tokens = min(capacity, tokens + wait * rate)
+            self._rate_state[name] = (tokens - 1.0, now)
+
+    def reset_limits_state(self, name: str) -> None:
+        """設定変更時に Semaphore / レートの状態を破棄する。"""
+        self._server_sems.pop(name, None)
+        self._rate_state.pop(name, None)
+
+    # --- 接続状態の記録（ホットリロード/ヘルスチェック共通） ---
+
+    def _reset_connection_state(self, name: str) -> None:
+        """再接続時に一時的な失敗状態を捨てる（設定変更で直る可能性があるため）。"""
+        self._consecutive_failures.pop(name, None)
+        self._last_error.pop(name, None)
+        self._health_failures.pop(name, None)
+        self.reset_limits_state(name)
+
+    def _record_success(self, name: str) -> None:
+        """接続/呼び出し成功: 連続失敗をリセットし最終成功時刻を更新する。"""
+        self._consecutive_failures.pop(name, None)
+        self._health_failures.pop(name, None)
+        self._last_recovery_fail.pop(name, None)
+        self._last_success[name] = time.time()
+
+    def _record_failure(self, name: str, reason: str, message: str) -> None:
+        """接続/呼び出し失敗: 連続失敗数を進め、理由を残す（履歴は有界）。"""
+        self._consecutive_failures[name] = self._consecutive_failures.get(name, 0) + 1
+        short = str(message)[:200]
+        self._last_error[name] = {"reason": reason, "message": short, "at": time.time()}
+        app_state.record_health(name, "failure", f"{reason}: {short}")
+
+    def record_catalog_counts(self, name: str, resources: int | None = None,
+                              prompts: int | None = None) -> None:
+        """resources/prompts の件数を記録（取得できた種別のみ更新）。"""
+        if resources is not None:
+            self._resource_counts[name] = resources
+        if prompts is not None:
+            self._prompt_counts[name] = prompts
+
+    _EFFECTIVE_STATES = {
+        "connected": "healthy",
+        "connecting": "initializing",
+        "recovering": "recovering",
+        "error": "error",
+    }
+
+    def get_connection_state(self, name: str) -> dict:
+        """サーバー 1 台の接続状態を一貫した形で返す（admin API / WebUI 共通）。
+
+        effective_state は disabled > 生 status の優先順で決める。
+        retry_* は実際に適用される復旧クールダウンから算出する（error のみ）。
+        """
+        config = self._server_configs.get(name, {})
+        status = self._status.get(name, "unknown")
+        disabled = bool(config.get("disabled", False))
+        if status == "error":  # 直近の失敗は disabled より優先して見せる
+            effective = "error"
+        elif disabled:
+            effective = "disabled"
+        else:
+            effective = self._EFFECTIVE_STATES.get(status, "unknown")
+        cooldown = self._recovery_cooldown()
+        retry_in: float | None = None
+        if status == "error":
+            last_fail = self._last_recovery_fail.get(name)
+            elapsed = time.monotonic() - last_fail if last_fail is not None else cooldown
+            retry_in = max(0.0, cooldown - elapsed)
+        return {
+            "name": name,
+            "status": status,
+            "effective_state": effective,
+            "disabled": disabled,
+            "consecutive_failures": self._consecutive_failures.get(name, 0),
+            "last_success_at": self._last_success.get(name),
+            "last_error": self._last_error.get(name),
+            "retry_backoff_seconds": cooldown,
+            "retry_in_seconds": round(retry_in, 1) if retry_in is not None else None,
+            "next_retry_at": time.time() + retry_in if retry_in is not None else None,
+            "tool_count": self._tool_counts.get(name, 0),
+            "resource_count": self._resource_counts.get(name, 0),
+            "prompt_count": self._prompt_counts.get(name, 0),
+            "health_history": app_state.health_history(name),
+        }
+
+    def _spawn_bg(self, coro: Any) -> asyncio.Task:
+        """バックグラウンド接続タスクを起動して保持する（完了時に自動で外れる）。"""
+        task = asyncio.create_task(coro)
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+        return task
+
+    async def call_tool_limited(self, server_name: str, tool_name: str,
+                                arguments: dict) -> Any:
+        """per-server 制限を適用した call_tool（admin REST などの直接呼び出し用）。"""
+        timeout = self.server_call_timeout(server_name)
+        async with self.call_slot(server_name, tool_name):
+            call = self.call_tool(server_name, tool_name, arguments)
+            if timeout is None:
+                return await call
+            try:
+                return await asyncio.wait_for(call, timeout=timeout)
+            except asyncio.TimeoutError:
+                raise CallTimeout(
+                    f"Call to server {server_name!r} tool {tool_name!r} timed out "
+                    f"after {timeout:g}s (limits.call_timeout)"
+                ) from None
 
     async def _connect_server(
         self, name: str, config: dict, expected_gen: int | None = None
@@ -214,7 +453,11 @@ class ProxyManager:
                 await leaked.close()  # ロック外で close（デッドロック回避）
             if zombie:
                 return
+            self._record_success(name)
+            app_state.record_health(name, "connected", f"{len(tools)} tools")
             logger.info("Server %s connected (background)", name)
+            # ベースライン確保 / 再接続時の差分検知（変化がなければ無通知）
+            await self._check_schema_diff(name, proxy, "connect", tools)
             # Notify listeners so meta index can rebuild
             await self._notify_change(name, "connected", {"tool_count": len(tools)})
         except StaleConnectError:
@@ -233,6 +476,7 @@ class ProxyManager:
             if (leaked is not None or client is None) and name in self._server_configs and self._generations.get(name) == gen:
                 async with self._lock:
                     self._status[name] = "error"
+                self._record_failure(name, "connect_timeout", "Connection timed out")
             # 世代が変わっていれば幽霊の spawn_failed 通知は出さない
             if name in self._server_configs and self._generations.get(name) == gen:
                 await self._notify_change(name, "spawn_failed", {"error": "Connection timed out"})
@@ -252,6 +496,7 @@ class ProxyManager:
             if (leaked is not None or client is None) and name in self._server_configs and self._generations.get(name) == gen:
                 async with self._lock:
                     self._status[name] = "error"
+                self._record_failure(name, "connect_failed", "Connection failed")
             # 世代が変わっていれば幽霊の spawn_failed 通知は出さない
             if name in self._server_configs and self._generations.get(name) == gen:
                 await self._notify_change(name, "spawn_failed", {
@@ -279,6 +524,7 @@ class ProxyManager:
                 self._server_configs[name] = config
                 # 起動時の接続を最初の refresh/unregister で無効化できるよう世代を進める
                 self._bump_generation(name)
+                self._reset_connection_state(name)
             if config.get("disabled"):
                 async with self._lock:
                     self._status[name] = "disabled"
@@ -301,6 +547,7 @@ class ProxyManager:
         async with self._lock:
             self._server_configs[name] = config
             self._bump_generation(name)
+            self._reset_connection_state(name)
 
         if config.get("disabled"):
             async with self._lock:
@@ -329,6 +576,13 @@ class ProxyManager:
             self._bump_generation(name)
             self._tool_counts.pop(name, None)
             self._tool_cache.pop(name, None)
+            self._schema_snapshots.pop(name, None)
+            self._consecutive_failures.pop(name, None)
+            self._last_success.pop(name, None)
+            self._last_error.pop(name, None)
+            self._resource_counts.pop(name, None)
+            self._prompt_counts.pop(name, None)
+            app_state.clear_health_history(name)
             await self._rebuild_mounts()
 
         if client is not None:
@@ -336,6 +590,71 @@ class ProxyManager:
 
         await self._notify_change(name, "removed", None)
         return True
+
+    async def apply_server_configs(self, desired: dict[str, dict]) -> dict[str, list[str]]:
+        """設定ファイル由来のサーバー集合にランタイムを合わせる（ホットリロード）。
+
+        store へは書き戻さない（呼び出し元が読んだファイルが真実源のため）。
+        追加は register_server と同じくバックグラウンド接続、削除はアンマウント +
+        upstream client 切断、設定変更は refresh_server（プロキシ再生成）。
+
+        Returns:
+            {"added": [...], "removed": [...], "updated": [...], "unchanged": [...]}
+        """
+        added: list[str] = []
+        updated: list[str] = []
+        unchanged: list[str] = []
+
+        for name, config in desired.items():
+            current = self._server_configs.get(name)
+            if current is None:
+                async with self._lock:
+                    self._server_configs[name] = config
+                    self._bump_generation(name)
+                    self._status[name] = (
+                        "disabled" if config.get("disabled") else "connecting"
+                    )
+                if not config.get("disabled"):
+                    self._spawn_bg(self._connect_and_mount(name, config))
+                added.append(name)
+            elif current != config:
+                updated.append(name)
+            else:
+                unchanged.append(name)
+
+        removed: list[str] = []
+        closing: list[Client] = []
+        for name in list(self._server_configs):
+            if name in desired:
+                continue
+            async with self._lock:
+                proxy = self._proxies.pop(name, None)
+                client = self._clients.pop(name, None)
+                self._server_configs.pop(name, None)
+                self._status.pop(name, None)
+                self._tool_counts.pop(name, None)
+                self._tool_cache.pop(name, None)
+                self._bump_generation(name)
+                if proxy is not None:
+                    await self._rebuild_mounts()
+            if client is not None:
+                closing.append(client)
+            removed.append(name)
+
+        for client in closing:
+            await client.close()  # ロック外で close（ゾンビ接続防止）
+
+        for name in updated:
+            await self.refresh_server(name, desired[name])
+        for name in removed:
+            await self._notify_change(name, "removed", None)
+
+        return {
+            "added": sorted(added),
+            "removed": sorted(removed),
+            "updated": sorted(updated),
+            "unchanged": sorted(unchanged),
+        }
 
     async def refresh_server(self, name: str, config: dict) -> None:
         """プロキシの再生成 + 設定更新。disable 時はアンマウントのみ。"""
@@ -348,6 +667,7 @@ class ProxyManager:
             self._refreshing.add(name)
             self._server_configs[name] = config
             self._status[name] = "disabled" if is_disabled else "connected"
+            self._reset_connection_state(name)
             self._bump_generation(name)  # 進行中の接続を無効化（この refresh の世代はその次）
             gen = self._generations.get(name)
             old_proxy = self._proxies.pop(name, None)
@@ -386,7 +706,9 @@ class ProxyManager:
                         await leaked.close()  # ロック外で close（デッドロック回避）
                     if zombie:
                         return
+                    self._record_success(name)
                     logger.info("Refreshed server %s", name)
+                    await self._check_schema_diff(name, proxy, "refresh")
                     refreshed = True
                 except StaleConnectError:
                     logger.debug("Refresh for %s discarded (generation changed)", name)
@@ -395,6 +717,7 @@ class ProxyManager:
                     if name in self._server_configs and self._generations.get(name) == gen:
                         async with self._lock:
                             self._status[name] = "error"
+                        self._record_failure(name, "refresh", "Refresh failed")
 
             # Callbacks outside lock — they may perform IO (rebuild_index calls list_tools)
             # "updated" fires only when the proxy was actually regenerated (refreshed).
@@ -418,7 +741,18 @@ class ProxyManager:
         """
         async with self._lock:
             self._server_configs[name] = config
+        self.reset_limits_state(name)
         await self._notify_change(name, "tags_updated", None)
+
+    async def update_limits(self, name: str, config: dict) -> None:
+        """limits 変更を反映する（プロキシ再生成なし・制限状態を破棄）。
+
+        制限は tools/call 毎に config から読むため、反映は config 差し替えと
+        旧設定由来の Semaphore / レート状態の破棄だけで足りる。
+        """
+        async with self._lock:
+            self._server_configs[name] = config
+        self.reset_limits_state(name)
 
     async def rename_server(self, old_name: str, new_name: str, config: dict) -> None:
         """サーバー名変更。プロキシインスタンスは再利用（接続維持）。"""
@@ -449,6 +783,9 @@ class ProxyManager:
                 self._tool_counts[new_name] = tc
             if cache is not None:
                 self._tool_cache[new_name] = cache  # キャッシュ移動で再列挙回避
+            snapshot = self._schema_snapshots.pop(old_name, None)
+            if snapshot:
+                self._schema_snapshots[new_name] = snapshot
         if stale_client is not None and stale_client is not client:
             try:
                 await stale_client.close()
@@ -472,14 +809,13 @@ class ProxyManager:
         """
         servers_info = []
         for name, config in self._server_configs.items():
-            servers_info.append({
+            info = {
                 "name": name,
-                "disabled": config.get("disabled", False),
                 "tags": config.get("tags", []),
                 "description": config.get("description", ""),
-                "status": self._status.get(name, "unknown"),
-                "tool_count": self._tool_counts.get(name, 0),
-            })
+            }
+            info.update(self.get_connection_state(name))
+            servers_info.append(info)
         return servers_info
 
     async def list_tools(self, tags: list[str] | None = None) -> dict[str, list[dict]]:
@@ -555,11 +891,19 @@ class ProxyManager:
 
         return result
 
+    def begin_drain(self) -> None:
+        """新規ツール呼び出しを拒否するモードに入る（既存呼び出しは継続）。"""
+        self._draining = True
+
     async def call_tool(self, server_name: str, tool_name: str,
                         arguments: dict) -> Any:
         """ツール実行。asyncio.Event で rebuild 完了を待ち、Semaphore で同時実行数を制限。"""
+        if self._draining:
+            raise RuntimeError(
+                f"Server is shutting down — tool call {server_name!r}.{tool_name!r} rejected"
+            )
         # Wait for any ongoing rebuild to complete (with timeout)
-        timeout = int(os.environ.get("MCP_HUB_CALL_TOOL_TIMEOUT", "30"))
+        timeout = self.server_call_timeout(server_name) or 30.0
         try:
             await asyncio.wait_for(self._rebuild_complete.wait(), timeout=timeout)
         except asyncio.TimeoutError:
@@ -585,6 +929,13 @@ class ProxyManager:
 
     async def _notify_change(self, name: str, event: str, detail: dict | None = None) -> None:
         """Fire all on_change callbacks with the new signature, protected."""
+        if event in _CACHE_INVALIDATING_EVENTS:
+            # 再接続/スキーマ・設定変更/削除で結果キャッシュを無効化する（古い結果を返さない）
+            from .state import app_state
+            app_state.tool_cache.invalidate_server(name)
+            old_name = (detail or {}).get("old_name")
+            if isinstance(old_name, str) and old_name:
+                app_state.tool_cache.invalidate_server(old_name)
         for cb in self._on_change_callbacks:
             try:
                 await cb(name, event, detail)
@@ -678,7 +1029,8 @@ class ProxyManager:
                         name, attempt + 1, max_retries + 1, e, retry_delay,
                     )
                     await asyncio.sleep(retry_delay)
-        raise last_error  # type: ignore[misc]
+        assert last_error is not None  # 例外時のみループを抜ける
+        raise last_error
 
     async def list_tools_for_server(self, name: str, proxy: FastMCPProxy, cache_ttl: float = 60.0) -> list[Any]:
         """List tools with caching. Returns cached result if within TTL."""
@@ -687,12 +1039,78 @@ class ProxyManager:
             ts, tools = self._tool_cache[name]
             if now - ts < cache_ttl:
                 return tools
-        tools = await self._list_tools_with_retry(proxy, name)
+        try:
+            tools = await self._list_tools_with_retry(proxy, name)
+        except Exception as e:
+            self._record_failure(name, "list_tools", str(e) or e.__class__.__name__)
+            raise
+        self._record_success(name)
+        app_state.record_health(name, "ok", f"{len(tools)} tools")
         if tools:
             # 空リストでは上書きしない（probe が空を返しても最後の既知ツールを保持）
             self._tool_cache[name] = (now, tools)
             self._tool_counts[name] = len(tools)
+            # 定期 refresh 経由の差分検知（ベースラインがある時だけ）
+            if name in self._schema_snapshots:
+                changes = self._record_schema_diff(name, {"tools": tool_fingerprints(tools)}, "periodic")
+                if changes:
+                    await self._notify_change(name, SCHEMA_CHANGED_EVENT, {"trigger": "periodic", "changes": changes})
         return tools
+
+    async def _schema_snapshot(self, proxy: Any, tools: list[Any] | None = None) -> dict[str, dict[str, str]]:
+        """ツール/リソース/プロンプトの指紋。未対応の種別は省く。"""
+        snapshot: dict[str, dict[str, str]] = {"tools": tool_fingerprints(tools or [])}
+        for kind, method, key_attr in (
+            ("resources", "list_resources", "uri"),
+            ("prompts", "list_prompts", "name"),
+        ):
+            fn = getattr(proxy, method, None)
+            if not callable(fn):
+                continue
+            try:
+                snapshot[kind] = item_fingerprints(await cast(Any, fn()), key_attr)
+            except Exception:
+                logger.debug("%s not available for snapshot", method, exc_info=True)
+        return snapshot
+
+    def _record_schema_diff(self, name: str, partial: dict[str, dict[str, str]], trigger: str) -> dict | None:
+        """指紋を更新し、変化があれば履歴に記録して差分を返す（無変化は None）。
+
+        初回はベースラインとして黙って覚える（新規接続を「追加」と騒がない）。
+        空の応答は取得失敗か未対応とみなし、「全削除」として記録しない。
+        """
+        baseline = name not in self._schema_snapshots
+        old = self._schema_snapshots.get(name, {})
+        merged = dict(old)
+        changes: dict[str, dict[str, list[str]]] = {}
+        for kind, items in partial.items():
+            if not baseline and not items:
+                continue
+            if not baseline:
+                diff = diff_items(old.get(kind, {}), items)
+                if diff["added"] or diff["removed"] or diff["changed"]:
+                    changes[kind] = diff
+            merged[kind] = items
+        self._schema_snapshots[name] = merged
+        if not changes:
+            return None
+        entry = SchemaDiffEntry(ts=time.time(), server=name, trigger=trigger, changes=changes)
+        app_state.append_diff(entry)
+        logger.info("Schema changed for %s (%s): %s", name, trigger, entry.to_dict()["summary"])
+        return changes
+
+    async def _check_schema_diff(self, name: str, proxy: Any, trigger: str, tools: list[Any] | None = None) -> dict | None:
+        """スナップショット比較 → 記録 → schema_changed 通知。空応答は「全削除」とみなさない。"""
+        try:
+            if tools is None:
+                tools = await self._list_tools_with_retry(proxy, name)
+            changes = self._record_schema_diff(name, await self._schema_snapshot(proxy, tools), trigger)
+        except Exception:
+            logger.warning("Schema snapshot for %s failed", name, exc_info=True)
+            return None
+        if changes:
+            await self._notify_change(name, SCHEMA_CHANGED_EVENT, {"trigger": trigger, "changes": changes})
+        return changes
 
     def _record_health_failure(self, name: str, reason: str, max_failures: int) -> bool:
         """Count a health-check failure; return True when the server should be marked error.
@@ -704,6 +1122,7 @@ class ProxyManager:
         """
         failures = self._health_failures.get(name, 0) + 1
         self._health_failures[name] = failures
+        app_state.metrics.record_health_failure(name, reason)
         if failures < max_failures:
             logger.warning(
                 "Health check failure for %s (%d/%d): %s — keeping connected",
@@ -838,6 +1257,7 @@ class ProxyManager:
             if recovered:
                 self._last_recovery_fail.pop(name, None)
                 self._health_failures.pop(name, None)
+                app_state.metrics.record_reconnect()
                 await self._notify_change(name, "recovered", None)
 
         # Recovery: servers that failed initial connection (status="error", no proxy in _proxies)
@@ -898,6 +1318,7 @@ class ProxyManager:
             if recovered:
                 self._last_recovery_fail.pop(name, None)
                 self._health_failures.pop(name, None)
+                app_state.metrics.record_reconnect()
                 await self._notify_change(name, "recovered", None)
 
     async def _health_monitor_loop(self, interval: int) -> None:
@@ -933,8 +1354,29 @@ class ProxyManager:
                 pass
         self._health_task = None
 
+    async def cancel_background_tasks(self) -> None:
+        """バックグラウンドの接続/再接続タスクを止める（新規受付も停止）。
+
+        進行中の connect を放置すると、子プロセスが親の終了後も残る。
+        非同期タスクは cancel して待つ（例外は無視して残りを続行）。
+        """
+        self._draining = True
+        tasks = list(self._bg_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._bg_tasks.clear()
+        if tasks:
+            logger.info("Cancelled %d background connection task(s)", len(tasks))
+
     async def close_all(self) -> None:
-        """全 upstream client を閉じる（アプリ shutdown 時）。"""
+        """新規受付を止め、バックグラウンドタスクと upstream client を閉じる。
+
+        アプリ shutdown 時に呼ぶ。個々の失敗は警告に留めて残りを続行する
+        （1 台の失敗で他サーバーの接続が残る＝ゾンビ化を避ける）。
+        """
+        await self.cancel_background_tasks()
         clients = list(self._clients.values())
         self._clients.clear()
         for client in clients:
@@ -942,6 +1384,7 @@ class ProxyManager:
                 await client.close()
             except Exception:
                 logger.warning("Failed to close upstream client", exc_info=True)
+        logger.info("Closed %d upstream client(s)", len(clients))
 
     def _bump_generation(self, name: str) -> None:
         """世代を進める（呼び出し側は self._lock を保持していること）。

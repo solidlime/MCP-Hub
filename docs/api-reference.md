@@ -5,6 +5,7 @@ MCP Hub は以下のインターフェースを提供します：
 - **MCP Endpoint** (`/mcp`) — LLM クライアント向けの Streamable HTTP MCP エンドポイント
 - **Admin REST API** (`/admin/api`) — サーバー管理・設定変更のための RESTful API
 - **Admin Web UI** (`/admin/`) — ブラウザベースの管理インターフェース
+- **Metrics** (`/metrics`) — Prometheus テキスト形式のメトリクス（認証なし）
 
 ---
 
@@ -191,6 +192,44 @@ X-API-Key: your-api-key-here
 | `total_tools` | 全サーバーのツール数の合計 |
 | `tool_calls_total` | 累計ツール呼び出し回数 |
 | `tool_call_errors` | 累計ツール呼び出しエラー回数 |
+| `tool_cache` | ツール結果キャッシュの統計（`hits` / `misses` / `entries` など。機能無効時は 0） |
+
+---
+
+#### `GET /metrics`（Prometheus テキスト形式）
+
+スクレイパ向けのメトリクス。`/admin/api` の外にあり **API キー認証の対象外**（可視性は `/mcp` と同じで bind ホスト依存）。`include_in_schema=False` のため OpenAPI には出ません。
+
+**Content-Type:** `text/plain; version=0.0.4; charset=utf-8`
+
+```
+# TYPE mcp_hub_tool_calls_total counter
+mcp_hub_tool_calls_total{server="filesystem",status="success",tool="filesystem_read"} 12
+# TYPE mcp_hub_tool_call_duration_seconds histogram
+mcp_hub_tool_call_duration_seconds_bucket{le="0.1"} 9
+mcp_hub_tool_call_duration_seconds_bucket{le="+Inf"} 12
+mcp_hub_tool_call_duration_seconds_sum 0.834
+mcp_hub_tool_call_duration_seconds_count 12
+```
+
+| メトリクス | 型 | ラベル | 説明 |
+|---|---|---|---|
+| `mcp_hub_tool_calls_total` | counter | `server`, `tool`, `status` | ツール呼び出し回数（`success` / `error`） |
+| `mcp_hub_tool_call_duration_seconds` | histogram | — | ツール呼び出しレイテンシ |
+| `mcp_hub_search_queries_total` | counter | — | `search_tools` の実行回数 |
+| `mcp_hub_search_hits_total` / `mcp_hub_search_misses_total` | counter | — | 結果あり／なしの検索回数 |
+| `mcp_hub_index_rebuilds_total` | counter | — | 検索インデックス再構築の回数 |
+| `mcp_hub_index_rebuild_failures_total` | counter | — | ツール取得に失敗したサーバーを含む再構築の回数 |
+| `mcp_hub_index_build_duration_seconds` | histogram | — | 索引再構築の所要時間 |
+| `mcp_hub_embedding_cache_hits_total` / `_misses_total` | counter | — | 埋め込みディスクキャッシュの再利用／再計算 |
+| `mcp_hub_health_check_failures_total` | counter | `server`, `reason` | ヘルスチェック失敗 |
+| `mcp_hub_reconnects_total` | counter | — | 切断サーバーの復旧回数 |
+| `mcp_hub_uptime_seconds` | gauge | — | プロセス起動からの経過秒 |
+| `mcp_hub_servers_registered` / `mcp_hub_servers_active` | gauge | — | 登録サーバー数／接続中サーバー数 |
+| `mcp_hub_tools_total` / `mcp_hub_tools_indexed` | gauge | — | キャッシュ済みツール数／索引済みツール数 |
+| `mcp_hub_server_up` | gauge | `server` | 接続中なら 1、それ以外は 0 |
+
+`/admin/api/metrics` の JSON は従来どおり全フィールド互換のまま残しています（`/metrics` はその上位互換ではなく、ラベル付き系列を含む別ビューです）。
 
 ---
 
@@ -248,6 +287,18 @@ X-API-Key: your-api-key-here
   "connect_timeout": null,
   "use_embeddings": true,
   "embedding_status": "active",
+  "embedding_rebuild": {
+    "status": "idle",
+    "in_progress": false,
+    "trigger": null,
+    "requested_model": null,
+    "active_model": "cl-nagoya/ruri-v3-30m",
+    "documents": 42,
+    "embedding_status": "active",
+    "error": null,
+    "started_at": null,
+    "finished_at": null
+  },
   "llm": {
     "provider": null,
     "model": null,
@@ -259,9 +310,25 @@ X-API-Key: your-api-key-here
 
 `llm`（additive）は LLM 生成機能の設定状態。**`api_key` の値は返さず**、設定有無のみを `api_key_set` で公開する。
 
+`embedding_rebuild`（additive）は埋め込み設定変更に伴う索引再構築の状態。`status` は `idle` / `running` / `success` / `error`、`trigger` は `embedding_model` / `use_embeddings`。`requested_model`（保存済み設定値）と `active_model`（索引に適用済みのモデル）を分けて返すので、UI は両者の差で「再構築中 / 未反映」を判定できる。`documents` は索引済み文書数、`error` は最後の失敗理由、`started_at` / `finished_at` は epoch 秒。
+
 `embedding_status`（実効状態。取り得る値は `GET /admin/api/health` と同じ）は additive フィールドです。`use_embeddings` は設定意図ではなく実効値のため、embed 失敗により降格している場合は `use_embeddings=false` かつ `embedding_status="error:*"` になります。
 
 `client_timeout` / `connect_timeout` は未設定時 `null` を返します（実装: `admin_router.py:128-138`）。設定値は `proxy_manager.py` で `MCP_HUB_CLIENT_TIMEOUT`（既定 `180.0`）/ `MCP_HUB_CONNECT_TIMEOUT`（既定 `30.0`）より優先されます。
+
+`tool_cache`（additive）はツール結果キャッシュの正規化済み設定と実効統計:
+
+```json
+{
+  "enabled": false,
+  "ttl": 60.0,
+  "max_entries": 500,
+  "max_bytes": 5000000,
+  "allow": [],
+  "deny": [],
+  "stats": {"enabled": false, "hits": 0, "misses": 0, "evictions": 0, "entries": 0, "bytes": 0}
+}
+```
 
 #### `PATCH /admin/api/settings`
 
@@ -325,6 +392,26 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 }
 ```
 
+`tool_cache` で結果キャッシュの設定を**部分マージ**で更新します。値の変更（有効化・TTL・allow/deny・上限）は既存エントリの意味を変えるため全エントリを破棄します。不正値は `422`（`enabled` は bool、`ttl` は `0 < ttl <= 86400`、`max_entries` は 1 以上、`max_bytes` は 0 以上、`allow` / `deny` は空でない文字列のリスト）。
+
+**Request Body:**
+```json
+{
+  "tool_cache": {"enabled": true, "ttl": 30, "allow": ["fetch_*"]}
+}
+```
+
+#### `DELETE /admin/api/cache`
+
+ツール結果キャッシュの全エントリを破棄します（設定とヒット/ミス統計は保持）。
+
+**Response:**
+```json
+{"cleared": 12, "stats": {"enabled": true, "hits": 34, "misses": 40, "evictions": 0, "entries": 0, "bytes": 0}}
+```
+
+キャッシュは成功結果のみ保持し、例外・`is_error`・meta モード `execute_tool` の JSON `error` 応答は保存しません。ヒット時はツールログに `status="cache_hit"` が記録され、`/admin/api/metrics` の `mcp_hub_tool_calls_total{status="cache_hit"}` と `tool_cache` 統計で可視化されます。サーバーの再接続/設定変更/削除時は該当サーバーのエントリを自動破棄します。
+
 #### `GET /admin/api/settings/embedding-model`
 
 **Response:**
@@ -336,7 +423,9 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 
 #### `PATCH /admin/api/settings/embedding-model`
 
-埋め込みモデルを変更します。**新しいモデルは次回のサーバー再起動後に反映されます**（この PATCH は値を保存するだけで、`rebuild_index()` によるインデックス再生成は行いません）。任意の fastembed 対応モデル名、または ONNX Runtime 経路の登録モデル名（`cl-nagoya/ruri-v3-30m`）を指定できます。プレフィックスはモデルプロファイルから自動付与されます（`cl-nagoya/ruri-v3-30m` = `検索クエリ: `/`検索文書: `、`intfloat/` 配下で名前に `e5` を含むモデル = `query: `/`passage: `）。
+埋め込みモデルを保存し、**バックグラウンドで索引を再構築します（再起動待ちなし）**。応答は受け付け状態のみを返し、進捗・成功/失敗は `GET /admin/api/settings` の `embedding_rebuild` で追跡します（`PATCH /admin/api/settings` の `use_embeddings` 変更も同じ経路で再構築します）。任意の fastembed 対応モデル名、または ONNX Runtime 経路の登録モデル名（`cl-nagoya/ruri-v3-30m`）を指定できます。プレフィックスはモデルプロファイルから自動付与されます（`cl-nagoya/ruri-v3-30m` = `検索クエリ: `/`検索文書: `、`intfloat/` 配下で名前に `e5` を含むモデル = `query: `/`passage: `）。
+
+モデル切替時は旧モデルのベクトルと embedder を破棄してから再構築するため、モデル混在による誤ヒットは起きません。**再構築中は埋め込みが無いので検索は BM25 のみで継続します**（`embedding_status` は `building` ではなく `inactive:*` / `error:*` を返し、`embedding_rebuild.status="running"` と併せて実効状態が分かります）。再構築中の新規変更は前のタスクをキャンセルして置き換えます（設定の最終値だけが意味を持ちます）。
 
 **Request Body:**
 ```json
@@ -348,9 +437,66 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
 **Response:**
 ```json
 {
-  "embedding_model": "cl-nagoya/ruri-v3-30m"
+  "embedding_model": "cl-nagoya/ruri-v3-30m",
+  "embedding_status": "inactive:setting",
+  "rebuild": {
+    "status": "running",
+    "in_progress": true,
+    "trigger": "embedding_model",
+    "requested_model": "cl-nagoya/ruri-v3-30m",
+    "active_model": "cl-nagoya/ruri-v3-30m",
+    "documents": 0,
+    "embedding_status": "inactive:setting",
+    "error": null,
+    "started_at": 1750000000.0,
+    "finished_at": null
+  }
 }
 ```
+
+`rebuild`（additive）は `GET /admin/api/settings` の `embedding_rebuild` と同形です。`embedding_model` が無い場合は 400、空文字・パス/URL・制御文字・256 文字超は 422 を返します。
+
+---
+
+#### `POST /admin/api/reload`
+
+設定ファイル（`{MCP_HUB_DATA_DIR}/hub.config.json` = 管理 API が保存するストア）を再読込し、差分を**再起動なしで**適用します。
+
+適用順:
+1. **サーバー差分** — 追加はバックグラウンド接続、削除はアンマウント + upstream 切断、設定変更はプロキシ再生成（`ProxyManager.apply_server_configs`）。
+2. **ランタイム設定** — `use_embeddings` / `embedding_model`（変更時のみ索引再構築）、`log_level`、`meta_mode`（dispatcher キャッシュ破棄）、ツール結果キャッシュ設定。`full_info_tools` / `llm` / タグはリクエスト毎にストアから読むため再適用不要。
+3. **検索インデックス再構築** — 埋め込み設定が変わった時だけ実行（失敗しても BM25 で検索は継続し `index_rebuilt: false`）。
+
+**Response:**
+```json
+{
+  "ok": true,
+  "servers": {
+    "added": ["new-server"],
+    "removed": ["old-server"],
+    "updated": ["changed-server"],
+    "unchanged": ["keep-server"]
+  },
+  "settings": {
+    "meta_mode": true,
+    "use_embeddings": true,
+    "embedding_model": "cl-nagoya/ruri-v3-30m",
+    "embedding_model_changed": false,
+    "index_rebuilt": false
+  }
+}
+```
+
+**Errors:**
+
+| ステータス | 条件 |
+|---|---|
+| `500` | 設定ファイルが不正（JSON 壊れ / `mcpServers` が dict でない / サーバーエントリが不正）。**適用前に弾くためランタイムは変更前のまま。** |
+| `401` | `MCP_HUB_API_KEY` 設定時にキー不一致 |
+
+再接続に失敗したサーバーは `status: "error"` になるだけで、他のサーバーは稼働を続けます（部分適用を `ok` で返す）。
+
+**環境変数 `MCP_HUB_WATCH_CONFIG=<秒>`** を設定すると、設定ファイルの mtime を監視して同じ処理を自動実行します（未設定/`0`＝無効、既定は無効）。監視ループは不正設定を警告ログにして継続し、次回変更時に追いつきます。
 
 ---
 
@@ -379,12 +525,34 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
       },
       "disabled": false,
       "status": "connected",
+      "effective_state": "healthy",
       "tools_count": 12,
+      "tool_count": 12,
+      "resource_count": 4,
+      "prompt_count": 2,
+      "last_success_at": 1710000000.0,
+      "last_error": null,
+      "consecutive_failures": 0,
+      "retry_backoff_seconds": 300.0,
+      "retry_in_seconds": null,
+      "next_retry_at": null,
+      "health_history": [{"at": 1710000000.0, "event": "ok", "detail": "12 tools"}],
       "tools": []
     }
   ]
 }
 ```
+
+接続状態フィールド（WebUI と同一定義）:
+
+| フィールド | 説明 |
+|---|---|
+| `effective_state` | 実効状態。`healthy` / `initializing` / `recovering` / `error` / `disabled` / `unknown`。直近の失敗 (`status="error"`) は `disabled` より優先して表示する。 |
+| `consecutive_failures` | 直近の連続失敗数（成功でリセット）。 |
+| `last_success_at` / `last_error` | 最終成功時刻（epoch 秒）と直近エラー `{reason, message, at}`。 |
+| `retry_backoff_seconds` / `retry_in_seconds` / `next_retry_at` | 復旧クールダウン（`MCP_HUB_RECOVERY_COOLDOWN`）と、`error` 時の次回リトライまでの残り秒数・時刻。 |
+| `tool_count` / `resource_count` / `prompt_count` | 既知の件数（リソース/プロンプトは `/resources` `/prompts` 取得時に更新）。 |
+| `health_history` | 直近 20 件の接続イベント（`ok` / `failure` / `connected` など）。 |
 
 #### `POST /admin/api/servers`
 
@@ -485,6 +653,32 @@ meta_mode を切り替えたり、フル公開ツールを設定します。切�
   "name": "my-server",
   "config": { ... }
 }
+```
+
+`limits` フィールドはサーバー単位の呼び出し制限（`call_timeout` / `max_concurrent` /
+`rate_limit` / `rate_burst` / `rate_window`）。`null` を送るとキーが削除されます。
+`limits` **のみ**の更新もプロキシ再生成を行わず（制限は呼び出し毎に参照）、既存の
+同時実行スロット・レート状態だけがリセットされます。
+
+```json
+{
+  "limits": { "call_timeout": 120, "max_concurrent": 2, "rate_limit": 10, "rate_window": 60 }
+}
+```
+
+#### `PATCH /admin/api/servers/{name}/limits`
+
+サーバー単位の呼び出し制限を部分更新します（マージ）式。`null` で個別キーを削除し、
+結果が空になったら config から `limits` キーごと削除（＝全項目グローバル既定）。
+
+**Request Body:** 上記 `limits` オブジェクトの部分適用（未知キー・範囲外は `422`）
+
+```json
+{ "rate_limit": 5, "rate_window": 30 }
+```
+**Response:**
+```json
+{ "name": "my-server", "limits": { "rate_limit": 5, "rate_window": 30 } }
 ```
 
 #### `DELETE /admin/api/servers/{name}`

@@ -27,6 +27,11 @@ class JsonStore:
         self._lock = asyncio.Lock()
         self._data: dict = {}
 
+    @property
+    def path(self) -> Path:
+        """設定ファイルのパス（ホットリロードの監視対象）。"""
+        return self._path
+
     def _do_read(self) -> dict:
         """Actual file read (no lock). Caller must handle synchronization."""
         if not self._path.exists():
@@ -284,4 +289,11 @@ class JsonStore:
         async with self._lock:
             data = await self._read_locked()
             data["full_info_tools"] = list(tools)
+            await self._write_internal(data)
+
+    async def set_tool_cache(self, cfg: dict) -> None:
+        """ツール結果キャッシュ設定を保存する（検証済みの正規化済み dict）。"""
+        async with self._lock:
+            data = await self._read_locked()
+            data["tool_cache"] = dict(cfg)
             await self._write_internal(data)

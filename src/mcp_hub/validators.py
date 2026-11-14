@@ -37,6 +37,21 @@ MAX_HEADER_KEY_LENGTH = 256
 MAX_HEADER_VALUE_LENGTH = 8192
 MAX_DESCRIPTION_LENGTH = 500
 
+# サーバー単位の呼び出し制限（config["limits"]）で受け付けるキー。
+# 未指定キーはグローバル既定（env / グローバル Semaphore）にフォールバックする。
+LIMIT_KEYS = frozenset({
+    "call_timeout",    # 秒。0<t<=3600
+    "max_concurrent",  # 同時実行数。1<=n<=64
+    "rate_limit",      # rate_window あたりの呼び出し数
+    "rate_burst",      # バースト許容量。既定=rate_limit
+    "rate_window",     # レート計測窓（秒）。既定=1.0
+})
+MAX_CALL_TIMEOUT = 3600.0
+MAX_MAX_CONCURRENT = 64
+MAX_RATE_LIMIT = 10000.0
+MAX_RATE_BURST = 10000
+MAX_RATE_WINDOW = 3600.0
+
 
 class ValidationError(ValueError):
     """Raised when server config validation fails."""
@@ -180,6 +195,59 @@ def bearer_headers_from_env(env: dict) -> dict | None:
     return {"Authorization": f"Bearer {env[matches[0]]}"}
 
 
+def validate_limits(limits: dict) -> dict:
+    """サーバー単位の呼び出し制限を検証・正規化する。
+
+    未指定キーは結果に含めない（=グローバル既定にフォールバック）。
+    未知キーは誤記の温存を避けるため拒否する。
+    """
+    if not isinstance(limits, dict):
+        raise ValidationError("limits はオブジェクトである必要があります")
+    unknown = set(limits) - LIMIT_KEYS
+    if unknown:
+        raise ValidationError(
+            f"limits に不明なキー: {', '.join(sorted(unknown))}"
+            f"（有効: {', '.join(sorted(LIMIT_KEYS))}）"
+        )
+
+    def _num(key: str, lo: float, hi: float, *, integer: bool):
+        value = limits.get(key)
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            raise ValidationError(f"limits.{key} は数値である必要があります")
+        try:
+            f = float(value)
+        except ValueError:
+            raise ValidationError(f"limits.{key} は数値である必要があります") from None
+        if integer:
+            if f != int(f):
+                raise ValidationError(f"limits.{key} は整数である必要があります")
+            i = int(f)
+            if not (lo <= i <= hi):
+                raise ValidationError(
+                    f"limits.{key} は {int(lo)} 以上 {int(hi)} 以下である必要があります"
+                )
+            return i
+        if not (lo < f <= hi):
+            raise ValidationError(
+                f"limits.{key} は 0 より大きく {hi:g} 以下である必要があります"
+            )
+        return f
+
+    out: dict = {}
+    for key, value in (
+        ("call_timeout", _num("call_timeout", 0.0, MAX_CALL_TIMEOUT, integer=False)),
+        ("max_concurrent", _num("max_concurrent", 1, MAX_MAX_CONCURRENT, integer=True)),
+        ("rate_limit", _num("rate_limit", 0.0, MAX_RATE_LIMIT, integer=False)),
+        ("rate_burst", _num("rate_burst", 1, MAX_RATE_BURST, integer=True)),
+        ("rate_window", _num("rate_window", 0.0, MAX_RATE_WINDOW, integer=False)),
+    ):
+        if value is not None:
+            out[key] = value
+    return out
+
+
 def validate_server_name(name: str) -> str:
     """Validate a server name. Returns the name unchanged on success."""
     if not name or not isinstance(name, str):
@@ -220,6 +288,8 @@ def validate_server_config(name: str, config: dict) -> dict:
                 raise ValidationError(f"Invalid tag: {tag}")
     if "headers" in config:
         config["headers"] = validate_headers(config["headers"])
+    if "limits" in config:
+        config["limits"] = validate_limits(config["limits"])
     if config.get("description") is not None:
         desc = config["description"]
         if not isinstance(desc, str):

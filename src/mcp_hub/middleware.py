@@ -7,12 +7,14 @@ fastmcp の Middleware.on_call_tool をオーバーライドし、tools/call の
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import traceback
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import Tool, ToolResult
 from mcp.types import TextContent
@@ -100,6 +102,17 @@ class ToolLogMiddleware(Middleware):
             out.append(t)
         return out
 
+    def _cache_key(
+        self, name: str, server: str, tool: str, arguments: dict
+    ) -> str | None:
+        """キャッシュ対象なら結果キャッシュのキーを返す（対象外は None）。"""
+        cache = app_state.tool_cache
+        if not cache.is_cacheable(server, tool):
+            return None
+        # meta モードの execute_tool は内側の arguments で判定する。
+        payload = arguments.get("arguments") if name == _META_TOOL_EXECUTE else arguments
+        return cache.make_key(server, tool, payload if isinstance(payload, dict) else {})
+
     async def on_call_tool(
         self,
         context: MiddlewareContext[mt.CallToolRequestParams],
@@ -121,12 +134,31 @@ class ToolLogMiddleware(Middleware):
             args=mask_args(arguments),
         ))
 
+        # 任意機能: 冪等/参照系ツールの結果キャッシュ（既定 OFF）。
+        cache = app_state.tool_cache
+        cache_key = self._cache_key(name, server, tool, arguments)
+        if cache_key is not None:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                app_state.metrics.record_tool_call(server, tool, "cache_hit", 0.0)
+                app_state.append_log(LogEntry(
+                    ts=time.time(),
+                    type="tool_call",
+                    server=server,
+                    tool=tool,
+                    status="cache_hit",
+                    duration_ms=0.0,
+                    args=mask_args(arguments),
+                ))
+                return cached
+
         start = time.monotonic()
         try:
             result = await call_next(context)
         except Exception as e:
             duration_ms = (time.monotonic() - start) * 1000
             await app_state.inc_tool_call_errors()
+            app_state.metrics.record_tool_call(server, tool, "error", duration_ms / 1000)
             app_state.append_log(LogEntry(
                 ts=time.time(),
                 type="tool_call",
@@ -156,6 +188,7 @@ class ToolLogMiddleware(Middleware):
             await app_state.inc_tool_calls()
         else:
             await app_state.inc_tool_call_errors()
+        app_state.metrics.record_tool_call(server, tool, status, duration_ms / 1000)
 
         app_state.append_log(LogEntry(
             ts=time.time(),
@@ -189,6 +222,10 @@ class ToolLogMiddleware(Middleware):
         ):
             result.structured_content = None
             result._raw_mcp_result = None  # 原生 CallToolResult 直通の復元を無効化
+
+        # 成功結果のみキャッシュ。エラー/例外（上の raise）は入れない。
+        if cache_key is not None and status == "success" and not getattr(result, "is_error", False):
+            cache.put(cache_key, result)
         return result
 
 
@@ -208,3 +245,37 @@ def _extract_json_error(result: Any) -> str | None:
         if isinstance(data, dict) and data.get("error"):
             return str(data["error"])
     return None
+
+
+class LimitsMiddleware(Middleware):
+    """サーバー単位の timeout / 同時実行 / レート制限を適用する（最外殻）。
+
+    normal / meta / full_info の全 tools/call がこの層を通るため、ここが
+    単一の適用点になる。制限未設定のサーバーは従来と同じ挙動（timeout は
+    グローバル既定 MCP_HUB_CALL_TOOL_TIMEOUT）。
+    """
+
+    def __init__(self, proxy_manager) -> None:
+        super().__init__()
+        self._pm = proxy_manager
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[mt.CallToolRequestParams],
+        call_next: CallNext[mt.CallToolRequestParams, Any],
+    ) -> Any:
+        name = context.message.name
+        arguments = context.message.arguments or {}
+        server, tool = resolve_server(name, arguments, self._pm.known_servers())
+        timeout = self._pm.server_call_timeout(server)
+
+        async with self._pm.call_slot(server, tool):
+            if timeout is None:
+                return await call_next(context)
+            try:
+                return await asyncio.wait_for(call_next(context), timeout)
+            except (asyncio.TimeoutError, TimeoutError):
+                raise ToolError(
+                    f"Call to server {server!r} tool {tool!r} timed out after "
+                    f"{timeout:g}s (limits.call_timeout)"
+                ) from None

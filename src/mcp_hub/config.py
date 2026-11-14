@@ -10,12 +10,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .validators import ValidationError, validate_limits
+
 logger = logging.getLogger(__name__)
 
 # 既定の埋め込みモデル。ruri-v3-30m（日本語特化・dim 256）は ModernBERT のため
 # fastembed 非対応で、ONNX Runtime 経路（lc-studio/ruri-v3-30m-onnx）で読む。
 # 差し替え時は meta_provider._MODEL_PROFILES の prefix 登録も合わせること。
 DEFAULT_EMBEDDING_MODEL = "cl-nagoya/ruri-v3-30m"
+
+# SIGTERM/SIGINT 後のドレイン待機時間（秒）。進行中のリクエストが片付くのを
+# これだけ待ってから upstream 接続を閉じる。
+DEFAULT_DRAIN_TIMEOUT = 10.0
 
 
 @dataclass
@@ -28,6 +34,8 @@ class HubConfig:
     # LLM による説明文生成（/admin/api/llm/generate）の設定。
     # {provider?, model?, api_key?, base_url?}。未設定／api_key 無し＝機能オフ。
     llm: dict[str, Any] = field(default_factory=dict)
+    # グレースフルシャットダウン時に進行中リクエストを待つ上限（秒）
+    shutdown_drain_timeout: float = DEFAULT_DRAIN_TIMEOUT
 
 
 def _data_dir() -> str:
@@ -85,6 +93,18 @@ def _parse_config(filepath: Path) -> HubConfig:
     if not isinstance(llm, dict):
         logger.warning("Invalid llm=%r — ignoring (feature stays off)", llm)
         llm = {}
+    drain_timeout = raw.get("shutdown_drain_timeout", DEFAULT_DRAIN_TIMEOUT)
+    try:
+        drain_timeout = float(drain_timeout)
+        if drain_timeout < 0:
+            raise ValueError("negative")
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid shutdown_drain_timeout=%r — falling back to %gs",
+            raw.get("shutdown_drain_timeout"),
+            DEFAULT_DRAIN_TIMEOUT,
+        )
+        drain_timeout = DEFAULT_DRAIN_TIMEOUT
     raw_servers = raw.get("mcpServers", raw.get("servers", {}))
 
     if not isinstance(raw_servers, dict):
@@ -107,6 +127,21 @@ def _parse_config(filepath: Path) -> HubConfig:
         if cfg.get("disabled"):
             logger.info("Skipping disabled server '%s'", name)
             continue
+        cfg = dict(cfg)
+        # 手書き hub.config.json の壊れた limits は落として既定値で動かす
+        # （起動失敗よりは制限なしで動く方がまし）。
+        if "limits" in cfg:
+            try:
+                limits = validate_limits(cfg["limits"])
+            except ValidationError as e:
+                logger.warning(
+                    "Invalid limits for server '%s' (%s) — ignored", name, e
+                )
+                limits = {}
+            if limits:
+                cfg["limits"] = limits
+            else:
+                cfg.pop("limits", None)
         servers[name] = cfg  # store templates raw; expansion happens in proxy_manager._create_proxy()
 
     return HubConfig(
@@ -116,6 +151,7 @@ def _parse_config(filepath: Path) -> HubConfig:
         embedding_model=embedding_model,
         use_embeddings=use_embeddings,
         llm=llm,
+        shutdown_drain_timeout=drain_timeout,
     )
 
 
