@@ -191,3 +191,50 @@ MCP Hub は子サーバーへのプロキシとして機能します。子サー
 JSON 形式のログ（`MCP_HUB_LOG=json`）を選択すると、すべてのログエントリが構造化され、SIEM やログ分析システムでの監視が容易になります。
 
 管理 API のツールログ（`GET /admin/api/logs`、Web UI のログタブ）では、API キー・トークン・秘密鍵など機密情報を含む引数・エラーが自動的にマスキング（`***` 置換）されます。ログはメモリ上のリングバッファ（最大 500 件）にのみ保持され、永続化されません。
+
+---
+
+## 5. 供給網保護（モジュール／依存の導入）
+
+依存の取得経路は 2 つあり、それぞれ別の保護を持つ。実装は
+`src/mcp_hub/bootstrap.py`（起動時）と `src/mcp_hub/admin_router.py`
+（管理 API `/admin/api/tools/install`・`/uninstall`）。
+
+### 5.1 起動時 bootstrap（Node.js / uv / fastembed）
+
+| 保護 | 内容 |
+|---|---|
+| 取得元の固定 | URL はコード内定数のみ（ユーザー入力なし） |
+| https 強制 | `https://` 以外は抽出前に `ValueError` |
+| ホスト許可リスト | `bootstrap.py:DOWNLOAD_ALLOWED_HOSTS` = `nodejs.org` / `github.com` / `objects.githubusercontent.com`。リスト外ホストは拒否 |
+| SHA256 固定 | `bootstrap.py:PINNED_SHA256` に linux x64 / arm64 の公式ハッシュを保持。不一致なら**展開せず** `ValueError` |
+| 未ピン URL の方針 | 既定は警告して続行（`no pinned SHA256 for ...`）。`MCP_HUB_BOOTSTRAP_REQUIRE_HASH=1` で拒否に切替（fail closed） |
+| 依存ピン | pip extras は `EXTRAS_PINS` の範囲指定（`MCP_HUB_EXTRAS_PINS` で上書き）。レジストリは `MCP_HUB_PIP_INDEX_URL`（https 以外は既定へフォールバック） |
+| 失敗時の挙動 | 検証失敗・インストール失敗でも起動は継続する（Node 依存サーバーのみ影響、埋め込みは BM25 フォールバック）。未検証バイナリは展開しない |
+| 監査ログ | `[bootstrap][audit] {"event": "download"|"deps.install", "ok": bool, "url"/"index_url", "sha256"/"error", ...}` |
+
+### 5.2 管理 API からのインストール（pip / uv / uv-tool / npm）
+
+| 保護 | 内容 |
+|---|---|
+| シェル非経由 | `asyncio.create_subprocess_exec` に固定 argv（`create_subprocess_shell` は使わない）。フラグ注入は先頭 `-` の拒否で防ぐ |
+| マネージャー限定 | `manager` は `pip` / `uv` / `uv-tool` / `npm` のみ（400） |
+| パッケージ仕様の検証 | 空白・制御文字・シェルメタ文字（`; \| & $ \` \ " '`）・パス区切り・先頭 `.`/`-` を拒否。pip/uv は PEP 508 の範囲指定と URL 仕様（`git+https://`、`https://....whl/.tar.gz`）、npm は `[@scope/]name[@version]` のみ |
+| 取得元 | `MCP_HUB_INSTALL_ALLOWED_HOSTS` 設定時は URL 仕様のホストを照合し、不一致は実行前に 400 |
+| レジストリ固定 | `MCP_HUB_PIP_INDEX_URL` → `--index-url`、`MCP_HUB_NPM_REGISTRY` → `--registry`。`https://` 以外は警告して無視（既定レジストリ） |
+| 依存ピン | `constraints`（例 `mcp<2`）を pip/uv は argv 末尾、uv-tool は `--with` で適用。npm は 400 |
+| 自動ピン | `git+` URL を shallow clone して `mcp.server.fastmcp` import を検出した場合のみ `mcp<2` を自動適用（明示 `constraints` があれば上書きしない）。判定不能時は通常インストールへフォールバック |
+| 直列化・時間制限 | インストールはプロセス内で同時 1 本（セマフォ）、300 秒でタイムアウト（504） |
+| 出力の安全性 | stdout/stderr はマスキング（`mask_text`）後に 8000 文字へ切り詰めて返す |
+| 失敗時 | マネージャー未導入は 503、タイムアウトは 504、非ゼロ終了は `{success: false, returncode, stdout, stderr}`（例外にしない）。いずれも監査ログに残る |
+| アンインストール | pip/uv は `pip-extras` 配下のディレクトリを PEP 503 正規化 + `realpath` プレフィックス検証で削除（シンボリックリンクは対象外） |
+| 監査ログ | `[audit] {"event": "pkg.install"|"pkg.uninstall", "ok": bool, "manager", "returncode", "duration_ms", "error"}` |
+
+### 5.3 保証しないこと（制限）
+
+- 管理 API 経由のインストールは **ハッシュ固定を行わない**（`pip --require-hashes` 相当は未実装）。取得した wheel/sdist の完全性は TLS とレジストリ側の署名に依存する。固定が必要な場合は `constraints` でバージョンを厳密指定するか、イメージビルド時に `pyproject.toml` / `uv.lock` へ組み込むこと。
+- **署名検証は行わない**（npm provenance / PyPI 署名 / Sigstore は未対応）。
+- npm インストールはパッケージの `postinstall` 等のライフサイクルスクリプトを実行する（`--ignore-scripts` は付けていない）。信頼できないパッケージを入れないこと。
+- `MCP_HUB_INSTALL_ALLOWED_HOSTS` は**オプトイン**。未設定時は任意の https ホストからの URL 仕様を許可する（後方互換のため）。公開インスタンスでは設定を推奨。
+- `git+` ソースの自動ピン（`mcp<2`）は import 文のヒューリスティックであり、動的 import や間接依存までは検出しない。clone 失敗時はピンなしで続行する。
+- インストールされたパッケージは MCP Hub と同じ権限で動作する。導入可否の判断は運用者責任。
