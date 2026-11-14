@@ -405,12 +405,13 @@ class TestMetaIntegration:
         assert r.status_code != 404
 
     def test_mcp_meta_has_expected_tools(self, client):
-        """Meta app exposes 3 tools: search_tools, execute_tool, get_schema."""
+        """Meta app exposes 4 tools: search_tools, search_resources, execute_tool,
+        get_schema."""
         parsed = _post_tools_list(client)
         tools = parsed["result"]["tools"]
-        assert len(tools) == 3
+        assert len(tools) == 4
         names = {t["name"] for t in tools}
-        assert names == {"search_tools", "execute_tool", "get_schema"}
+        assert names == {"search_tools", "search_resources", "execute_tool", "get_schema"}
 
     def test_get_schema_tool_returns_full_schema(self, client):
         """get_schema は完全な inputSchema（パラメータ型付き）を返す。"""

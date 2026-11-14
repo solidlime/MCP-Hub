@@ -212,17 +212,18 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
 
 | 項目 | 通常モード | Meta モード |
 |---|---|---|
-| 公開ツール数 | 全ツール（例: 84 ツール） | 3 ツール + `full_info_tools` 指定分 |
+| 公開ツール数 | 全ツール（例: 84 ツール） | 4 ツール + `full_info_tools` 指定分 |
 | コンテキスト消費 | ~15K tokens | ~500 tokens（フル公開ツール分を除く） |
 | ツール発見 | クライアントの `tools/list` | `search_tools` のクエリ検索 |
 
 フル公開ツールは Meta モードでも `tools/list` / `tools/call` で直接利用できます（`FullInfoMiddleware`）。
 
-**3 つのメタツール：**
+**4 つのメタツール：**
 
 | ツール | 説明 |
 |---|---|
 | `search_tools(query, top_k=10)` | キーワードまたはセマンティック検索でツールを発見（`top_k` は最大 50 にクランプ） |
+| `search_resources(query, top_k=3, kind=None, server=None)` | リソース / リソーステンプレート / プロンプトを同じ索引（`kind` で分離）から発見 |
 | `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行 |
 | `get_schema(server, tool_name)` | `search_tools` の `inputSchema` は要約なので、実行前に完全な仕様（切り詰めなしの `description` ＋完全な `inputSchema`）を取得する |
 
@@ -241,7 +242,9 @@ meta_mode が有効な場合に動作する特殊な FastMCP アプリです。�
 - **フォールバック**: BM25Okapi によるキーワード検索
   - `fastembed` 未インストール時（現行の degrade ゲート。ORT 経路モデルを指定していてもこの場合は埋め込みを作らず BM25 のみ）、またはセマンティック検索が 0 件の場合に使用
   - コード認識トークナイザー（NFKC → ひらがな→カタカナ統一 → camelCase 分割、digit 境界分割、CJK 連続区間の bigram+unigram）
+  - 重複除去は**1 語内の派生トークンのみ**（`read_file` → `read_file` / `read` / `file`、CJK 連続区間 → 全体 + bigram + unigram）。語をまたぐ同じ語の繰り返しは tf として残す（旧実装はテキスト全体で dedup していたため tf が実質二値化され、同じ語を 3 回書いた説明も 1 回書いた説明も同点だった）。クエリ側だけは `_bm25_search` で一意化してから `get_scores` に渡す（rank_bm25 はクエリ語の出現回数分だけ加算するため）
   - BM25F 近似のためのトークン重複（名前×5、サーバー名×3、説明×2、パラメーター名×1）
+  - `index_text` を組まない呼び出しでも `search_desc`（日本語1文）は索引に入る（無ければ `description` にフォールバック）
 - **融合**: BM25 とセマンティック候補を RRF（Reciprocal Rank Fusion, k=60）で合成。name-match promotion（希少トークンの IDF ゲート付き）が最優先される
 - **小規模コーパスフォールバック**: 5 件以下のサーバーでは単純な TF 重み付け
 

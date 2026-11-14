@@ -21,7 +21,7 @@ LLM クライアントはここに接続して全子サーバーのツール・�
 | モード | 説明 |
 |---|---|
 | 通常モード (`meta_mode=false`) | 全子サーバーの全ツール・リソース・プロンプトを直接公開 |
-| Meta モード (`meta_mode=true`, デフォルト) | Progressive Discovery: `search_tools`、`execute_tool`、`get_schema` の 3 ツールのみ公開。ただし `full_info_tools` に指定したツールは通常ツールとしてフル公開される |
+| Meta モード (`meta_mode=true`, デフォルト) | Progressive Discovery: `search_tools`、`search_resources`、`execute_tool`、`get_schema` の 4 ツールのみ公開。ただし `full_info_tools` に指定したツールは通常ツールとしてフル公開される |
 
 #### タグフィルタリング
 
@@ -61,15 +61,39 @@ resources/read hub://servers
 
 #### Progressive Discovery（meta_mode）
 
-meta_mode が有効な場合、MCP エンドポイントは以下の 3 ツールのみを公開します：
+meta_mode が有効な場合、MCP エンドポイントは以下の 4 ツールのみを公開します：
 
 | ツール | 説明 |
 |---|---|
-| `search_tools(query, top_k=3, detail="brief", server=None)` | BM25 + オプションの埋め込みベースセマンティック検索でツールを検索。`top_k` は最大 50 にクランプされる（巨大な値を渡しても返り値が肥大しない）。`detail` は `"brief"`（既定、inputSchema なし）/ `"schema"`（上位 1 件のみ圧縮 inputSchema）/ `"all"`（全件に圧縮 inputSchema、従来互換）。`server` を渡すと結果をその 1 サーバーに絞る（大小文字は無視）。未接続（インデックス不在）のサーバーなら `Tool not found`、接続済みだがタグフィルタ範囲外なら `Tool not available`（権限なし。実タグ一覧は返さない）を返し、存在の有無を漏らさない |
+| `search_tools(query, top_k=3, detail="brief", server=None)` | BM25 + オプションの埋め込みベースセマンティック検索で**ツールのみ**を検索。`top_k` は最大 50 にクランプされる（巨大な値を渡しても返り値が肥大しない）。`detail` は `"brief"`（既定、inputSchema なし）/ `"schema"`（上位 1 件のみ圧縮 inputSchema）/ `"all"`（全件に圧縮 inputSchema、従来互換）。`server` を渡すと結果をその 1 サーバーに絞る（大小文字は無視）。未接続（インデックス不在）のサーバーなら `Tool not found`、接続済みだがタグフィルタ範囲外なら `Tool not available`（権限なし。実タグ一覧は返さない）を返し、存在の有無を漏らさない |
+| `search_resources(query, top_k=3, kind=None, server=None)` | **リソース / リソーステンプレート / プロンプト**を同じ索引（`ToolIndex` を `kind` で分離）から検索。`kind` は `resource` / `resource_template` / `prompt`（複数形・ハイフン形も可）。結果には `uri`（テンプレートは `uri_template`）と `arguments`（テンプレートは JSON Schema `properties` から、プロンプトは `arguments` から正規化）が付く。実体の読み取りは従来どおり `resources/read` / `prompts/get` で行う |
 | `execute_tool(server, tool_name, arguments)` | 検索で見つけたツールを実行。互換のため `{"arguments": {...}}` に `server` / `tool_name` / `arguments` を折り畳んだ形式（LLM が生成しがちなフラット呼び出し）も受け付ける。サーバー名の大文字小文字は case-insensitive に解決される。タグフィルタ範囲外のサーバーは `Tool not available`（権限なし）で拒否される |
 | `get_schema(server, tool_name, compact=False)` | `search_tools` の `inputSchema` は既定で省かれるので、実行前に仕様が必要な時に呼ぶ。既定 (`compact=False`) は切り詰めなしの `description` と完全な `inputSchema`。`compact=True` は `search_tools` と同じ圧縮 `inputSchema`（名前 / 型 / 必須）を返す。サーバー名は case-insensitive に解決される |
 
 `search_tools` の description には接続中のサーバー一覧（カタログ）が含まれます。`X-MCP-Hub-Tags` ヘッダによるタグフィルタが有効な場合、このカタログは**可視のサーバーのみ**に差し替えられます（タグ範囲外のサーバーは検索結果と同様、カタログからも見えません）。
+
+#### `search_resources` のレスポンス形式
+
+```json
+{
+  "results": [
+    {
+      "server": "notes",
+      "name": "note://{id}",
+      "description": "ノート本文",
+      "kind": "resource_template",
+      "uri": "note://{id}",
+      "arguments": [{ "name": "id", "description": "note id", "required": true }],
+      "score": 2.1
+    }
+  ],
+  "kinds": ["tool", "resource", "resource_template", "prompt"]
+}
+```
+
+- 索引はツールと同じくサーバー接続時（`rebuild_index`）に作られ、`X-MCP-Hub-Tags` のタグフィルタはツールと同一に適用される（範囲外サーバーのリソース/プロンプトは結果に出ない）。
+- リソース/プロンプトの一覧取得に失敗する子サーバー（未実装を含む）でもツール索引は壊れない。失敗はログ警告のみで、そのサーバーを「失敗」扱いにはしない。
+- `search_tools` はツールだけを返す（リソース/プロンプトは混ざらない）。
 
 ##### `search_tools` のレスポンス形式
 
@@ -891,6 +915,36 @@ OpenAI 互換 API（`{base_url}/chat/completions`、`Authorization: Bearer {api_
 | `404` | `server` が未接続、または `tool_name` が当該サーバーに見つからない。 |
 | `422` | `kind` が不正。 |
 | `502` | 上流 LLM への接続失敗、上流 HTTP エラー、応答の解析失敗（`server_bundle` の JSON 解析失敗を含む）、空応答。 |
+
+---
+
+### 検索・発見
+
+#### `GET /admin/api/discovery/search`
+
+メタ経路と同じ索引（ツール / リソース / リソーステンプレート / プロンプト）を横断検索します。管理 UI の「検索」タブが使用します。
+
+| パラメータ | 型 | 既定 | 説明 |
+|---|---|---|---|
+| `query` | string | 必須 | 検索語 |
+| `top_k` | int | 10 | 最大件数（50 にクランプ） |
+| `kind` | string | なし | `tool` / `resource` / `resource_template` / `prompt`。複数形・ハイフン形も可。不正値は 400 |
+| `server` | string | なし | サーバー名で絞り込み（大小文字無視） |
+
+**Response:**
+```json
+{
+  "query": "note file",
+  "kinds": ["tool", "resource", "resource_template", "prompt"],
+  "results": [
+    { "server": "filesystem", "name": "read_file", "description": "...", "kind": "tool", "score": 3.2, "tags": ["local"] }
+  ]
+}
+```
+
+- 管理 API は認証済みの全権限ビューなので**タグフィルタは適用しない**（`tags` は結果に含める）。
+- メタ経路の応答形状（ツールヒットに `kind` を付けない）は既存契約のまま。`kind` を付けるのはこの管理 API のみ。
+- 索引未構築（`meta_app` 不在）では `{"results": [], "kinds": [...]}` を返す。
 
 ---
 

@@ -1944,6 +1944,8 @@
                     onclick="switchMainTab('logs')">ログ</button>
             <button class="tab" id="tabDiffsBtn" role="tab" aria-selected="false"
                     onclick="switchMainTab('diffs')">スキーマ変更</button>
+            <button class="tab" id="tabSearchBtn" role="tab" aria-selected="false"
+                    onclick="switchMainTab('search')">検索</button>
         </div>
 
         <!-- Server Tab -->
@@ -2087,9 +2089,40 @@
                 </div>
             </div>
         </section>
+        <!-- Search Tab: 検索インデックス（ツール/リソース/テンプレート/プロンプト） -->
+        <section id="searchTab" style="display: none;" role="tabpanel" aria-label="横断検索">
+            <div class="log-filter-bar">
+                <input type="text" id="searchQuery" placeholder="検索語（例: note file 設定）" aria-label="検索語"
+                       onkeydown="if (event.key === 'Enter') loadDiscoverySearch()">
+                <select id="searchKind" aria-label="種別">
+                    <option value="">すべて</option>
+                    <option value="tool">ツール</option>
+                    <option value="resource">リソース</option>
+                    <option value="resource_template">リソーステンプレート</option>
+                    <option value="prompt">プロンプト</option>
+                </select>
+                <input type="text" id="searchServerFilter" placeholder="サーバー名で絞り込み" aria-label="サーバー">
+                <button class="btn" onclick="loadDiscoverySearch()">検索</button>
+            </div>
+            <div class="log-table-wrap">
+                <table class="log-table">
+                    <thead>
+                        <tr>
+                            <th>種別</th>
+                            <th>サーバー</th>
+                            <th>名前 / URI</th>
+                            <th>説明・引数</th>
+                        </tr>
+                    </thead>
+                    <tbody id="searchTableBody"></tbody>
+                </table>
+                <div id="searchEmpty" class="empty-state" style="display: none;">
+                    <div class="empty-state-title">該当なし</div>
+                    <div class="empty-state-description">リソース/プロンプトは接続時の一覧から索引されます。サーバーを再接続すると更新されます。</div>
+                </div>
+            </div>
+        </section>
     </div>
-
-    <!-- Server Settings Modal (Add/Edit共用) -->
     <div id="editServerModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="editServerModalTitle">
         <div class="modal">
             <div class="modal-header">
@@ -2658,6 +2691,16 @@
                 const qs = query.toString();
                 const response = await fetch(`/admin/api/schema-diffs${qs ? '?' + qs : ''}`);
                 if (!response.ok) throw new Error('スキーマ差分の取得に失敗しました');
+                return response.json();
+            },
+
+            async discoverySearch(params = {}) {
+                const query = new URLSearchParams();
+                for (const [k, v] of Object.entries(params)) {
+                    if (v !== undefined && v !== null && v !== '') query.set(k, v);
+                }
+                const response = await fetch(`/admin/api/discovery/search?${query}`);
+                if (!response.ok) throw new Error('検索に失敗しました');
                 return response.json();
             },
 
@@ -3694,15 +3737,74 @@
             document.getElementById('tabServersBtn').classList.toggle('active', tab === 'servers');
             document.getElementById('tabLogsBtn').classList.toggle('active', tab === 'logs');
             document.getElementById('tabDiffsBtn').classList.toggle('active', tab === 'diffs');
+            document.getElementById('tabSearchBtn').classList.toggle('active', tab === 'search');
             document.getElementById('serverTab').style.display = tab === 'servers' ? '' : 'none';
             document.getElementById('logTab').style.display = tab === 'logs' ? '' : 'none';
             document.getElementById('diffTab').style.display = tab === 'diffs' ? '' : 'none';
+            document.getElementById('searchTab').style.display = tab === 'search' ? '' : 'none';
             if (tab === 'logs') {
                 loadLogs();
                 startLogPolling();
             } else {
                 stopLogPolling();
                 if (tab === 'diffs') loadSchemaDiffs();
+                if (tab === 'search') loadDiscoverySearch();
+            }
+        }
+
+        // ============================================================
+        // SEARCH TAB（索引の横断検索）
+        // ============================================================
+        const KIND_LABELS = {
+            tool: 'ツール',
+            resource: 'リソース',
+            resource_template: 'テンプレート',
+            prompt: 'プロンプト',
+        };
+
+        async function loadDiscoverySearch() {
+            const query = document.getElementById('searchQuery').value.trim();
+            const body = document.getElementById('searchTableBody');
+            const empty = document.getElementById('searchEmpty');
+            if (!query) {
+                body.innerHTML = '';
+                empty.style.display = '';
+                return;
+            }
+            try {
+                const data = await API.discoverySearch({
+                    query,
+                    top_k: 20,
+                    kind: document.getElementById('searchKind').value,
+                    server: document.getElementById('searchServerFilter').value.trim(),
+                });
+                renderDiscoveryResults(data.results || []);
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        function fmtSearchDetail(hit) {
+            const args = (hit.arguments || [])
+                .map(a => a.name + (a.required ? ' (必須)' : '') + (a.description ? ': ' + a.description : ''))
+                .join('\n');
+            return [hit.uri || '', hit.description || '', args].filter(Boolean).join('\n');
+        }
+
+        function renderDiscoveryResults(hits) {
+            const body = document.getElementById('searchTableBody');
+            const empty = document.getElementById('searchEmpty');
+            body.innerHTML = '';
+            empty.style.display = hits.length ? 'none' : '';
+            for (const hit of hits) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${escapeHtml(KIND_LABELS[hit.kind] || hit.kind || 'ツール')}</td>
+                    <td>${escapeHtml(hit.server)}</td>
+                    <td>${escapeHtml(hit.name)}${hit.tags && hit.tags.length ? '<br><span class="form-hint">' + escapeHtml(hit.tags.join(', ')) + '</span>' : ''}</td>
+                    <td><pre style="white-space: pre-wrap; word-break: break-all; margin: 0;">${escapeHtml(fmtSearchDetail(hit))}</pre></td>
+                `;
+                body.appendChild(tr);
             }
         }
 

@@ -501,7 +501,7 @@ class TestWireCatalog:
             line[6:] for line in r.text.split("\n") if line.startswith("data: ")
         )
         names = [t["name"] for t in json.loads(data)["result"]["tools"]]
-        assert set(names) == {"search_tools", "execute_tool", "get_schema"}
+        assert set(names) == {"search_tools", "search_resources", "execute_tool", "get_schema"}
 
     async def test_full_info_tools_survive_tags_rewrite(self, wire_app, monkeypatch):
         """full_info_tools の追記がタグ差し替えと同居しても消えない（実 middleware 構成）。

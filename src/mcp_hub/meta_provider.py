@@ -12,6 +12,7 @@ import math
 import os
 import re
 import tempfile
+import time
 import unicodedata
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -27,7 +28,7 @@ from .embedders import (
     ort_model_spec,
 )
 from .proxy_manager import ProxyManager as _ProxyManager
-from .state import request_tags
+from .state import app_state, request_tags
 from .state import tags_match as _tags_match
 
 try:
@@ -96,6 +97,63 @@ _MAX_TOP_K = 50
 # に合わせ、既定では少数の候補だけを軽く返す。
 _DEFAULT_TOP_K = 3
 
+# ── 発見対象の kind（ツール索引を共有する）──────────────────────────
+# ツール/リソース/リソーステンプレート/プロンプトを単一の ToolIndex に載せ、
+# kind で経路を分ける（索引・BM25・埋め込みを丸ごと共有する）。kind 無しの
+# 文書は従来どおり tool（既存の索引経路を不変に保つ）。
+KIND_TOOL = "tool"
+KIND_RESOURCE = "resource"
+KIND_RESOURCE_TEMPLATE = "resource_template"
+KIND_PROMPT = "prompt"
+ALL_KINDS = (KIND_TOOL, KIND_RESOURCE, KIND_RESOURCE_TEMPLATE, KIND_PROMPT)
+RESOURCE_KINDS = (KIND_RESOURCE, KIND_RESOURCE_TEMPLATE, KIND_PROMPT)
+# 検索 API の kind 指定は複数形・ハイフン形も受ける（LLM/UI の表記ゆれ吸収）。
+KIND_ALIASES = {
+    "tool": KIND_TOOL,
+    "tools": KIND_TOOL,
+    "resource": KIND_RESOURCE,
+    "resources": KIND_RESOURCE,
+    "resource_template": KIND_RESOURCE_TEMPLATE,
+    "resource_templates": KIND_RESOURCE_TEMPLATE,
+    "resource-template": KIND_RESOURCE_TEMPLATE,
+    "resource-templates": KIND_RESOURCE_TEMPLATE,
+    "prompt": KIND_PROMPT,
+    "prompts": KIND_PROMPT,
+}
+
+
+def resolve_kind(kind: str) -> str | None:
+    """kind の別名を正規名へ。未知なら None。"""
+    return KIND_ALIASES.get(str(kind).strip().lower())
+
+
+def _kind_of(doc: dict) -> str:
+    return doc.get("kind") or KIND_TOOL
+
+
+def _hit(doc: dict, score: float) -> dict:
+    """索引文書 → 検索結果1件。ツール以外は kind/uri/arguments を添える。
+
+    tool では kind キーを足さない（search_tools の応答形状を不変に保つ）。
+    """
+    hit = {
+        "server": doc["server"],
+        "name": doc["name"],
+        "description": doc.get("description", ""),
+        "tags": doc.get("tags", []),
+        "inputSchema": doc.get("inputSchema", {}),
+        "score": round(score, 4),
+    }
+    kind = _kind_of(doc)
+    if kind != KIND_TOOL:
+        hit["kind"] = kind
+        if doc.get("uri"):
+            hit["uri"] = doc["uri"]
+        if doc.get("arguments"):
+            hit["arguments"] = doc["arguments"]
+    return hit
+
+
 # search_tools 成功応答のトップレベル誘導文。brief/schema はスキーマを省くので
 # get_schema へ誘導する。
 _SEARCH_NOTE = (
@@ -106,6 +164,14 @@ _SEARCH_NOTE = (
 _SEARCH_NOTE_LEGACY = (
     "inputSchema は要約です。完全な仕様は get_schema(server, tool_name) で取得してください。"
 )
+
+# search_resources 成功応答の誘導文。読み取りは通常の MCP 経路（resources/read 等）
+# なので、URI をそのまま使えることだけ伝える。
+_RESOURCE_SEARCH_NOTE = (
+    "resource は uri を、prompt は name と arguments を通常の MCP 経路"
+    "（resources/read, prompts/get）で使います。"
+)
+_RESOURCE_NOT_FOUND = "No matching resources or prompts found"
 
 MCP_HUB_TAGS_HEADER = "X-MCP-Hub-Tags"
 
@@ -231,8 +297,8 @@ def _supported_embedding_models() -> dict[str, str] | None:
                 # list_supported_models() は dict のリストを返す（各要素に "model" キー）
                 fastembed_models = {
                     m["model"].lower(): m["model"]
-                    for m in TextEmbedding.list_supported_models()
-                }  # type: ignore[name-defined]
+                    for m in TextEmbedding.list_supported_models()  # type: ignore[name-defined]
+                }
         except Exception:
             logger.debug("Could not query fastembed supported models", exc_info=True)
         # Hub 自身が静的に登録する独自モデル（e5-small 等）。fastembed 不在時は
@@ -496,20 +562,55 @@ class ToolIndex:
             return "building"
         return "active"
 
-    def set_use_embeddings(self, enabled: bool) -> None:
+    @property
+    def embedding_model(self) -> str:
+        """索引に適用済み（適用予定）のカノニカルなモデル名。"""
+        return self._embedding_model
+
+    @property
+    def document_count(self) -> int:
+        """索引済み文書数（再構築進捗の表示用）。"""
+        return len(self._documents)
+
+    @property
+    def embedding_error(self) -> str | None:
+        """直近の embed 失敗の短い要約（成功で None に戻る）。"""
+        return self._embedding_error
+
+    def set_use_embeddings(self, enabled: bool) -> bool:
         """ランタイムで埋め込み ON/OFF を切り替える。
 
         env の MCP_HUB_EMBEDDING=0 は設定より優先（ハードキル）。
         ここはフラグだけ変え、再構築は呼び出し側（rebuild_index）の責務。
         ON 化直後 _embeddings が None でも search() のガード
         （_use_embeddings and _embeddings is not None）で BM25 に落ちるため安全。
+        戻り値は実効フラグが変わったか（再構築が必要かの判定用）。
         """
         self._embeddings_requested = enabled
+        before = self._use_embeddings
         self._use_embeddings = (
             _HAS_FASTEMBED
             and enabled
             and os.environ.get("MCP_HUB_EMBEDDING", "1") != "0"
         )
+        return self._use_embeddings != before
+
+    def set_embedding_model(self, model: str) -> str:
+        """モデルを切り替え、旧モデルのベクトルと embedder を捨てる。
+
+        次元・意味空間が変わるため旧ベクトルを残すと検索が壊れる（誤ヒット）。
+        再構築が終わるまでは search() のガード
+        （_use_embeddings and _embeddings is not None）で BM25 のみになる。
+        戻り値は解決後のカノニカル名。同名指定なら何もしない（再 embed 不要）。
+        """
+        resolved = resolve_embedding_model(model, _supported_embedding_models())
+        if resolved != self._embedding_model:
+            self._embedding_model = resolved
+            self._profile = model_profile(resolved)
+            self._embeddings = None
+            self._embedder = None
+            self._embedding_error = None
+        return resolved
 
     # ── Tokenization ──────────────────────────────────────────────
 
@@ -525,7 +626,10 @@ class ToolIndex:
            getHTTPResponse → [get, http, response]
            Handle acronyms:   HTTPServer → [http, server]
         5. Split at digit boundaries: parse2Things → [parse, 2, things]
-        6. Deduplicate while preserving order
+        6. Deduplicate derived tokens **within one word** (a word emits its
+           original plus synthetic expansions, e.g. "read_file" → read_file,
+           read, file; a CJK run emits itself + bigrams + unigrams). Repetition
+           across words is kept — BM25 needs it as term frequency (tf).
 
         Snake_case identifiers are preserved intact (step 2) AND also split
         (step 3), giving both exact match and component match capability.
@@ -539,6 +643,10 @@ class ToolIndex:
 
         注: casefold は emit() 内でトークン単位に適用する。テキスト全体を先に
         casefold すると ASCII 側の camelCase 分割（getHTTPResponse）が壊れるため。
+
+        注: dedup の範囲は 1 語内に限る（旧実装はテキスト全体で重複除去しており、
+        "export" を 3 回書いた説明も 1 回書いた説明も tf=1 になっていた）。
+        戻り値は「出現順のトークン列」で、クエリ側は BM25 に渡す前に一意化する。
         """
         if isinstance(text, list):
             text = " ".join(str(t) for t in text)
@@ -556,6 +664,9 @@ class ToolIndex:
                 out.append(token)
 
         for word in text.split():
+            # 語内だけで重複除去する（語をまたぐ繰り返しは tf として残す）。
+            seen.clear()
+
             # Step 2: Keep the original word (preserves snake_case: "file_read" stays intact)
             emit(word)
 
@@ -607,9 +718,21 @@ class ToolIndex:
         # Core fields with explicit weights
         _add(doc["name"], copies=5)  # Tool name: ×5
         _add(doc["server"], copies=3)  # Server name: ×3
-        _add(doc.get("index_text") or doc.get("description", ""), copies=2)  # Description: ×2
+        # index_text（呼び側が サーバー説明 + search_desc + 説明 を連結したもの）が
+        # 無い場合も、日本語1文 search_desc は落とさず索引に入れる。
+        search_desc = doc.get("search_desc") or ""
+        text = doc.get("index_text") or " ".join(
+            part for part in (search_desc, doc.get("description", "")) if part
+        )
+        _add(text, copies=2)  # Description: ×2
         for tag in doc.get("tags", []):  # サーバータグ: ×2（説明と同重み）
             _add(tag, copies=2)
+        # リソース/テンプレートの URI と引数（inputSchema を持たないので個別に索引化）
+        _add(doc.get("uri") or "", copies=3)
+        for arg in doc.get("arguments") or []:
+            if isinstance(arg, dict):
+                _add(str(arg.get("name", "")), copies=2)
+                _add(str(arg.get("description", "")), copies=1)
 
         # InputSchema fields — included at ×1 (baseline)
         schema = doc.get("inputSchema", {})
@@ -636,11 +759,13 @@ class ToolIndex:
         TextEmbedding init + embed + numpy conversion are CPU-bound and would
         otherwise block the event loop for seconds during every rebuild.
         """
-        if self._embedder is None:  # type: ignore[truthiness-function]
+        embedder = self._embedder
+        if embedder is None:
             # モデル名でエンジンを選ぶ: ruri 等は OrtEmbedder、他は fastembed。
-            self._embedder = create_embedder(self._embedding_model)
+            embedder = create_embedder(self._embedding_model)
+            self._embedder = embedder
         prefix = self._profile["passage_prefix"] or ""
-        gen = self._embedder.embed(
+        gen = embedder.embed(
             [prefix + t for t in doc_texts], batch_size=_EMBED_BATCH_SIZE
         )
         return np.array(list(gen), dtype=np.float32)  # type: ignore[name-defined]
@@ -727,6 +852,7 @@ class ToolIndex:
             # 次元の混ざったキャッシュは信用しない（全件再計算に回す）。
             per_sha = {}
         missing = [i for i, s in enumerate(shas) if s not in per_sha]
+        app_state.metrics.record_embedding_cache(len(shas) - len(missing), len(missing))
         if missing:
             arr = np.asarray(  # type: ignore[name-defined]
                 await asyncio.to_thread(
@@ -767,6 +893,10 @@ class ToolIndex:
                 "full_description": d.get("full_description", ""),
                 "tags": d.get("tags", []),
                 "inputSchema": d.get("inputSchema", {}),
+                # kind/uri/arguments は表示と絞り込みに効く（差分検知の対象）。
+                "kind": _kind_of(d),
+                "uri": d.get("uri", ""),
+                "arguments": d.get("arguments", []),
             }
             for d in documents
         ]
@@ -881,7 +1011,9 @@ class ToolIndex:
 
         logger.info("ToolIndex rebuilt: %d tools indexed", len(documents))
 
-    def search(self, query: str, top_k: int = 10) -> list[dict]:
+    def search(
+        self, query: str, top_k: int = 10, kinds: tuple[str, ...] | None = None
+    ) -> list[dict]:
         """Search tools by keyword or semantic query.
 
         Contract:
@@ -932,6 +1064,17 @@ class ToolIndex:
         top_k = min(top_k, _MAX_TOP_K)
         if not self._documents:
             return []
+        # kinds（tool/resource/resource_template/prompt）で候補文書を絞る。
+        # 絞り込みはスコアリング前に掛けるので、kind 指定時は他 kind が上位を
+        # 占有して候補が枯れることがない。未指定は従来どおり全 kind。
+        allowed_idx: set[int] | None = None
+        if kinds:
+            wanted = {resolve_kind(k) or k for k in kinds}
+            allowed_idx = {
+                i for i, d in enumerate(self._documents) if _kind_of(d) in wanted
+            }
+            if not allowed_idx:
+                return []
         query_tokens = set(self._tokenize(query))
         n_docs = len(self._documents)
         # A name token promotes only if it is selective (df ≤ ~25% of names).
@@ -942,39 +1085,34 @@ class ToolIndex:
         # min_idf, so junk partial hits no longer reach the front.
         exact = []
         for i, doc in enumerate(self._documents):
+            if allowed_idx is not None and i not in allowed_idx:
+                continue
             shared = self._name_tokens[i] & query_tokens
             if not shared:
                 continue
             if max(self._name_idf.get(t, 0.0) for t in shared) < min_idf:
                 continue
             weighted = sum(self._name_idf.get(t, 0.0) for t in shared)
-            # 明示的 dict 構築: {**doc,...} では doc に余計なキーが
-            # あった時に promotion 経路だけ結果形状がずれる。
-            exact.append(
-                {
-                    "server": doc["server"],
-                    "name": doc["name"],
-                    "description": doc.get("description", ""),
-                    "tags": doc.get("tags", []),
-                    "inputSchema": doc.get("inputSchema", {}),
-                    "score": round(weighted, 4),
-                }
-            )
+            # 明示的構築: {**doc,...} では doc に余計なキーがあった時に
+            # promotion 経路だけ結果形状がずれる。
+            exact.append(_hit(doc, weighted))
         exact.sort(
             key=lambda d: d["score"], reverse=True
         )  # stable: ties keep doc order
 
         if self._use_embeddings and self._embeddings is not None:
             candidates = max(top_k, _RRF_CANDIDATES)
-            bm = self._bm25_search(query, candidates)
+            bm = self._bm25_search(query, candidates, allowed_idx)
             # OOV ゲート: クエリのトークンが索引語彙に 1 つも無い（BM25 全 0）なら、
             # semantic の最近傍は無意味（実測: 'zzzqqq' でも cos 0.8352）。捏造せず空を返す。
             if not bm and not self._has_lexical_support(query):
                 results = []
             else:
-                results = self._rrf_fuse(self._semantic_search(query, candidates), bm)
+                results = self._rrf_fuse(
+                    self._semantic_search(query, candidates, allowed_idx), bm
+                )
         else:
-            results = self._bm25_search(query, top_k)
+            results = self._bm25_search(query, top_k, allowed_idx)
 
         # exact matches first (truncated to top_k), then underlying results as tail.
         seen: set[tuple[str, str]] = set()
@@ -987,6 +1125,7 @@ class ToolIndex:
             merged.append(item)
             if len(merged) >= top_k:
                 break
+        app_state.metrics.record_search(len(merged))
         return merged
 
     @staticmethod
@@ -1003,14 +1142,9 @@ class ToolIndex:
                 key = (item["server"], item["name"])
                 entry = fused.get(key)
                 if entry is None:
-                    entry = {
-                        "server": item["server"],
-                        "name": item["name"],
-                        "description": item.get("description", ""),
-                        "tags": item.get("tags", []),
-                        "inputSchema": item.get("inputSchema", {}),
-                        "score": 0.0,
-                    }
+                    # 非ツールの付帯キー（kind/uri/arguments）もそのまま運ぶ。
+                    # 項目を列挙すると埋め込み経路だけそれらが落ちる。
+                    entry = {**item, "score": 0.0}
                     fused[key] = entry
                 entry["score"] += 1.0 / (_RRF_K + rank)
         out = sorted(fused.values(), key=lambda d: d["score"], reverse=True)
@@ -1018,7 +1152,9 @@ class ToolIndex:
             entry["score"] = round(entry["score"], 4)
         return out
 
-    def _semantic_search(self, query: str, top_k: int) -> list[dict]:
+    def _semantic_search(
+        self, query: str, top_k: int, allowed: set[int] | None = None
+    ) -> list[dict]:
         """Dense retrieval via embedding cosine similarity."""
         if not _HAS_NUMPY:
             # numpy 無しでは意味検索不能 — search() が BM25 にフォールバック
@@ -1051,50 +1187,47 @@ class ToolIndex:
         docs = self._documents
         results = []
         floor = self._profile["semantic_floor"]
-        for idx in ranked[:top_k]:
+        for idx in ranked:
             score = float(scores[idx])
             if score < floor:
                 break  # Remaining scores are ≤ this (sorted descending) — stop
-            doc = docs[idx]
-            results.append(
-                {
-                    "server": doc["server"],
-                    "name": doc["name"],
-                    "description": doc.get("description", ""),
-                    "tags": doc.get("tags", []),
-                    "inputSchema": doc.get("inputSchema", {}),
-                    "score": round(score, 4),
-                }
-            )
+            if allowed is not None and idx not in allowed:
+                continue
+            results.append(_hit(docs[idx], score))
+            if len(results) >= top_k:
+                break
         return results
 
-    def _bm25_search(self, query: str, top_k: int) -> list[dict]:
+    def _bm25_search(
+        self, query: str, top_k: int, allowed: set[int] | None = None
+    ) -> list[dict]:
         """BM25 keyword search (fallback when fastembed unavailable)."""
         if not self._bm25 or not self._corpus:
             return []
-        tokens = self._tokenize(query)
+        # クエリ語は一意化する（rank_bm25 の get_scores はクエリの出現回数分だけ
+        # 加算するため、"file file" をそのまま渡すとスコアが水増しされる）。
+        tokens = list(dict.fromkeys(self._tokenize(query)))
         scores = self._bm25.get_scores(tokens)
         docs = self._documents
         ranked = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)
-        best = float(scores[ranked[0]]) if ranked else 0.0
+        # 相対床の基準は許可 kind 内の最高スコア（全体の最高だと、上位を他 kind が
+        # 占めた時に許可側が全部床で切られてしまう）。
+        best = next(
+            (float(scores[i]) for i in ranked if allowed is None or i in allowed),
+            0.0,
+        )
         results = []
-        for idx in ranked[:top_k]:
+        for idx in ranked:
+            if len(results) >= top_k:
+                break
+            if allowed is not None and idx not in allowed:
+                continue
             score = float(scores[idx])
             # Keep positive hits within _BM25_REL_FLOOR of the best hit;
             # ranked is descending so the first miss ends the scan.
             if score <= 0 or score < best * _BM25_REL_FLOOR:
                 break
-            doc = docs[idx]
-            results.append(
-                {
-                    "server": doc["server"],
-                    "name": doc["name"],
-                    "description": doc.get("description", ""),
-                    "tags": doc.get("tags", []),
-                    "inputSchema": doc.get("inputSchema", {}),
-                    "score": round(score, 4),
-                }
-            )
+            results.append(_hit(docs[idx], score))
         # Small-corpus fallback: when N ≤ 5 and BM25 produces negative IDF
         # (all terms appear in most docs), use simple TF overlap scoring
         if not results and len(self._corpus) <= 5:
@@ -1106,20 +1239,14 @@ class ToolIndex:
             tf_ranked = sorted(
                 range(len(tf_scores)), key=lambda i: tf_scores[i], reverse=True
             )
-            for idx in tf_ranked[:top_k]:
+            for idx in tf_ranked:
+                if len(results) >= top_k:
+                    break
+                if allowed is not None and idx not in allowed:
+                    continue
                 if tf_scores[idx] <= 0:
                     break
-                doc = docs[idx]
-                results.append(
-                    {
-                        "server": doc["server"],
-                        "name": doc["name"],
-                        "description": doc.get("description", ""),
-                        "tags": doc.get("tags", []),
-                        "inputSchema": doc.get("inputSchema", {}),
-                        "score": round(tf_scores[idx], 4),
-                    }
-                )
+                results.append(_hit(docs[idx], tf_scores[idx]))
         return results
 
     def _has_lexical_support(self, query: str) -> bool:
@@ -1246,6 +1373,125 @@ def _compact_property(prop: Any, depth: int = 0) -> dict:
     return out
 
 
+def _template_arguments(schema: Any) -> list[dict]:
+    """list_resource_templates の parameters（JSON Schema）→ 検索結果用の引数一覧。"""
+    if not isinstance(schema, dict):
+        return []
+    required = set(schema.get("required") or [])
+    out: list[dict] = []
+    for name, prop in (schema.get("properties") or {}).items():
+        if not isinstance(prop, dict):
+            prop = {}
+        out.append(
+            {
+                "name": str(name),
+                "description": str(prop.get("description") or ""),
+                "required": name in required,
+            }
+        )
+    return out
+
+
+_URI_PLACEHOLDER = re.compile(r"\{[+#./;?&]?([^}]+)\}")
+
+
+def _uri_template_arguments(uri_template: str) -> list[dict]:
+    """uri_template のプレースホルダ（{id} / {+path}）から引数名を拾う。
+
+    MCP の ResourceTemplate は JSON Schema を持たない（引数は URI テンプレート
+    自体に埋まっている）ので、parameters が無い時の引数一覧はここから作る。
+    """
+    out: list[dict] = []
+    for m in _URI_PLACEHOLDER.finditer(uri_template or ""):
+        name = m.group(1).split(",")[0].strip()
+        if name:
+            out.append({"name": name, "description": "", "required": True})
+    return out
+
+
+def _prompt_arguments(args: Any) -> list[dict]:
+    """list_prompts の arguments → 検索結果用の引数一覧。"""
+    return [
+        {
+            "name": str(getattr(a, "name", "") or ""),
+            "description": str(getattr(a, "description", "") or ""),
+            "required": bool(getattr(a, "required", False)),
+        }
+        for a in args or []
+    ]
+
+
+async def _resource_documents(
+    server_name: str, proxy: Any, server_desc: str, tags: list[str]
+) -> list[dict]:
+    """1 サーバー分のリソース/テンプレート/プロンプトを索引文書に変換する。
+
+    ツール索引と同じ形（server/name/description/index_text/inputSchema）に
+    kind と uri/arguments を添える。実体の読み取りは従来どおり通常の
+    MCP 経路（resources/read, prompts/get）が担当する。
+    """
+    docs: list[dict] = []
+
+    def add(
+        kind: str,
+        name: Any,
+        description: Any,
+        uri: Any = None,
+        arguments: list[dict] | None = None,
+    ) -> None:
+        raw = str(description or "").strip()
+        uri_text = str(uri) if uri else ""
+        index_text = " ".join(
+            part
+            for part in (server_desc, uri_text, raw[:_INDEX_DESC_CHARS])
+            if part
+        ).strip()
+        docs.append(
+            {
+                "server": server_name,
+                "name": str(name),
+                "description": raw[:_DISPLAY_DESC_CHARS]
+                + ("…" if len(raw) > _DISPLAY_DESC_CHARS else ""),
+                "index_text": index_text,
+                "search_desc": "",
+                "full_description": raw,
+                "tags": list(tags),
+                "inputSchema": {},
+                "kind": kind,
+                "uri": uri_text,
+                "arguments": arguments or [],
+            }
+        )
+
+    for r in await proxy.list_resources():
+        uri = getattr(r, "uri", "") or getattr(r, "template", "")
+        add(KIND_RESOURCE, getattr(r, "name", "") or str(uri), getattr(r, "description", ""), uri)
+    for t in await proxy.list_resource_templates():
+        uri = getattr(t, "uri_template", "") or getattr(t, "uriTemplate", "")
+        args = _template_arguments(getattr(t, "parameters", None))
+        add(
+            KIND_RESOURCE_TEMPLATE,
+            getattr(t, "name", "") or str(uri),
+            getattr(t, "description", ""),
+            uri,
+            args or _uri_template_arguments(str(uri)),
+        )
+    for p in await proxy.list_prompts():
+        add(
+            KIND_PROMPT,
+            getattr(p, "name", ""),
+            getattr(p, "description", ""),
+            None,
+            _prompt_arguments(getattr(p, "arguments", None)),
+        )
+    return docs
+
+
+async def _noop_server_tools(_name: str) -> list:
+    """list_server_tools_fn 未指定時の既定（常に空）。"""
+    return []
+
+
 class MetaTools:
     """Manages meta-tool definitions and execution."""
 
@@ -1263,12 +1509,9 @@ class MetaTools:
         self._get_server_tags = get_server_tags or (lambda _: [])
         self._get_server_description = get_server_description or (lambda _: "")
 
-        async def _noop_server(name: str) -> list:
-            return []
-
         # Live-proxy accessors: listing and execution must NOT depend on the
         # (possibly stale / partially-rebuilt) index.
-        self._list_server_tools = list_server_tools_fn or _noop_server
+        self._list_server_tools = list_server_tools_fn or _noop_server_tools
         self._list_servers = list_servers_fn or (lambda: [])
 
     def _resolve_server_name(self, server: str) -> str:
@@ -1344,7 +1587,9 @@ class MetaTools:
             # 引ける最大深度で一度引いてから絞り、最後に top_k で切る。
             depth = max(top_k * 5, _MAX_TOP_K)
             results = [
-                r for r in self._index.search(query, depth) if r["server"] == resolved
+                r
+                for r in self._index.search(query, depth, (KIND_TOOL,))
+                if r["server"] == resolved
             ][:top_k]
             if not results:
                 # 可視（タグ内・index 内）と確認済みのサーバーなので件数を出してよい。
@@ -1364,7 +1609,8 @@ class MetaTools:
                     ensure_ascii=False,
                 )
         else:
-            results = self._index.search(query, top_k)
+            # ツール経路はツールだけを返す（リソース/プロンプトは search_resources）。
+            results = self._index.search(query, top_k, (KIND_TOOL,))
             if allowed is not None:
                 filtered = self._filter_search_results(results, allowed)
                 if results and not filtered:
@@ -1430,6 +1676,104 @@ class MetaTools:
             note = _SEARCH_NOTE
         return json.dumps(
             {"results": payload, "servers": servers, "note": note},
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _empty_resources(**extra: Any) -> str:
+        """search_resources の空応答（既存 message キーは search_tools と同形）。"""
+        return json.dumps(
+            {"results": [], "servers": {}, **extra}, ensure_ascii=False
+        )
+
+    async def search_resources(
+        self,
+        query: str,
+        top_k: int = _DEFAULT_TOP_K,
+        kind: str | None = None,
+        server: str | None = None,
+    ) -> str:
+        """MCP Hub gateway: リソース/リソーステンプレート/プロンプトの発見。
+
+        search_tools と同じ ToolIndex を kind で絞って引く（索引・BM25・埋め込みを
+        共有し、タグ可視性と server 絞り込みの規則も search_tools と同一）。
+
+        Args:
+            query: What you want (e.g. "設定ファイル configuration")
+            top_k: Max results (default 3)
+            kind: "resource" | "resource_template" | "prompt"（複数形も可）。
+                省略時は 3 種すべて。
+            server: Optional. カタログにあるサーバー名（大小文字は無視）。
+        """
+        if kind:
+            resolved_kind = resolve_kind(kind)
+            if resolved_kind not in RESOURCE_KINDS:
+                return self._empty_resources(
+                    error=f"unknown kind: {kind}", kinds=list(RESOURCE_KINDS)
+                )
+            kinds: tuple[str, ...] = (resolved_kind,)
+        else:
+            kinds = RESOURCE_KINDS
+        allowed = self._get_allowed_servers()
+        if server is not None:
+            # search_tools と同じ順（index 不在 = not found → タグ範囲外 = 権限なし）。
+            target = self._resolve_server_name(server)
+            if target not in self._index.list_servers():
+                return self._empty_resources(
+                    message=f"server not found: {server}"
+                )
+            if allowed is not None and target not in allowed:
+                return self._empty_resources(
+                    message=_RESOURCE_NOT_FOUND,
+                    hint=f"server={target} はタグ範囲外のため利用できません。",
+                )
+            # 他サーバーの上位ヒットで候補が埋まらないよう深く引いてから絞る。
+            depth = max(top_k * 5, _MAX_TOP_K)
+            results = [
+                r
+                for r in self._index.search(query, depth, kinds)
+                if r["server"] == target
+            ][:top_k]
+            if not results:
+                return self._empty_resources(
+                    message=_RESOURCE_NOT_FOUND,
+                    hint=(
+                        f"server={target} で絞り込みましたが一致なし。"
+                        "kind 指定を外すか別の語で再試行してください。"
+                    ),
+                )
+        else:
+            results = self._index.search(query, top_k, kinds)
+            if allowed is not None:
+                filtered = self._filter_search_results(results, allowed)
+                if results and not filtered:
+                    active = request_tags.get() or []
+                    return self._empty_resources(
+                        message=_RESOURCE_NOT_FOUND,
+                        hint=(
+                            f"タグフィルタ {', '.join(map(str, active))} により"
+                            "全件除外された可能性があります。より広いタグ"
+                            "（またはタグ無し）で再試行してください。"
+                        ),
+                    )
+                results = filtered
+            if not results:
+                return self._empty_resources(
+                    message=_RESOURCE_NOT_FOUND,
+                    hint=(
+                        "Try adding English keywords to the same query "
+                        "(e.g. '設定 config'), broader keywords, or check "
+                        "server connections."
+                    ),
+                )
+        servers: dict[str, str] = {}
+        for r in results:
+            srv = r["server"]
+            if srv not in servers:
+                desc = self._get_server_description(srv)
+                servers[srv] = desc if isinstance(desc, str) else ""
+        return json.dumps(
+            {"results": results, "servers": servers, "note": _RESOURCE_SEARCH_NOTE},
             ensure_ascii=False,
         )
 
@@ -1678,6 +2022,7 @@ async def create_meta_app(
         """
         all_tools = []
         failed: list[str] = []
+        started = time.monotonic()
         desc_fn = getattr(proxy_manager, "server_description", None)
         # ツール単位の日本語1文（tool_search_desc）。英語 docstring の語彙の壁を越える。
         tsd_fn = getattr(proxy_manager, "server_tool_search_desc", None)
@@ -1735,11 +2080,31 @@ async def create_meta_app(
             except Exception:
                 logger.warning("Failed to list tools for %s", server_name)
                 failed.append(server_name)
+            # リソース/テンプレート/プロンプトも同じ索引に載せる（kind で分離）。
+            # 一覧系は子サーバー実装差が大きく失敗も珍しいので、失敗してもツール
+            # 索引を壊さず failed にも入れない（呼び側のリトライ対象はツールのみ）。
+            try:
+                all_tools.extend(
+                    await _resource_documents(
+                        server_name,
+                        proxy,
+                        srv_desc,
+                        list(proxy_manager.server_tags(server_name)),
+                    )
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to list resources/prompts for %s", server_name
+                )
         await index.rebuild(all_tools)
-
+        app_state.metrics.record_index_rebuild(
+            time.monotonic() - started, len(failed)
+        )
         # per-server grouping → catalog を search_tools の description に焼き込む
         by_server: dict[str, list[str]] = {}
         for t in all_tools:
+            if _kind_of(t) != KIND_TOOL:
+                continue  # カタログはツールのみ（既存の説明文を不変に保つ）
             by_server.setdefault(t["server"], []).append(t["name"])
         entries = []
         for srv, names in by_server.items():
@@ -1808,6 +2173,29 @@ async def create_meta_app(
                 既にサーバーが分かっている時に結果をその 1 サーバーに絞る。
         """
         return await meta.search_tools(query, top_k, detail, server)
+
+    @mcp.tool()
+    async def search_resources(
+        query: str,
+        top_k: int = _DEFAULT_TOP_K,
+        kind: str | None = None,
+        server: str | None = None,
+    ) -> str:
+        """Find resources, resource templates and prompts across connected servers.
+
+        search_tools がツールを探すのに対し、こちらはリソース（uri）、
+        リソーステンプレート（uri_template）と arguments、プロンプト（name,
+        arguments）を同じ索引から探します。読み取りは通常の MCP 経路
+        （resources/read, prompts/get）で行ってください。
+
+        Args:
+            query: What you want (e.g. "設定ファイル configuration")
+            top_k: Max results (default 3)
+            kind: "resource" | "resource_template" | "prompt"（複数形も可）。
+                省略時は 3 種すべて。
+            server: Optional. カタログにあるサーバー名（大小文字は無視）。
+        """
+        return await meta.search_resources(query, top_k, kind, server)
 
     @mcp.tool()
     async def execute_tool(
