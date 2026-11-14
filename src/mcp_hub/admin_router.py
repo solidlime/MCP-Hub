@@ -12,14 +12,18 @@ import shutil
 import tempfile
 import time
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from .config import DEFAULT_EMBEDDING_MODEL
 from .masking import mask_text
+from .meta_provider import ALL_KINDS, KIND_TOOL, resolve_kind
+from .reload import ReloadError, reload_runtime
+from .schema_diff import DIFF_MAX
 from .state import app_state
+from .tool_cache import normalize_config as _normalize_tool_cache
 from .validators import (
     MAX_DESCRIPTION_LENGTH,
     ValidationError,
@@ -27,6 +31,7 @@ from .validators import (
     validate_command,
     validate_env,
     validate_headers,
+    validate_limits,
     validate_server_config,
     validate_server_name,
     validate_url,
@@ -59,6 +64,46 @@ _EXTRAS_DIR = "/home/mcp-hub/pip-extras"
 _INSTALL_TIMEOUT = 300.0
 _install_sem = asyncio.Semaphore(1)
 
+# --- 供給網保護（#8） ---
+# MCP_HUB_INSTALL_ALLOWED_HOSTS（カンマ区切り）設定時は、URL 仕様の取得元
+# ホストをこのリストに限定する。未設定は従来通り任意の https ホストを許可
+# （後方互換。docs/security.md に制限として明記）。
+_ALLOWED_HOSTS_ENV = "MCP_HUB_INSTALL_ALLOWED_HOSTS"
+_OUTPUT_MAX_LEN = 8000
+
+
+def _install_allowed_hosts() -> tuple[str, ...]:
+    raw = os.environ.get(_ALLOWED_HOSTS_ENV, "")
+    return tuple(h.strip().lower() for h in raw.split(",") if h.strip())
+
+
+def _https_env_url(env_name: str, default: str | None) -> str | None:
+    """レジストリ URL を返す。https 以外は警告して無視（既定に任せる）。"""
+    url = os.environ.get(env_name) or default
+    if url is None:
+        return None
+    if not url.startswith("https://"):
+        logger.warning("insecure %s %r ignored", env_name, url)
+        return None
+    return url
+
+
+def _spec_host(spec: str) -> str | None:
+    """パッケージ仕様が URL なら取得元ホストを返す（名前仕様は None）。"""
+    if spec.startswith("git+"):
+        spec = spec[len("git+"):]
+    if not spec.startswith("https://"):
+        return None
+    return (urlsplit(spec).hostname or "").lower()
+
+
+def _audit(event: str, **fields) -> None:
+    """install/uninstall の監査ログ（JSON 1 行、grep しやすい固定形式）。"""
+    logger.info(
+        "[audit] %s",
+        json.dumps({"event": event, **fields}, ensure_ascii=False, sort_keys=True),
+    )
+
 # --- 事前ソーススキャン（git+URL → mcp<2 自動ピン） ---
 # mcp 2.x は mcp.server.fastmcp を削除したため、1.x API
 # (from mcp.server.fastmcp import FastMCP) で書かれたサーバーは
@@ -88,6 +133,9 @@ class ServerConfig(BaseModel):
     # ツール名 → 日本語1文（80字以内目安）。索引テキストに前置され意味検索の
     # 語彙の壁を越える。表示用ではない（PATCH /servers/{name} の部分更新に乗る）。
     tool_search_desc: dict[str, str] = {}
+    # サーバー単位の呼び出し制限（timeout / 同時実行 / レート）。
+    # 未指定キーはグローバル既定にフォールバックする。
+    limits: dict[str, float | int] | None = None
 
     def model_dump_for_config(self) -> dict:
         """空文字・空リストを除外した config dict を返す。"""
@@ -101,6 +149,7 @@ class ServerConfig(BaseModel):
             "headers",
             "description",
             "tool_search_desc",
+            "limits",
         ):
             if key in raw and not raw[key]:
                 del raw[key]
@@ -190,6 +239,99 @@ def _effective_embedding_status() -> str:
     return str(index.embedding_status)
 
 
+# 埋め込み設定変更で走る再構築タスク（最新1本だけ保持し、置き換え時に cancel）。
+_embedding_rebuild_task: asyncio.Task | None = None
+
+
+def _embedding_rebuild_task_ref() -> asyncio.Task | None:
+    """実行中の埋め込み索引再構築タスク（シャットダウン時の停止用）。"""
+    return _embedding_rebuild_task
+
+
+def _embedding_rebuild_snapshot() -> dict[str, Any]:
+    """再構築の進捗スナップショット（要求値と実効値を分けて返す）。
+
+    UI は requested_model（保存済み設定）と active_model（索引に適用済み）の
+    差で「再構築中 / 未反映」を判定できる。
+    """
+    state = app_state.embedding_rebuild
+    index = getattr(getattr(app_state, "meta_app", None), "index", None)
+    return {
+        **state.to_dict(),
+        "in_progress": state.status == "running",
+        "active_model": getattr(index, "embedding_model", None),
+        "documents": getattr(index, "document_count", 0),
+        "embedding_status": _effective_embedding_status(),
+    }
+
+
+async def _run_embedding_rebuild(meta_app: Any) -> None:
+    """1 回分の再構築を実行し、結果を app_state.embedding_rebuild に反映する。
+
+    再構築失敗は致命的ではない: ToolIndex は BM25 検索で動き続ける
+    （旧モデルのベクトルは set_embedding_model で破棄済みなのでモデル混在の
+    誤ヒットは起きない）。
+    """
+    current = asyncio.current_task()
+    state = app_state.embedding_rebuild
+
+    def _update(**changes: Any) -> None:
+        # 後続の再構築に置き換えられた（cancel 済み）なら状態を触らない。
+        if _embedding_rebuild_task is current:
+            for key, value in changes.items():
+                setattr(state, key, value)
+
+    try:
+        failed = await meta_app.rebuild_index()
+        index = getattr(meta_app, "index", None)
+        error = getattr(index, "embedding_error", None)
+        if error:
+            _update(status="error", error=str(error))
+        elif failed:
+            _update(status="error", error=f"ツール取得に失敗: {', '.join(failed)}")
+        else:
+            _update(status="success", error=None)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — 失敗は status に残す（応答は既に返却済）
+        logger.exception("Embedding index rebuild failed")
+        _update(status="error", error=f"{type(exc).__name__}: {str(exc)[:160]}")
+    finally:
+        _update(finished_at=time.time())
+
+
+def _schedule_embedding_rebuild(
+    trigger: str, meta_app: Any, requested_model: str | None = None
+) -> dict[str, Any]:
+    """索引再構築をバックグラウンドで開始する（応答はブロックしない）。
+
+    実行中の再構築があればキャンセルして置き換える（設定の最終値だけが意味を持つ）。
+    """
+    global _embedding_rebuild_task
+    previous = _embedding_rebuild_task
+    if previous is not None and not previous.done():
+        previous.cancel()
+    state = app_state.embedding_rebuild
+    state.status = "running"
+    state.trigger = trigger
+    state.started_at = time.time()
+    state.finished_at = None
+    state.error = None
+    if requested_model is not None:
+        state.requested_model = requested_model
+    _embedding_rebuild_task = asyncio.create_task(_run_embedding_rebuild(meta_app))
+    return _embedding_rebuild_snapshot()
+
+
+def _tool_cache_public(data: dict) -> dict:
+    """GET/PATCH /settings 用: tool_cache 設定（未設定は既定値）+ 実効メトリクス。"""
+    try:
+        cfg = _normalize_tool_cache(data.get("tool_cache"))
+    except ValueError:
+        cfg = _normalize_tool_cache(None)  # 壊れた設定は既定値として公開
+    return {**cfg, "stats": app_state.tool_cache.stats()}
+
+
 @router.get("/settings")
 async def get_settings():
     registry = _get_registry()
@@ -201,7 +343,9 @@ async def get_settings():
         "connect_timeout": data.get("connect_timeout"),
         "use_embeddings": _effective_use_embeddings(),
         "embedding_status": _effective_embedding_status(),
+        "embedding_rebuild": _embedding_rebuild_snapshot(),
         "llm": _llm_public(data.get("llm")),
+        "tool_cache": _tool_cache_public(data),
     }
 
 
@@ -222,12 +366,10 @@ async def update_settings(body: dict):
         meta_app = getattr(app_state, "meta_app", None)
         if meta_app is not None:
             # 設定→実効フラグ（env ハードキルは index 側で再評価）へ反映し、
-            # 検索インデックスを再構築（embed/on 切替で doc テキストが変わる）。
+            # 検索インデックスを非同期で再構築（embed/on 切替で doc テキストが変わる）。
+            # 応答を待たせない: 進捗は GET /settings の embedding_rebuild で見る。
             meta_app.index.set_use_embeddings(value)
-            try:
-                await meta_app.rebuild_index()
-            except Exception:
-                logger.exception("Index rebuild after use_embeddings change failed")
+            _schedule_embedding_rebuild("use_embeddings", meta_app)
     if "full_info_tools" in body:
         tools = body["full_info_tools"]
         if not isinstance(tools, list) or not all(
@@ -261,6 +403,23 @@ async def update_settings(body: dict):
             current = data.get("llm")
             merged = (current if isinstance(current, dict) else {}) | value
             await registry.set_llm(merged)
+    if "tool_cache" in body:
+        value = body["tool_cache"]
+        if not isinstance(value, dict):
+            raise HTTPException(
+                status_code=422, detail="tool_cache はオブジェクトである必要があります"
+            )
+        data = await registry._read()
+        current = data.get("tool_cache")
+        merged = (current if isinstance(current, dict) else {}) | value
+        try:
+            cfg = _normalize_tool_cache(merged)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from None
+        await registry.set_tool_cache(cfg)
+        # 設定変更（TTL/allow/deny/enabled）は既存エントリの意味を変えるので全破棄
+        app_state.tool_cache.clear()
+        app_state.tool_cache.configure(cfg)
     data = await registry._read()
     return {
         "meta_mode": data.get("meta_mode", False),
@@ -269,8 +428,17 @@ async def update_settings(body: dict):
         "connect_timeout": data.get("connect_timeout"),
         "use_embeddings": _effective_use_embeddings(),
         "embedding_status": _effective_embedding_status(),
+        "embedding_rebuild": _embedding_rebuild_snapshot(),
         "llm": _llm_public(data.get("llm")),
+        "tool_cache": _tool_cache_public(data),
     }
+
+
+@router.delete("/cache")
+async def clear_tool_cache_entries():
+    """結果キャッシュの全エントリを破棄する（設定とヒット/ミス統計は保持）。"""
+    cleared = app_state.tool_cache.clear()
+    return {"cleared": cleared, "stats": app_state.tool_cache.stats()}
 
 
 @router.get("/settings/embedding-model")
@@ -308,6 +476,11 @@ def _validate_embedding_model(value: Any) -> str:
 
 @router.patch("/settings/embedding-model")
 async def update_embedding_model(body: dict):
+    """モデルを保存し、バックグラウンドで索引を再構築する（再起動待ちなし）。
+
+    応答は受け付け状態のみ（rebuild.status="running"）。進捗・成功/失敗は
+    GET /settings の embedding_rebuild で追跡する。
+    """
     registry = _get_registry()
     if "embedding_model" not in body:
         raise HTTPException(
@@ -317,8 +490,18 @@ async def update_embedding_model(body: dict):
         )
     model = _validate_embedding_model(body["embedding_model"])
     await registry.set_embedding_model(model)
+    meta_app = getattr(app_state, "meta_app", None)
+    rebuild: dict[str, Any] | None = None
+    if meta_app is not None:
+        # 旧モデルのベクトル/embedder を捨ててから再構築（混在は誤ヒットの元）。
+        meta_app.index.set_embedding_model(model)
+        rebuild = _schedule_embedding_rebuild("embedding_model", meta_app, model)
     data = await registry._read()
-    return {"embedding_model": data.get("embedding_model", DEFAULT_EMBEDDING_MODEL)}
+    return {
+        "embedding_model": data.get("embedding_model", DEFAULT_EMBEDDING_MODEL),
+        "embedding_status": _effective_embedding_status(),
+        "rebuild": rebuild or _embedding_rebuild_snapshot(),
+    }
 
 
 # --- LLM による説明文生成（/llm/generate） ---
@@ -606,6 +789,20 @@ async def health():
     }
 
 
+@router.post("/reload")
+async def reload_config():
+    """hub.config.json を読み直して差分適用する（再起動不要）。
+
+    不正な設定ファイルは 500 で弾く（ランタイムは変更前のまま）。
+    一部サーバーの再接続に失敗しても、そのサーバーが error 状態になるだけで
+    全体は稼働を続ける（部分的に適用済みの状態を ok/errors で返す）。
+    """
+    try:
+        return await reload_runtime()
+    except ReloadError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.get("/metrics")
 async def metrics():
     pm = _get_proxy_manager()
@@ -626,7 +823,19 @@ async def metrics():
         "total_tools": total_tools,
         "tool_calls_total": app_state.tool_calls_total,
         "tool_call_errors": app_state.tool_call_errors,
+        "tool_cache": app_state.tool_cache.stats(),
     }
+
+
+@router.get("/schema-diffs")
+async def schema_diffs(server: str | None = None, limit: int = 50):
+    """スキーマ差分の履歴（新しい順）。no-op な refresh は記録されない。"""
+    limit = max(1, min(limit, DIFF_MAX))
+    entries = [e.to_dict() for e in app_state.snapshot_diffs()]
+    if server:
+        entries = [e for e in entries if e["server"] == server]
+    entries.reverse()
+    return {"entries": entries[:limit], "total": len(entries)}
 
 
 @router.get("/logs")
@@ -666,7 +875,6 @@ async def list_servers(include_tools: bool = False):
     pm = _get_proxy_manager()
 
     servers = await registry.list_servers()
-    status_map = pm.get_all_status()
 
     if include_tools:
         tools_map = await pm.list_tools()
@@ -684,11 +892,13 @@ async def list_servers(include_tools: bool = False):
         info = {
             "name": name,
             "config": config,
-            "disabled": config.get("disabled", False),
-            "status": status_map.get(name, "unknown"),
             "tools_count": effective_count,
             "tools": tools,
         }
+        # 接続状態（effective_state / 連続失敗 / 直近エラー / 次回リトライ / 件数 / 履歴）
+        info.update(pm.get_connection_state(name))
+        if info["tool_count"] == 0:
+            info["tool_count"] = effective_count
         result.append(info)
     return {"servers": result}
 
@@ -808,6 +1018,14 @@ async def patch_server(name: str, body: PatchServerRequest):
         for tag in tags:
             if not isinstance(tag, str) or len(tag) > 64:
                 raise HTTPException(status_code=422, detail=f"Invalid tag: {tag}")
+    if "limits" in merged_config:
+        if merged_config["limits"] is None:
+            merged_config.pop("limits")
+        else:
+            try:
+                merged_config["limits"] = validate_limits(merged_config["limits"])
+            except ValidationError as e:
+                raise HTTPException(status_code=422, detail=str(e)) from e
     if merged_config.get("description") is not None:
         desc = merged_config["description"]
         if not isinstance(desc, str):
@@ -856,7 +1074,10 @@ async def patch_server(name: str, body: PatchServerRequest):
     # tags / description / tool_search_desc のみの更新はプロキシ再生成が不要
     # （サブプロセス再起動を防ぐ）。update_config_only は tags_updated 通知で
     # 索引再構築を起こすため、tool_search_desc も即座に検索へ反映される。
-    if set(updates) <= {"tags", "description", "tool_search_desc"}:
+    # limits のみの更新もプロキシ再生成が不要（制限は呼び出し毎に参照される）
+    if set(updates) <= {"limits"}:
+        await pm.update_limits(name, merged_config)
+    elif set(updates) <= {"tags", "description", "tool_search_desc", "limits"}:
         await pm.update_config_only(name, merged_config)
     else:
         await pm.refresh_server(name, merged_config)
@@ -865,6 +1086,41 @@ async def patch_server(name: str, body: PatchServerRequest):
         "name": name,
         "config": merged_config,
     }
+
+
+@router.patch("/servers/{name}/limits")
+async def patch_server_limits(name: str, body: dict[str, Any]):
+    """サーバー単位の呼び出し制限を部分更新する（null でキー削除）。
+
+    全体が空になったら config から `limits` キーごと落とす（＝全項目グローバル既定）。
+    """
+    registry = _get_registry()
+    pm = _get_proxy_manager()
+
+    existing = await registry.get_server(name)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Server not found")
+
+    current = existing["config"].get("limits")
+    merged: dict[str, Any] = dict(current) if isinstance(current, dict) else {}
+    merged.update(body)
+    try:
+        limits = validate_limits(merged)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    config = dict(existing["config"])
+    if limits:
+        config["limits"] = limits
+    else:
+        config.pop("limits", None)
+
+    await registry.update_server(name, config)
+    # 制限は呼び出し毎に参照されるためプロキシ再生成は不要。ただし
+    # 既存の Semaphore / レート状態は旧設定由来なので破棄する。
+    await pm.update_limits(name, config)
+
+    return {"name": name, "limits": limits}
 
 
 @router.delete("/servers/{name}", status_code=204)
@@ -921,6 +1177,7 @@ async def list_server_resources(name: str):
         raise HTTPException(404, detail=f"Server {name!r} not found or not connected")
     try:
         resources = await proxy.list_resources()
+        pm.record_catalog_counts(name, resources=len(resources))
         return {"resources": [
             {"uri": str(r.uri), "name": r.name, "description": r.description or ""}
             for r in resources
@@ -938,6 +1195,7 @@ async def list_server_prompts(name: str):
         raise HTTPException(404, detail=f"Server {name!r} not found or not connected")
     try:
         prompts = await proxy.list_prompts()
+        pm.record_catalog_counts(name, prompts=len(prompts))
         return {"prompts": [
             {"name": p.name, "description": p.description or ""}
             for p in prompts
@@ -961,6 +1219,40 @@ async def list_server_resource_templates(name: str):
         ]}
     except Exception as e:
         raise HTTPException(502, detail=f"Failed to list resource templates from {name!r}") from e
+
+
+@router.get("/discovery/search")
+async def discovery_search(
+    query: str,
+    top_k: int = 10,
+    kind: str | None = None,
+    server: str | None = None,
+):
+    """ツール/リソース/テンプレート/プロンプトを横断検索する（管理 UI 用）。
+
+    索引はメタ経路と同一（ToolIndex を kind で分ける）。管理 API は認証済みの
+    全権限ビューなのでタグフィルタは適用しない（結果に tags を含める）。
+    kind は複数形・ハイフン形の別名も受ける。
+    """
+    index = getattr(getattr(app_state, "meta_app", None), "index", None)
+    if index is None:
+        return {"results": [], "kinds": list(ALL_KINDS)}
+    kinds = None
+    if kind:
+        resolved = resolve_kind(kind)
+        if resolved is None:
+            raise HTTPException(
+                400,
+                detail=f"unknown kind: {kind!r} (kinds: {', '.join(ALL_KINDS)})",
+            )
+        kinds = (resolved,)
+    results = index.search(query, top_k, kinds)
+    # 管理 UI は kind で表示を分けるので、ツールヒットにも kind を明示する
+    # （メタ経路の応答形状は tool で kind を付けない既存契約のまま）。
+    results = [{**r, "kind": r.get("kind") or KIND_TOOL} for r in results]
+    if server:
+        results = [r for r in results if r["server"].lower() == server.lower()]
+    return {"query": query, "kinds": list(ALL_KINDS), "results": results}
 
 
 def _pkg_spec_ok(manager: str, pkg: str) -> bool:
@@ -1023,6 +1315,19 @@ def _validate_manager_packages(body: InstallRequest) -> tuple[str, list[str]]:
             or not _pkg_spec_ok(manager, pkg)
         ):
             raise HTTPException(400, detail=f"Invalid package: {pkg!r}")
+
+    allowed = _install_allowed_hosts()
+    if allowed:
+        for pkg in packages:
+            host = _spec_host(pkg)
+            if host is not None and host not in allowed:
+                raise HTTPException(
+                    400,
+                    detail=(
+                        f"Package source host {host!r} is not in the allowlist "
+                        f"({list(allowed)}; set {_ALLOWED_HOSTS_ENV})"
+                    ),
+                )
     return manager, packages
 
 
@@ -1030,14 +1335,27 @@ async def _run_pkg_command(argv: list[str], op: str) -> dict:
     """パッケージマネージャーの固定 argv をシェルなしで実行する。
 
     asyncio.create_subprocess_exec のまま（create_subprocess_shell は使わない）。
-    セマフォで直列化、_INSTALL_TIMEOUT 秒でタイムアウト。
+    セマフォで直列化、_INSTALL_TIMEOUT 秒でタイムアウト。実行結果は監査ログに残し、
+    stdout/stderr はマスキング + 切り詰めて返す（トークン混入・大量出力対策）。
     """
+    event = f"pkg.{op.lower()}"
+    started = time.monotonic()
     async with _install_sem:
-        process = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            _audit(event, ok=False, manager=argv[0], error="manager not found")
+            raise HTTPException(
+                503,
+                detail=(
+                    f"{op}: パッケージマネージャー {argv[0]!r} が見つかりません"
+                    "（bootstrap 未完了または PATH 未設定）"
+                ),
+            ) from None
         try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(), timeout=_INSTALL_TIMEOUT
@@ -1047,15 +1365,27 @@ async def _run_pkg_command(argv: list[str], op: str) -> dict:
                 process.kill()
             finally:
                 await process.wait()
+            _audit(event, ok=False, manager=argv[0], error="timeout")
             raise HTTPException(
                 504, detail=f"{op} command timed out ({int(_INSTALL_TIMEOUT)}s)"
             ) from None
 
+    _audit(
+        event,
+        ok=process.returncode == 0,
+        manager=argv[0],
+        returncode=process.returncode,
+        duration_ms=int((time.monotonic() - started) * 1000),
+    )
     return {
         "success": process.returncode == 0,
         "returncode": process.returncode,
-        "stdout": stdout.decode("utf-8", errors="replace"),
-        "stderr": stderr.decode("utf-8", errors="replace"),
+        "stdout": mask_text(
+            stdout.decode("utf-8", errors="replace"), max_len=_OUTPUT_MAX_LEN
+        ),
+        "stderr": mask_text(
+            stderr.decode("utf-8", errors="replace"), max_len=_OUTPUT_MAX_LEN
+        ),
     }
 
 
@@ -1246,15 +1576,27 @@ async def install_dependency(body: InstallRequest):
             constraints = auto_constraints
             logger.info("Auto-pinning %s: %s", auto_constraints, auto_reason)
 
+    # レジストリ固定: env が https のときだけ --index-url / --registry を挿す
+    # （未設定・非 https は既定レジストリに任せ、argv を従来通り保つ）。
+    index_url = _https_env_url("MCP_HUB_PIP_INDEX_URL", None)
+    index_args = ["--index-url", index_url] if index_url else []
     if manager == "pip":
-        argv = ["pip", "install", "--target", _EXTRAS_DIR, *packages, *constraints]
+        argv = [
+            "pip", "install", "--target", _EXTRAS_DIR,
+            *index_args, *packages, *constraints,
+        ]
     elif manager == "uv":
-        argv = ["uv", "pip", "install", "--target", _EXTRAS_DIR, *packages, *constraints]
+        argv = [
+            "uv", "pip", "install", "--target", _EXTRAS_DIR,
+            *index_args, *packages, *constraints,
+        ]
     elif manager == "uv-tool":
         with_args = [a for c in constraints for a in ("--with", c)]
-        argv = ["uv", "tool", "install", *with_args, *packages]
+        argv = ["uv", "tool", "install", *with_args, *index_args, *packages]
     else:
-        argv = ["npm", "install", *packages]
+        registry = _https_env_url("MCP_HUB_NPM_REGISTRY", None)
+        registry_args = ["--registry", registry] if registry else []
+        argv = ["npm", "install", *registry_args, *packages]
 
     # Ensure EXTRAS_DIR exists
     try:

@@ -54,7 +54,20 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `full_info_tools` | array\<string\> | `[]` | フル公開するツールのリスト。要素は `"{server}_{tool}"` 形式（例: `"fetch_fetch"`）。Meta モード時、ここに指定したツールのみ `tools/list` に通常ツールとしてフル公開され、`tools/call` で直接呼び出せる。未指定（空配列）なら現行の挙動と互換。 |
 | `use_embeddings` | bool | `true` | セマンティック検索（fastembed）の有効/無効。`false` で BM25 のみ。fastembed が未インストールの場合は実効値が常に `false` になる（ハードゲート）。Web UI の「⚙️ Hub 設定」からも変更可（ランタイム反映・検索インデックス再構築あり）。 |
 | `llm` | object | `{}`（＝機能オフ） | LLM による説明文生成（`POST /admin/api/llm/generate`）の設定。`{provider?, model?, api_key?, base_url?}`。`api_key` 未設定なら機能オフ（生成エンドポイントは `400`）。`PATCH /admin/api/settings` の `llm` で更新する（部分マージ。空 object で全削除＝オフ）。 |
+| `tool_cache` | object | `{"enabled": false, "ttl": 60, "max_entries": 500, "max_bytes": 5000000, "allow": [], "deny": []}` | 任意機能: 冪等/参照系ツール結果の TTL キャッシュ。キーは `server` + `tool` + 正規化引数（ソート済み JSON の SHA-256）。成功結果のみ保存し、エラー/例外は保存しない。`allow` が空なら `deny` 以外すべて、非空なら `allow` 一致のみ（opt-in）。パターンは fnmatch で `"{server}_{tool}"` または `"{server}"` にマッチ。サーバーの再接続/設定変更/削除で該当エントリを破棄。`PATCH /admin/api/settings` の `tool_cache` で部分更新（値変更時は全エントリ破棄）。 |
 | `mcpServers` | object | `{}` | MCP サーバー定義のマップ。キーがサーバー名。 |
+| `shutdown_drain_timeout` | number | `10.0` | SIGTERM/SIGINT 後のドレイン待機上限（秒）。環境変数 `MCP_HUB_DRAIN_TIMEOUT` が優先。 |
+
+### グレースフルシャットダウン（ドレイン）
+
+SIGTERM/SIGINT を受けると uvicorn が lifespan の shutdown を実行し、以下を順に処理します（実装: `main.py:_graceful_drain`）。
+
+1. **新規受付停止** — 以降の HTTP リクエストは `503`（`Retry-After: 1`）、`ProxyManager.call_tool` は `RuntimeError`（`shutting down`）。継続中のリクエストはそのまま継続。
+2. **ドレイン待機** — 進行中リクエスト数（`app_state.inflight`）が 0 になるまで最大 `shutdown_drain_timeout` 秒待つ。残件があれば警告ログを出して先へ進む（無限待機しない）。
+3. **バックグラウンド停止** — 索引再構築（debounce/リトライ含む）、埋め込み再構築、設定ファイル監視、ヘルスチェックループを cancel。
+4. **子タスク回収** — 接続/再接続タスクを cancel して待ち（孤児プロセス防止）、その後 upstream client を閉じる。
+
+進捗と結果は `Shutdown: ...` のログで出ます（ドレイン所要時間・残件数・停止したタスク数・閉じた接続数）。
 
 ### 埋め込みモデルの移行（既存インストール向け）
 
@@ -79,6 +92,36 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `description` | string | 任意 | サーバーの一行説明（最大 500 字）。検索インデックスの索引テキストに前置され、`search_tools` の結果で返る。 |
 | `tool_search_desc` | object (string→string) | 任意 | ツール名 → 日本語1文（80 字以内目安）のマップ。索引テキストに前置され、日本語検索が英語 docstring の語彙の壁を越えるための検索ヒント。表示には使わない（`description` は不変）。`PATCH /admin/api/servers/{name}` の部分更新、または管理 WebUI の「検索用の説明」欄（自動保存）で設定。 |
 | `disabled` | boolean | `false` | `true` でサーバーをスキップ。 |
+| `limits` | object | 任意 | サーバー単位の呼び出し制限（`call_timeout` / `max_concurrent` / `rate_limit` / `rate_burst` / `rate_window`）。未指定のキーはグローバル既定にフォールバック。詳細は次節。 |
+
+#### サーバー単位の呼び出し制限（`limits`）
+
+サーバーごとにタイムアウト・同時実行数・レート制限を上書きできます。省略したキーはグローバル既定（`MCP_HUB_CALL_TOOL_TIMEOUT` / `MCP_HUB_MAX_CONCURRENT_CALLS` / レート制限なし）にフォールバックするため、既存設定はそのまま動きます。
+
+| キー | 型 | 範囲 | 既定 | 説明 |
+|---|---|---|---|---|
+| `call_timeout` | number | 0 < v ≤ 3600 | `MCP_HUB_CALL_TOOL_TIMEOUT`（30） | 1回のツール呼び出しの上限秒。超過は `ToolError`。 |
+| `max_concurrent` | integer | 1–64 | グローバルセマフォ（50） | 同一サーバーへの同時呼び出し上限。超過は順番待ち。 |
+| `rate_limit` | number | 0 < v ≤ 10000 | 無制限 | `rate_window` あたりの呼び出し回数。超過は順番待ち、待機が窓のほぼ全体（99%）になる場合は即 `RateLimitExceeded`。 |
+| `rate_burst` | integer | 1–10000 | `rate_limit` | バケット容量（瞬間的に許す呼び出し数）。 |
+| `rate_window` | number | 0 < v ≤ 3600 | `1` | レート制限の窓（秒）。 |
+
+```json
+{
+  "mcpServers": {
+    "heavy-crawler": {
+      "command": "npx",
+      "args": ["heavy-crawler-mcp"],
+      "limits": { "call_timeout": 120, "max_concurrent": 2, "rate_limit": 10, "rate_window": 60 }
+    }
+  }
+}
+```
+
+- 適用点は `LimitsMiddleware`（`src/mcp_hub/middleware.py`）。normal / meta / full_info すべての `tools/call` がここを通るため、1箇所で効きます。
+- 手書き設定の壊れた `limits` は起動時に警告して無視（＝制限なしで起動）。管理 API 経由の不正値は 422 で拒否します。
+- 管理 API: `PATCH /admin/api/servers/{name}` の `limits` フィールド、または `PATCH /admin/api/servers/{name}/limits`（部分更新、`null` でキー削除、空になったら `limits` ごと削除）。
+- 管理 WebUI: サーバー詳細の「呼び出し制限」欄に要約が表示され、「✏️ 変更」→ 編集モーダルの「呼び出し制限」で編集。
 
 #### `command` と `url` の排他ルール
 
@@ -130,6 +173,13 @@ MCP Hub は設定ファイルと環境変数によって構成されます。設
 | `MCP_HUB_EMBEDDING` | `1` | `0` に設定するとセマンティック検索を強制無効化（ハードキル）。`use_embeddings` 設定や Web UI トグルより優先され、ランタイム設定で再有効化できない |
 | `MCP_HUB_EMBED_CACHE_DIR` | `~/.cache/mcp-hub/embeddings` | 文書単位の埋め込みディスクキャッシュ（npz）の置き場。再起動・再接続時の再 embed を省略する（A1） |
 | `MCP_HUB_SESSION_IDLE_TIMEOUT` | (未設定) | アップストリームセッションのアイドル有効期限（秒）。未設定時は SDK 既定（期限なし）を維持（実装: `main.py:75-84`） |
+| `MCP_HUB_WATCH_CONFIG` | (未設定) | 秒数を指定すると `hub.config.json` の mtime を監視し、変更時に `POST /admin/api/reload` と同じ差分適用を自動実行。`0`/不正値で無効（実装: `main.py:_watch_interval`, `reload.py:watch_config`） |
+| `MCP_HUB_DRAIN_TIMEOUT` | `10` | SIGTERM/SIGINT 後、進行中リクエストが片付くのを待つ上限（秒）。`hub.config.json` の `shutdown_drain_timeout` より優先（不正値は設定値へフォールバック。実装: `main.py:_drain_timeout`） |
+| `MCP_HUB_BOOTSTRAP_REQUIRE_HASH` | (未設定) | `1` で bootstrap のダウンロードを SHA256 ピン必須にする（未ピン URL は拒否）。既定は未ピン URL を警告して続行（実装: `bootstrap.py:_verify_download`） |
+| `MCP_HUB_EXTRAS_PINS` | (未設定) | カンマ区切りで fastembed 系の要求仕様を上書き（既定 `bootstrap.py:EXTRAS_PINS` のバージョン範囲ピン） |
+| `MCP_HUB_PIP_INDEX_URL` | `https://pypi.org/simple` | pip/uv のレジストリ。`https://` 以外は警告して無視し既定へフォールバック（bootstrap と管理 API の install の両方に適用） |
+| `MCP_HUB_NPM_REGISTRY` | (未設定) | 未設定なら npm 既定レジストリ。設定時 `npm install --registry` を付与。`https://` 以外は無視 |
+| `MCP_HUB_INSTALL_ALLOWED_HOSTS` | (未設定) | カンマ区切り。設定時のみ、URL 仕様（`https://` / `git+https://`）の取得元ホストをこのリストに限定。未設定は任意の https ホストを許可（後方互換。制限は `docs/security.md` 5 章） |
 
 ### `MCP_HUB_RESEED=1` の動作
 

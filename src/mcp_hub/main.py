@@ -23,19 +23,21 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 import fastmcp
 from fastmcp import FastMCP
 
 from . import bootstrap as _bootstrap
+from .admin_router import _embedding_rebuild_task_ref
 from .admin_router import router as admin_router
 from .auth import ApiKeyMiddleware
-from .config import load_config
+from .config import DEFAULT_DRAIN_TIMEOUT, load_config
 from .full_info import FullInfoMiddleware
 from .lenient_session_manager import LenientSessionManager
 from .masking import mask_text
-from .middleware import ToolLogMiddleware
+from .middleware import LimitsMiddleware, ToolLogMiddleware
 from .proxy_manager import ProxyManager
+from .reload import watch_config
 from .store import JsonStore
 from .state import LogEntry, app_state, request_tags
 from .tag_filter import TagFilterMiddleware
@@ -83,6 +85,34 @@ def _session_idle_timeout() -> float | None:
     return float(raw) if raw else None
 
 
+def _watch_interval() -> float:
+    """Config hot-reload watch interval (seconds). 0/unset/invalid = disabled."""
+    raw = os.environ.get("MCP_HUB_WATCH_CONFIG")
+    if not raw:
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        logger.warning("Invalid MCP_HUB_WATCH_CONFIG=%r — file watch disabled", raw)
+        return 0.0
+
+
+def _drain_timeout(config=None) -> float:
+    """ドレイン待機時間（秒）。MCP_HUB_DRAIN_TIMEOUT > config > DEFAULT。"""
+    fallback = getattr(config, "shutdown_drain_timeout", DEFAULT_DRAIN_TIMEOUT)
+    raw = os.environ.get("MCP_HUB_DRAIN_TIMEOUT")
+    if not raw:
+        return fallback
+    try:
+        value = float(raw)
+        if value < 0:
+            raise ValueError("negative")
+        return value
+    except ValueError:
+        logger.warning("Invalid MCP_HUB_DRAIN_TIMEOUT=%r — using %gs", raw, fallback)
+        return fallback
+
+
 class MCPDispatcher:
     """ASGI dispatcher with cached meta_mode. Call invalidate_cache() after toggling."""
 
@@ -107,7 +137,8 @@ class MCPDispatcher:
         if self._cached_meta_mode is None:
             from .state import app_state
             try:
-                data = await app_state.registry._read()
+                registry = app_state.registry
+                data = await registry._read() if registry is not None else {}
                 self._cached_meta_mode = data.get("meta_mode", False)
             except Exception:
                 self._cached_meta_mode = False
@@ -125,6 +156,10 @@ async def lifespan(app: FastAPI):
     apply_patch()
 
     app_state.start_time = time.time()
+    # draining/inflight はプロセス全体のフラグ。lifespan が同一プロセスで
+    # 再利用される経路（テスト・ホットリロード）で前回の停止状態を残さない。
+    app_state.draining = False
+    app_state.inflight = 0
 
     # 設定ファイルをロード
     config = load_config()
@@ -163,6 +198,8 @@ async def lifespan(app: FastAPI):
     # 共有状態にセット（admin_router から参照可能に）
     app_state.registry = registry
     app_state.proxy_manager = proxy_manager
+    # 任意機能: ツール結果キャッシュの設定を適用（既定は無効）
+    app_state.tool_cache.configure((registry._data or {}).get("tool_cache"))
 
     # === meta app (Progressive Discovery, used when meta_mode=True) ===
     # Create meta_app early and wire on_change BEFORE load_all
@@ -177,16 +214,20 @@ async def lifespan(app: FastAPI):
 
     app_state.meta_app = meta_app
 
+    # フル公開（メタOFF）ミドルウェア。先に登録する（FastMCP は後から add した
+    # ものを外側で実行するため、後に登録する ToolLog が FullInfo を包む）。
+    # FullInfo が on_call_tool で直接転送（call_next スキップ）しても
+    # ToolLog が必ず実行され、ログ・metrics・結果キャッシュが保証される。
+    meta_app.mcp.add_middleware(
+        FullInfoMiddleware(proxy_manager, get_schema_fn=meta_app.index.get_schema)
+    )
+
     # ツールログ記録ミドルウェア（meta 側）— meta モード時はリクエスト全体が
     # meta_app に回るため、こちらにも登録しないとログが欠落する
     meta_app.mcp.add_middleware(ToolLogMiddleware(proxy_manager))
 
-    # フル公開（メタOFF）ミドルウェア。ToolLog の直後に登録する（先に add した
-    # 方が外側で先に実行される）。FullInfo が on_call_tool で直接転送
-    # （call_next スキップ）しても ToolLog が必ず実行され、ログ・metrics が保証される。
-    meta_app.mcp.add_middleware(
-        FullInfoMiddleware(proxy_manager, get_schema_fn=meta_app.index.get_schema)
-    )
+    # サーバー単位の timeout / 同時実行 / レート制限（最外殻: 後から add = 外側）
+    meta_app.mcp.add_middleware(LimitsMiddleware(proxy_manager))
 
     # Debounced rebuild wrapper — coalesces rapid on_change calls (e.g. startup
     # cascade where multiple servers connect within milliseconds) into a single
@@ -248,6 +289,9 @@ async def lifespan(app: FastAPI):
 
     # ツールログ記録ミドルウェア（normal 側）
     mcp_server.add_middleware(ToolLogMiddleware(proxy_manager))
+
+    # サーバー単位の timeout / 同時実行 / レート制限（最外殻: 後から add = 外側）
+    mcp_server.add_middleware(LimitsMiddleware(proxy_manager))
 
     # 内部リソース: hub://servers — 接続サーバーのJSONスナップショット
     @mcp_server.resource("hub://servers")
@@ -327,16 +371,77 @@ async def lifespan(app: FastAPI):
         meta_sm.run(),
     ):
         proxy_manager.start_health_monitor()
+        # 任意: 設定ファイルの mtime 監視（MCP_HUB_WATCH_CONFIG=<秒>, 0=off）
+        _watch_secs = _watch_interval()
+        watch_task = (
+            asyncio.create_task(watch_config(_watch_secs, registry=registry))
+            if _watch_secs > 0
+            else None
+        )
         logger.info("MCP Hub started on %s:%s", HOST, PORT)
-        yield
+        try:
+            yield
+        finally:
+            # --- グレースフルシャットダウン ---
+            # 1) 新規受付停止（HTTP 503 / tool call 拒否）
+            # 2) 進行中リクエストをタイムアウト付きで待つ
+            # 3) ウォッチ/再接続/再構築/ヘルスループを止め、upstream を閉じる
+            await _graceful_drain(
+                config, proxy_manager, watch_task, _rebuild_task
+            )
 
     # --- 終了処理 ---
     await dispatcher.shutdown()
-    await proxy_manager.stop_health_monitor()
     await proxy_manager.close_all()  # upstream 接続の切断（ゾンビ防止）
     logger.info("MCP Hub shutting down")
     app_state.registry = None
     app_state.proxy_manager = None
+
+
+async def _graceful_drain(
+    config,
+    proxy_manager: ProxyManager,
+    watch_task: asyncio.Task | None,
+    rebuild_task: asyncio.Task | None,
+) -> None:
+    """SIGTERM/SIGINT 後の停止シーケンス（新規拒否→ドレイン→クローズ）。
+
+    各段階は失敗しても次に進む（1 個の失敗でゾンビプロセスを残さない）。
+    """
+    timeout = _drain_timeout(config)
+    proxy_manager.begin_drain()
+    remaining = app_state.begin_drain()
+    logger.info(
+        "Shutdown: refusing new requests, draining %d in-flight request(s) "
+        "(timeout=%gs)",
+        remaining, timeout,
+    )
+    started = time.monotonic()
+    remaining = await app_state.wait_idle(timeout)
+    elapsed = time.monotonic() - started
+    if remaining:
+        logger.warning(
+            "Shutdown: %d request(s) still in flight after %.2fs — closing anyway",
+            remaining, elapsed,
+        )
+    else:
+        logger.info("Shutdown: drained in %.2fs", elapsed)
+
+    # 設定ファイル監視 / 索引再構築 / 埋め込み再構築のバックグラウンドタスク
+    for task in (watch_task, rebuild_task, _embedding_rebuild_task_ref()):
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001 — 停止処理は継続する
+                logger.warning("Background task failed during shutdown", exc_info=True)
+
+    await proxy_manager.stop_health_monitor()
+    # 連接/再接続タスクの回収（session manager 停止前に子プロセスの親を切る）
+    await proxy_manager.cancel_background_tasks()
+    logger.info("Shutdown: background loops stopped (drain %.2fs)", time.monotonic() - started)
 
 
 
@@ -357,6 +462,12 @@ def create_app() -> FastAPI:
     # --- tag filtering + slash normalization middleware (/mcp のみ) ---
     @app.middleware("http")
     async def tag_middleware(request: Request, call_next):
+        # グレースフルシャットダウン中は新規リクエストを拒否（ドレイン）
+        if app_state.draining:
+            return PlainTextResponse(
+                "Server is shutting down", status_code=503, headers={"Retry-After": "1"}
+            )
+        app_state.enter_request()
         try:
             if request.url.path.startswith("/mcp"):
                 # 正規化: Mount("/mcp") の正規表現 ^/mcp/(?P<path>.*)$ は
@@ -374,6 +485,47 @@ def create_app() -> FastAPI:
             return response
         finally:
             request_tags.set(None)
+            app_state.leave_request()
+
+    # --- Prometheus メトリクス（/metrics）---
+    # スクレイパ向けに /admin/api の外に置く（ApiKeyMiddleware は /admin/api/*
+    # のみ隤す。可視性は /mcp と同じで bind ホスト依存）。
+    @app.get("/metrics", include_in_schema=False)
+    async def prometheus_metrics():
+        gauges: list[tuple[str, dict[str, str], float]] = [
+            ("mcp_hub_uptime_seconds", {}, round(time.time() - app_state.start_time, 1)),
+        ]
+        registry = app_state.registry
+        if registry is not None:
+            try:
+                gauges.append(
+                    ("mcp_hub_servers_registered", {}, float(len(await registry.list_servers())))
+                )
+            except Exception:
+                logger.debug("metrics: registry snapshot failed", exc_info=True)
+        pm = app_state.proxy_manager
+        if pm is not None:
+            gauges.append(("mcp_hub_servers_active", {}, float(len(pm._proxies))))
+            gauges.append(
+                ("mcp_hub_tools_total", {}, float(sum(pm._tool_counts.values())))
+            )
+            for name, status in pm.get_all_status().items():
+                gauges.append(
+                    ("mcp_hub_server_up", {"server": name}, 1.0 if status == "connected" else 0.0)
+                )
+        index = getattr(app_state.meta_app, "index", None)
+        if index is not None:
+            gauges.append(
+                (
+                    "mcp_hub_tools_indexed",
+                    {},
+                    float(len(getattr(index, "_documents", None) or [])),
+                )
+            )
+        return PlainTextResponse(
+            app_state.metrics.render(gauges),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
 
     return app
 

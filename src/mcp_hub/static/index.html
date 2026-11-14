@@ -1942,6 +1942,8 @@
                     onclick="switchMainTab('servers')">サーバー</button>
             <button class="tab" id="tabLogsBtn" role="tab" aria-selected="false"
                     onclick="switchMainTab('logs')">ログ</button>
+            <button class="tab" id="tabDiffsBtn" role="tab" aria-selected="false"
+                    onclick="switchMainTab('diffs')">スキーマ変更</button>
         </div>
 
         <!-- Server Tab -->
@@ -2060,6 +2062,31 @@
                 </div>
             </div>
         </section>
+
+        <!-- Schema Diff Tab -->
+        <section id="diffTab" style="display: none;" role="tabpanel" aria-label="スキーマ変更履歴">
+            <div class="log-filter-bar">
+                <input type="text" id="diffServerFilter" placeholder="サーバー名で絞り込み" aria-label="サーバー">
+                <button class="btn" onclick="loadSchemaDiffs()">更新</button>
+            </div>
+            <div class="log-table-wrap">
+                <table class="log-table">
+                    <thead>
+                        <tr>
+                            <th>時刻</th>
+                            <th>サーバー</th>
+                            <th>トリガー</th>
+                            <th>差分</th>
+                        </tr>
+                    </thead>
+                    <tbody id="diffTableBody"></tbody>
+                </table>
+                <div id="diffEmpty" class="empty-state" style="display: none;">
+                    <div class="empty-state-title">スキーマ変更はありません</div>
+                    <div class="empty-state-description">再接続・更新でツール/リソース/プロンプトの差分が見つかると、ここに表示されます。</div>
+                </div>
+            </div>
+        </section>
     </div>
 
     <!-- Server Settings Modal (Add/Edit共用) -->
@@ -2131,6 +2158,29 @@
                         <input type="text" class="edit-tag-input" id="editTagInput" placeholder="タグを入力して Enter">
                     </div>
                     <div class="form-hint">Enter で追加、✕ で削除</div>
+                </div>
+
+                <!-- 呼び出し制限（空欄はグローバル既定） -->
+                <div class="form-group">
+                    <label class="form-label">呼び出し制限（空欄はグローバル既定）</label>
+                    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;">
+                        <label class="field-note" style="margin:0">タイムアウト (秒)
+                            <input type="number" class="form-input" id="editLimitTimeout" min="0.1" max="3600" step="0.1" placeholder="既定">
+                        </label>
+                        <label class="field-note" style="margin:0">同時実行
+                            <input type="number" class="form-input" id="editLimitConcurrency" min="1" max="64" step="1" placeholder="既定">
+                        </label>
+                        <label class="field-note" style="margin:0">レート (回/窓)
+                            <input type="number" class="form-input" id="editLimitRate" min="1" max="10000" step="1" placeholder="無制限">
+                        </label>
+                        <label class="field-note" style="margin:0">バースト
+                            <input type="number" class="form-input" id="editLimitBurst" min="1" max="10000" step="1" placeholder="=レート">
+                        </label>
+                        <label class="field-note" style="margin:0">窓 (秒)
+                            <input type="number" class="form-input" id="editLimitWindow" min="0.1" max="3600" step="0.1" placeholder="1">
+                        </label>
+                    </div>
+                    <div class="form-hint">タイムアウト超過はツールエラー、同時実行/レート超過は順番待ち（窓を超える待機は即エラー）</div>
                 </div>
 
                 <div id="editFormError" class="form-error" style="display: none;" role="alert"></div>
@@ -2228,7 +2278,7 @@
                                onchange="saveEmbeddingModel(this.value)">
                     </div>
                     <p class="setting-hint">
-                        ツール検索のセマンティック検索に使用する埋め込みモデル。変更は再起動後に反映されます。
+                        ツール検索のセマンティック検索に使用する埋め込みモデル。保存するとその場で索引の再構築が始まります（再起動不要）。
                     </p>
                     <div class="settings-toggle-row">
                         <span class="settings-toggle-label" id="useEmbeddingsLabel">use_embeddings</span>
@@ -2242,6 +2292,21 @@
                     </div>
                     <p class="setting-hint">
                         セマンティック検索のON/OFF（OFFはBM25のみ・メモリ節約）。変更時はインデックスが再構築され、ツール数に応じて数十秒かかることがあります。
+                    </p>
+                    <div class="settings-status">
+                        <span class="status-indicator" id="embeddingRebuildDot"></span>
+                        <span id="embeddingRebuildText">埋め込み索引: 取得中...</span>
+                    </div>
+                </div>
+
+                <div class="setting-group">
+                    <label class="setting-label">🔄 設定の再読込</label>
+                    <div class="setting-row">
+                        <button class="btn btn-sm btn-primary" onclick="reloadConfigNow()">設定を再読込</button>
+                        <span id="reloadStatus" style="font-size:12px; color:var(--text-muted);"></span>
+                    </div>
+                    <p class="setting-hint">
+                        hub.config.json を読み直し、サーバーの追加/削除/設定変更と meta_mode・埋め込み設定を再起動なしで反映します。
                     </p>
                 </div>
 
@@ -2268,6 +2333,58 @@
                     </div>
                     <p class="setting-hint">
                         起動時の接続確認の上限（秒）。未設定で 30 秒。
+                    </p>
+                </div>
+
+                <div class="setting-group">
+                    <label class="setting-label">🗄️ ツール結果キャッシュ</label>
+                    <div class="settings-toggle-row">
+                        <span class="settings-toggle-label" id="toolCacheLabel">tool_cache</span>
+                        <label class="settings-toggle-switch" title="tool_cache ON/OFF 切替">
+                            <input type="checkbox" id="toolCacheToggle"
+                                   onchange="toggleToolCache(this.checked)"
+                                   aria-label="ツール結果キャッシュ (tool_cache) の ON/OFF 切替">
+                            <span class="settings-toggle-track"></span>
+                            <span class="settings-toggle-thumb"></span>
+                        </label>
+                    </div>
+                    <div class="setting-row" style="margin-top:8px;">
+                        <label class="setting-label" style="min-width:120px; font-size:13px;">TTL</label>
+                        <input type="number" id="toolCacheTtl" class="setting-input"
+                               placeholder="60" min="1" max="86400"
+                               onchange="saveToolCacheNumber('ttl', this.value, 1, 86400)"
+                               aria-label="キャッシュ TTL（秒）">
+                        <span style="font-size:12px; color:var(--text-muted); white-space:nowrap;">秒</span>
+                    </div>
+                    <div class="setting-row" style="margin-top:8px;">
+                        <label class="setting-label" style="min-width:120px; font-size:13px;">件数上限</label>
+                        <input type="number" id="toolCacheMaxEntries" class="setting-input"
+                               placeholder="500" min="1"
+                               onchange="saveToolCacheNumber('max_entries', this.value, 1, 0)"
+                               aria-label="キャッシュ最大件数">
+                    </div>
+                    <div class="setting-row" style="margin-top:8px;">
+                        <label class="setting-label" style="min-width:120px; font-size:13px;">allow</label>
+                        <input type="text" id="toolCacheAllow" class="setting-input"
+                               placeholder="空=deny以外すべて（例: fetch_*, search_*）"
+                               onchange="saveToolCachePatterns('allow', this.value)"
+                               aria-label="キャッシュ対象パターン">
+                    </div>
+                    <div class="setting-row" style="margin-top:8px;">
+                        <label class="setting-label" style="min-width:120px; font-size:13px;">deny</label>
+                        <input type="text" id="toolCacheDeny" class="setting-input"
+                               placeholder="例: browser_*"
+                               onchange="saveToolCachePatterns('deny', this.value)"
+                               aria-label="キャッシュ除外パターン">
+                    </div>
+                    <div class="setting-row" style="margin-top:8px;">
+                        <button class="btn btn-sm" onclick="clearToolCache()">キャッシュを破棄</button>
+                        <span id="toolCacheStats" style="font-size:12px; color:var(--text-muted);"></span>
+                    </div>
+                    <p class="setting-hint">
+                        冪等/参照系ツールの結果を server+tool+引数キーで保持します（既定OFF・エラーは保持しません）。
+                        パターンは fnmatch で "{server}_{tool}" または "{server}" にマッチ。allow が空なら deny 以外すべて。
+                        サーバーの再接続・設定変更・削除で自動的に破棄されます。
                     </p>
                 </div>
 
@@ -2347,6 +2464,9 @@
                     <div class="setting-hint" style="margin-top:4px;">
                         パッケージは永続ボリュームに保存され、再起動後も利用可能です。
                         git+https://... などの URL 仕様にも対応。インストール・削除とも最大 300 秒。
+                        取得元の検証 (SHA256 ピン / 許可ホスト / レジストリ固定) と制限は
+                        docs/security.md 5章 参照。URL 仕様は導入先のコードを実行するため、
+                        信頼できる提供元のみ指定すること。
                     </div>
                 </div>
             </div>
@@ -2375,6 +2495,9 @@
         let periodicRefreshActive = false;
         let metaMode = null; // null = unknown, true/false = loaded
         let embeddingModel = null; // current embedding model name
+        // 埋め込み索引の再構築進捗（設定保存で即時起動。再構築中は1秒ごとにポーリング）
+        let embeddingRebuildPollTimer = null;
+        let lastEmbeddingRebuildStatus = null;
         let fullInfoTools = []; // full_info_tools エントリ（"{server}_{tool}" 形式）
         let llmConfigured = false; // LLM の api_key が設定済みか（未設定なら ✨ 生成は出さない）
         // ツール説明の一括生成（逐次実行・キャンセル可）。表示中サーバーの再描画でも消えないよう
@@ -2527,6 +2650,17 @@
                 return response.json();
             },
 
+            async getSchemaDiffs(params = {}) {
+                const query = new URLSearchParams();
+                for (const [k, v] of Object.entries(params)) {
+                    if (v !== undefined && v !== null && v !== '') query.set(k, v);
+                }
+                const qs = query.toString();
+                const response = await fetch(`/admin/api/schema-diffs${qs ? '?' + qs : ''}`);
+                if (!response.ok) throw new Error('スキーマ差分の取得に失敗しました');
+                return response.json();
+            },
+
             async getConnection(name) {
                 const response = await fetch(`/admin/api/servers/${encodeURIComponent(name)}/connection`);
                 if (!response.ok) throw new Error('接続情報の取得に失敗しました');
@@ -2596,6 +2730,19 @@
             async getEmbeddingModel() {
                 const response = await fetch('/admin/api/settings/embedding-model');
                 if (!response.ok) throw new Error('埋め込みモデルの取得に失敗しました');
+                return response.json();
+            },
+
+            async reloadConfig() {
+                const response = await fetch('/admin/api/reload', { method: 'POST' });
+                if (!response.ok) {
+                    let msg = '設定の再読込に失敗しました';
+                    try {
+                        const err = await response.json();
+                        msg = err.detail || msg;
+                    } catch (_) {}
+                    throw new Error(msg);
+                }
                 return response.json();
             },
 
@@ -2826,6 +2973,56 @@
 
         function serverStatusBadgeClass(status) {
             return status === 'connected' ? 'success' : status === 'error' ? 'error' : status === 'connecting' ? 'loading' : 'unknown';
+        }
+
+        // ---- 接続状態（effective_state / 連続失敗 / 直近エラー / 次回リトライ） ----
+        const EFFECTIVE_STATE_LABELS = {
+            healthy: '正常', initializing: '初期化中', recovering: '復旧中',
+            error: 'エラー', disabled: '無効', unknown: '不明',
+        };
+
+        function fmtAgo(ts) {
+            if (!ts) return '—';
+            const sec = Math.max(0, Math.round(Date.now() / 1000 - ts));
+            if (sec < 60) return `${sec}秒前`;
+            if (sec < 3600) return `${Math.floor(sec / 60)}分前`;
+            if (sec < 86400) return `${Math.floor(sec / 3600)}時間前`;
+            return `${Math.floor(sec / 86400)}日前`;
+        }
+
+        function renderConnectionStateBlock(server) {
+            const eff = server.effective_state || server.status || 'unknown';
+            const badgeCls = eff === 'healthy' ? 'success' : eff === 'error' ? 'error'
+                : (eff === 'initializing' || eff === 'recovering') ? 'loading' : 'unknown';
+            const parts = [
+                `<span>🔧 ツール ${server.tool_count ?? server.tools_count ?? 0}</span>`,
+                `<span>📦 リソース ${server.resource_count ?? 0}</span>`,
+                `<span>💬 プロンプト ${server.prompt_count ?? 0}</span>`,
+                `<span>最終成功: ${server.last_success_at ? fmtAgo(server.last_success_at) : '—'}</span>`,
+            ];
+            if (server.consecutive_failures) {
+                parts.push(`<span>連続失敗: ${server.consecutive_failures}回</span>`);
+            }
+            if (server.retry_in_seconds != null) {
+                const at = server.next_retry_at
+                    ? new Date(server.next_retry_at * 1000).toLocaleTimeString('ja-JP', { hour12: false })
+                    : '';
+                parts.push(`<span>次回リトライ: 約${Math.ceil(server.retry_in_seconds)}秒後${at ? ` (${at})` : ''}`
+                    + ` / バックオフ ${Math.round(server.retry_backoff_seconds || 0)}秒</span>`);
+            }
+            const err = server.last_error;
+            const errHtml = err
+                ? `<div class="field-note" style="margin:4px 0 0">⚠ ${escapeHtml(err.reason || 'error')}: ${escapeHtml(err.message || '')} <span style="opacity:.7">(${fmtAgo(err.at)})</span></div>`
+                : '';
+            const history = (server.health_history || []).slice(-5).reverse();
+            const histHtml = history.length
+                ? `<div class="field-note" style="margin:4px 0 0">履歴: ${history.map(h => `${fmtAgo(h.at)} ${escapeHtml(h.event)}${h.detail ? ` (${escapeHtml(h.detail)})` : ''}`).join(' / ')}</div>`
+                : '';
+            return `<div class="md-block" data-connection-state>
+                    <div class="md-block-label">接続状態 <span class="status-badge ${badgeCls}">${escapeHtml(EFFECTIVE_STATE_LABELS[eff] || eff)}</span></div>
+                    <div class="field-note" style="display:flex;gap:12px;flex-wrap:wrap;margin:0">${parts.join('')}</div>
+                    ${errHtml}${histHtml}
+                </div>`;
         }
 
         // ============================================================
@@ -3290,6 +3487,8 @@
                     </button>
                 </div>
 
+                ${renderConnectionStateBlock(server)}
+
                 <div class="md-block">
                     <div class="md-block-label">サーバー説明</div>
                     <div class="desc-gen-row">
@@ -3311,6 +3510,8 @@
                 </div>
 
                 ${renderServerTags(server, tags)}
+
+                ${renderServerLimits(server)}
 
                 <div class="md-block">
                     <div class="md-block-label">
@@ -3492,13 +3693,16 @@
             currentMainTab = tab;
             document.getElementById('tabServersBtn').classList.toggle('active', tab === 'servers');
             document.getElementById('tabLogsBtn').classList.toggle('active', tab === 'logs');
+            document.getElementById('tabDiffsBtn').classList.toggle('active', tab === 'diffs');
             document.getElementById('serverTab').style.display = tab === 'servers' ? '' : 'none';
             document.getElementById('logTab').style.display = tab === 'logs' ? '' : 'none';
+            document.getElementById('diffTab').style.display = tab === 'diffs' ? '' : 'none';
             if (tab === 'logs') {
                 loadLogs();
                 startLogPolling();
             } else {
                 stopLogPolling();
+                if (tab === 'diffs') loadSchemaDiffs();
             }
         }
 
@@ -3585,8 +3789,48 @@
             }
         }
 
-        function populateLogServerFilter(serverList) {
-            const sel = document.getElementById('logServerFilter');
+        // ============================================================
+        // SCHEMA DIFF TAB（#10）
+        // ============================================================
+        async function loadSchemaDiffs() {
+            const server = document.getElementById('diffServerFilter').value.trim();
+            try {
+                const data = await API.getSchemaDiffs({ server, limit: 200 });
+                renderSchemaDiffs(data.entries || []);
+            } catch (error) {
+                showToast(error.message, 'error');
+            }
+        }
+
+        function fmtDiffChanges(changes) {
+            // {"tools": {"added": [], "removed": [], "changed": []}, ...} → 種別ごとの 1 行
+            return Object.entries(changes || {}).map(([kind, d]) => {
+                const parts = [];
+                if (d.added.length) parts.push('+' + d.added.join(', '));
+                if (d.removed.length) parts.push('-' + d.removed.join(', '));
+                if (d.changed.length) parts.push('~' + d.changed.join(', '));
+                return kind + ': ' + parts.join(' ');
+            }).join('\n');
+        }
+
+        function renderSchemaDiffs(entries) {
+            const tbody = document.getElementById('diffTableBody');
+            const empty = document.getElementById('diffEmpty');
+            tbody.innerHTML = '';
+            empty.style.display = entries.length ? 'none' : '';
+            for (const entry of entries) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${escapeHtml(new Date(entry.ts * 1000).toLocaleString('ja-JP', { hour12: false }))}</td>
+                    <td>${escapeHtml(entry.server)}</td>
+                    <td>${escapeHtml(entry.trigger)}</td>
+                    <td><pre style="white-space: pre-wrap; word-break: break-all; margin: 0;">${escapeHtml(fmtDiffChanges(entry.changes))}</pre></td>
+                `;
+                tbody.appendChild(tr);
+            }
+        }
+
+        function populateLogServerFilter(serverList) {            const sel = document.getElementById('logServerFilter');
             const current = sel.value;
             const names = [...new Set(serverList.map(s => s.name))].sort();
             sel.innerHTML = '<option value="">すべてのサーバー</option>' +
@@ -4239,6 +4483,7 @@
                 document.getElementById('editUrl').value = '';
                 document.getElementById('editEnv').value = '';
                 document.getElementById('editHeaders').value = '';
+                renderLimitsForm(null);
                 document.getElementById('editFormError').style.display = 'none';
                 setEditMode('command');
             } else {
@@ -4268,6 +4513,8 @@
                 // Parse headers
                 const headers = server.config.headers || {};
                 document.getElementById('editHeaders').value = Object.entries(headers).map(([k, v]) => `"${k}": "${v}"`).join('\n');
+
+                renderLimitsForm(server.config.limits);
             }
 
             renderEditTags();
@@ -4383,6 +4630,53 @@
             return result;
         }
 
+        // 呼び出し制限フォーム <-> config.limits の対応
+        const LIMIT_FIELDS = {
+            call_timeout: 'editLimitTimeout',
+            max_concurrent: 'editLimitConcurrency',
+            rate_limit: 'editLimitRate',
+            rate_burst: 'editLimitBurst',
+            rate_window: 'editLimitWindow',
+        };
+
+        function renderLimitsForm(limits) {
+            for (const [key, id] of Object.entries(LIMIT_FIELDS)) {
+                const v = limits ? limits[key] : undefined;
+                document.getElementById(id).value = v == null ? '' : String(v);
+            }
+        }
+
+        // 空欄はキーごと落とす（＝グローバル既定にフォールバック）。NaN は送る前に弹く。
+        function readLimitsForm() {
+            const out = {};
+            for (const [key, id] of Object.entries(LIMIT_FIELDS)) {
+                const raw = document.getElementById(id).value.trim();
+                if (raw === '') continue;
+                const num = Number(raw);
+                if (!Number.isFinite(num)) throw new Error(`呼び出し制限の ${key} が数値ではありません`);
+                out[key] = num;
+            }
+            return out;
+        }
+
+        function renderServerLimits(server) {
+            const lim = (server.config && server.config.limits) || {};
+            const parts = [];
+            if (lim.call_timeout != null) parts.push(`timeout ${lim.call_timeout}s`);
+            if (lim.max_concurrent != null) parts.push(`同時 ${lim.max_concurrent}`);
+            if (lim.rate_limit != null) {
+                const window = lim.rate_window != null ? lim.rate_window : 1;
+                const burst = lim.rate_burst != null ? ` burst ${lim.rate_burst}` : '';
+                parts.push(`レート ${lim.rate_limit}/${window}s${burst}`);
+            }
+            const summary = parts.length ? parts.join(' ・ ') : 'グローバル既定';
+            return `<div class="md-block">
+                <div class="md-block-label">呼び出し制限<span class="field-note" style="margin:0">${escapeHtml(summary)}</span>
+                    <button class="btn btn-sm btn-ghost" data-action="open-edit" data-server="${escapeAttr(server.name)}">✏️ 変更</button>
+                </div>
+            </div>`;
+        }
+
         function buildServerPayload(isEdit) {
             const command = document.getElementById('editCommand').value.trim();
             const argsStr = document.getElementById('editArgs').value.trim();
@@ -4406,6 +4700,8 @@
             if (!isEdit) {
                 // Add mode: include tags
                 if (editTags.length > 0) payload.tags = editTags;
+                const limits = readLimitsForm();
+                if (Object.keys(limits).length > 0) payload.limits = limits;
                 return payload;
             }
 
@@ -4427,6 +4723,12 @@
             if (editMode === 'url' && server.config.command) diffed.command = null;
             if (editMode === 'command' && server.config.headers && Object.keys(server.config.headers).length > 0) diffed.headers = {};
             if (editMode === 'url' && server.config.args && server.config.args.length > 0) diffed.args = [];
+
+            // 呼び出し制限（空欄のみ＝null で config からキーを落とす）
+            const limits = readLimitsForm();
+            const newLimits = Object.keys(limits).length > 0 ? limits : null;
+            const oldLimits = server.config.limits || null;
+            if (JSON.stringify(newLimits) !== JSON.stringify(oldLimits)) diffed.limits = newLimits;
 
             // Tags
             const oldTags = getServerTags(server);
@@ -4748,6 +5050,75 @@
             }
         }
 
+        // 埋め込み索引の再構築状態を描画する（再構築中は1秒ごとに再取得）。
+        function formatEmbeddingRebuild(rebuild, embeddingStatus) {
+            if (!rebuild) return '埋め込み索引: 状態不明';
+            const parts = [];
+            if (rebuild.status === 'running') {
+                parts.push('再構築中');
+                parts.push(`要求 ${rebuild.requested_model || '-'} / 適用 ${rebuild.active_model || '-'}`);
+                parts.push('検索は BM25 のみで継続');
+                if (rebuild.started_at) {
+                    const sec = Math.max(0, Math.round(Date.now() / 1000 - rebuild.started_at));
+                    parts.push(`${sec}秒経過`);
+                }
+            } else if (rebuild.status === 'error') {
+                parts.push('再構築失敗（検索は BM25 のみ）');
+                if (rebuild.error) parts.push(rebuild.error);
+            } else if (rebuild.status === 'success') {
+                parts.push('再構築完了');
+                parts.push(`${rebuild.active_model || '-'} / ${rebuild.documents ?? 0} 件`);
+                if (rebuild.finished_at) {
+                    parts.push(`${fmtLogTime(rebuild.finished_at)} 完了`);
+                }
+            } else {
+                parts.push('待機中');
+                parts.push(`適用 ${rebuild.active_model || '-'} / ${rebuild.documents ?? 0} 件`);
+            }
+            parts.push(`実効: ${rebuild.embedding_status || embeddingStatus || '-'}`);
+            return `埋め込み索引: ${parts.join(' / ')}`;
+        }
+
+        function applyEmbeddingRebuildState(rebuild, embeddingStatus) {
+            const text = document.getElementById('embeddingRebuildText');
+            const dot = document.getElementById('embeddingRebuildDot');
+            if (!text) return;
+            text.textContent = formatEmbeddingRebuild(rebuild, embeddingStatus);
+            const status = rebuild && rebuild.status;
+            if (dot) {
+                dot.style.background = status === 'error' ? 'var(--accent-red)'
+                    : status === 'running' ? 'var(--accent-primary)'
+                    : status === 'success' ? 'var(--accent-green)'
+                    : 'var(--text-muted)';
+            }
+            if (embeddingRebuildPollTimer) {
+                clearTimeout(embeddingRebuildPollTimer);
+                embeddingRebuildPollTimer = null;
+            }
+            if (status === 'running') {
+                embeddingRebuildPollTimer = setTimeout(refreshEmbeddingRebuild, 1000);
+            } else if (lastEmbeddingRebuildStatus === 'running') {
+                // 直前まで再構築中だった → 完了/失敗をトーストで知らせる
+                if (status === 'success') {
+                    showToast('埋め込み索引の再構築が完了しました', 'success');
+                } else if (status === 'error') {
+                    showToast(`埋め込み索引の再構築に失敗: ${rebuild.error || '不明なエラー'}`, 'error');
+                }
+            }
+            lastEmbeddingRebuildStatus = status || null;
+        }
+
+        async function refreshEmbeddingRebuild() {
+            embeddingRebuildPollTimer = null;
+            try {
+                const settings = await API.getSettings();
+                applyEmbeddingRebuildState(settings.embedding_rebuild, settings.embedding_status);
+            } catch (e) {
+                // 失敗しても次の loadSettings で回復する（ポーリングは打ち切る）
+                console.warn('Failed to refresh embedding rebuild state:', e);
+            }
+        }
+
         async function loadSettings() {
             const statusDot = document.getElementById('settingsStatusDot');
             const statusText = document.getElementById('settingsStatusText');
@@ -4759,12 +5130,14 @@
                 document.getElementById('metaModeToggle').checked = metaMode;
                 const useEmbEl = document.getElementById('useEmbeddingsToggle');
                 if (useEmbEl) useEmbEl.checked = !!settings.use_embeddings;
+                applyEmbeddingRebuildState(settings.embedding_rebuild, settings.embedding_status);
                 updateMetaModeDescription(metaMode);
                 // タイムアウト設定の反映（null なら空欄）
                 const clientEl = document.getElementById('clientTimeout');
                 const connectEl = document.getElementById('connectTimeout');
                 if (clientEl) clientEl.value = settings.client_timeout != null ? settings.client_timeout : '';
                 if (connectEl) connectEl.value = settings.connect_timeout != null ? settings.connect_timeout : '';
+                applyToolCacheState(settings);
                 statusDot.style.background = 'var(--accent-green)';
                 statusText.textContent = '接続済';
                 // 設定読込は loadServers と並行で走るため、後から読めた場合は
@@ -4850,13 +5223,35 @@
                 const data = await API.patchEmbeddingModel(model);
                 embeddingModel = data.embedding_model;
                 el.value = embeddingModel;
-                showToast(`埋め込みモデルを ${embeddingModel} に変更しました`, 'success');
+                // 保存と同時に背景で再構築が始まる（応答は受け付け状態のみ）
+                applyEmbeddingRebuildState(data.rebuild, data.embedding_status);
+                showToast(`埋め込みモデルを ${embeddingModel} に変更しました（索引を再構築中）`, 'success');
             } catch (error) {
                 // Revert on error
                 if (embeddingModel) el.value = embeddingModel;
                 showToast(error.message, 'error');
             } finally {
                 el.disabled = false;
+            }
+        }
+
+        async function reloadConfigNow() {
+            const status = document.getElementById('reloadStatus');
+            if (status) status.textContent = '再読込中…';
+            try {
+                const data = await API.reloadConfig();
+                const s = data.servers || {};
+                const added = (s.added || []).length;
+                const removed = (s.removed || []).length;
+                const updated = (s.updated || []).length;
+                const summary = `追加${added} / 削除${removed} / 変更${updated}`;
+                if (status) status.textContent = summary;
+                showToast(`設定を再読込しました（${summary}）`, 'success');
+                // 差分の影響を受ける表示は取り直す
+                if (typeof loadServers === 'function') await loadServers();
+            } catch (error) {
+                if (status) status.textContent = '失敗';
+                showToast(error.message, 'error');
             }
         }
 
@@ -4888,6 +5283,75 @@
                 loadSettings();
             } finally {
                 el.disabled = false;
+            }
+        }
+
+        function applyToolCacheState(settings) {
+            const tc = (settings && settings.tool_cache) || {};
+            const toggle = document.getElementById('toolCacheToggle');
+            if (toggle) toggle.checked = !!tc.enabled;
+            const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v != null ? v : ''; };
+            setVal('toolCacheTtl', tc.ttl);
+            setVal('toolCacheMaxEntries', tc.max_entries);
+            setVal('toolCacheAllow', (tc.allow || []).join(', '));
+            setVal('toolCacheDeny', (tc.deny || []).join(', '));
+            const s = tc.stats || {};
+            const el = document.getElementById('toolCacheStats');
+            if (el) el.textContent = `ヒット ${s.hits || 0} / ミス ${s.misses || 0} / 追い出し ${s.evictions || 0} / 保持 ${s.entries || 0}件 (${s.bytes || 0}B)`;
+        }
+
+        async function patchToolCache(patch) {
+            const settings = await API.patchSettings({ tool_cache: patch });
+            applyToolCacheState(settings);
+            if (servers && servers.length) renderServers();
+        }
+
+        async function toggleToolCache(enabled) {
+            try {
+                await patchToolCache({ enabled });
+                showToast(`結果キャッシュを${enabled ? '有効' : '無効'}にしました`, 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+                loadSettings();
+            }
+        }
+
+        async function saveToolCacheNumber(key, value, min, max) {
+            const num = Number(value);
+            if (String(value).trim() === '' || !Number.isFinite(num) || num < min || (max && num > max)) {
+                showToast('数値が不正です', 'error');
+                loadSettings();
+                return;
+            }
+            try {
+                await patchToolCache({ [key]: num });
+                showToast('キャッシュ設定を保存しました', 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+                loadSettings();
+            }
+        }
+
+        async function saveToolCachePatterns(key, value) {
+            const list = value.split(/[\s,]+/).filter(Boolean);
+            try {
+                await patchToolCache({ [key]: list });
+                showToast('キャッシュ設定を保存しました', 'success');
+            } catch (error) {
+                showToast(error.message, 'error');
+                loadSettings();
+            }
+        }
+
+        async function clearToolCache() {
+            try {
+                const resp = await fetch('/admin/api/cache', { method: 'DELETE' });
+                if (!resp.ok) throw new Error('キャッシュの破棄に失敗しました');
+                const data = await resp.json();
+                showToast(`${data.cleared}件のキャッシュを破棄しました`, 'success');
+                loadSettings();
+            } catch (error) {
+                showToast(error.message, 'error');
             }
         }
 
@@ -5015,6 +5479,7 @@
                 const result = await API.patchSettings({ use_embeddings: enabled });
                 // 実効値をサーバーから再同期（環境変数で強制無効化されうるためローカル状態を信用しない）
                 toggle.checked = !!result.use_embeddings;
+                applyEmbeddingRebuildState(result.embedding_rebuild, result.embedding_status);
                 loadSettings();
 
                 statusDot.style.background = 'var(--accent-green)';
