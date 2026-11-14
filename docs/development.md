@@ -105,6 +105,46 @@ pytest -s
 
 テストファイルは `tests/` ディレクトリに配置されています。
 
+### E2E / 回帰 / 軽負荷シナリオ
+
+`tests/test_e2e_regression.py` が「経路が繋がっていること」を実物寄りで拘束する
+（機能単体の契約は各 `test_*.py` 側の責務）。
+
+```bash
+# このファイルだけ（推奨・CI と同じ隔離プロセス/メモリ上限）
+TEST_FILE=tests/test_e2e_regression.py ./scripts/run-tests.sh
+
+# 直接実行する場合
+pytest tests/test_e2e_regression.py -q
+```
+
+カバー範囲と期待値:
+
+| シナリオ | 期待 |
+|---|---|
+| `/admin/api/health`, `/metrics` | 200 / `servers_registered`・`tool_cache` が数値。`uptime_seconds >= 0` |
+| normal / meta 切替 | `PATCH /admin/api/settings {"meta_mode": false}` 後、`/mcp/` の `tools/list` から `search_tools` が消える。戻すと復活 |
+| メタ経路 (stdio) | 実サブプロセス `tests/test_servers/stdio_echo_server.py` を登録し `search_tools` → `get_schema` → `execute_tool` が `ECHO: hi` を返す |
+| プロトコル選択 | URL に `/sse` → `SSETransport`、通常 URL → `StreamableHttpTransport`、`command` → `StdioTransport` |
+| 設定リロード | 正常時 200 + `servers` 差分。設定ファイル消失時 500（全削除として適用しない） |
+| 埋め込み | `embedding_rebuild.status` が `idle/running/success/error` のいずれか。`../` 等のモデル名は 422 |
+| ツールキャッシュ | `PATCH /admin/api/settings` の `tool_cache` が反映、`DELETE /admin/api/cache` が `cleared` を返す |
+| スキーマ差分 | 同一サーバーの 2 回目スナップショットで 1 件記録、`?server=` で絞り込み |
+| 発見検索 | `GET /admin/api/discovery/search?query=...&kind=tool` が `results` 配列 |
+| per-server 制限 | `PATCH /servers/{name}/limits` 200、`max_concurrent: 0` は 422、未登録名は 404 |
+| 認証 | `MCP_HUB_API_KEY` 設定時、ヘッダ無し 401 / 正しい `X-API-Key` 200 / health は常に 200 |
+| ドレイン | `app_state.draining = True` で 503 + `Retry-After: 1`、戻すと 200 |
+| 軽負荷 | `max_concurrent=2` で 10 並列呼び出しが 20 秒以内に完走（デッドロック検出が目的、性能測定ではない） |
+
+前提と閾値の考え方:
+
+- `conftest.py` が bundled config をサーバー0件に差し替え、`MCP_HUB_EMBEDDING=0`
+  で埋め込みモデルを読まない（各テストは `MCP_HUB_DATA_DIR` を tmp に隔離）。
+- 閾値は「ハングしない」ことを見る緩い上限のみ。スループットの数値目標は
+  環境依存が大きいため CI では拘束しない。
+- stdio テストはサブプロセスを起動するため、終了時に `close_all()` で回収する
+  （失敗すると孤児プロセスが残るので、停止漏れはバグとして扱う）。
+
 ---
 
 ## リンター・フォーマッター
