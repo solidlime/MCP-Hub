@@ -89,6 +89,13 @@
 - NAS は別マシン。反映方法（Docker / uv / 直接起動）を確認して手順化。
 - `embedding_model` が保存済みなら admin API PATCH（`/admin/api/settings/embedding-model`）が必要。初回はモデルダウンロード（~0.5GB）とメモリ実測、`/admin/api/settings/embedding-model` で確認。
 
+## 7.5 実装状況（2026-09-27 更新）
+
+- 完了: §3.1 モデルプロファイル / プレフィックス / 床、§3.2 CJK トークナイザ、§3.3 テスト、§3.4 ドキュメント同期。
+- 完了（§3.2 備考への対応）: `emit()` の dedup を 1 語内に限定して BM25 の tf を復活（`ToolIndex._tokenize`）。クエリ側は `_bm25_search` で一意化。回帰テストは `tests/test_tool_index.py::TestTermFrequency`。
+- 完了: `index_text` 未設定時に `search_desc`（日本語1文）を索引へフォールバック（`ToolIndex._build_doc_tokens`）。
+- 未了: §7 NAS デプロイ。
+
 ## 8. リスクと根拠
 
 - **fastembed バージョン差**: `src/mcp_hub/bootstrap.py:99` が無指定インストール → 実行環境で版が異なり得る。capability 検出（`add_custom_model` 有無）でフォールバック。

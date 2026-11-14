@@ -205,7 +205,7 @@ class TestIdentifierPromotion:
 
         # Simulate a hostile underlying ranking that ranks the exact name
         # match outside the top_k window.
-        def fake_bm25(query, top_k):
+        def fake_bm25(query, top_k, allowed_idx=None):
             others = [d for d in idx._documents if d["name"] != "brave_web_search"]
             ranked = others + [target]
             return [
@@ -398,12 +398,17 @@ class TestTokenizer:
         assert "brave" in tokens
         assert "api" in tokens
 
-    def test_dedup(self):
-        """Duplicate tokens are removed."""
-        # "file file_read file" → many "file" tokens, but only one kept
+    def test_repetition_preserved(self):
+        """同じ語の繰り返しは tf として残す（BM25 の tf を実質二値化しない）。"""
         tokens = ToolIndex._tokenize("file file_read file")
-        count = sum(1 for t in tokens if t == "file")
-        assert count == 1
+        assert tokens.count("file") == 3  # 3 箇所すべて数える
+        assert tokens.count("file_read") == 1
+
+    def test_no_synthetic_duplicate_within_word(self):
+        """1 語内の派生トークン（ASCII 部品 / CJK bigram）は二重計上しない。"""
+        assert ToolIndex._tokenize("file").count("file") == 1
+        assert ToolIndex._tokenize("アア").count("アア") == 1
+        assert ToolIndex._tokenize("ア").count("ア") == 1
 
     def test_empty_input(self):
         """Empty string returns empty list."""
@@ -424,6 +429,50 @@ class TestTokenizer:
         }
         tokens = ToolIndex._build_doc_tokens(doc)
         assert "string" in tokens
+
+
+class TestTermFrequency:
+    """BM25 の tf が実際の出現回数を反映する（語内 dedup で二値化されない）。
+
+    旧実装は 1 つのテキスト内で全トークンを重複除去していたため、"export" を
+    3 回書いた説明と 1 回書いた説明の tf が同じになり、tf は「どのフィールドに
+    出現したか」だけを表していた（計画書 §3.2 の備考）。
+    """
+
+    @staticmethod
+    def _docs():
+        # single(tf=1) を先に置く: 同点なら索引順で single が勝つので、
+        # 修正前は必ずこのテストが落ちる（red の担保）。
+        return [
+            {"name": "single", "description": "export report", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "dense", "description": "export export export report", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "c1", "description": "compute sum columns", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "c2", "description": "render chart image", "server": "s", "inputSchema": {}, "tags": []},
+            {"name": "c3", "description": "convert currency rates", "server": "s", "inputSchema": {}, "tags": []},
+        ]
+
+    async def _index(self):
+        idx = ToolIndex()
+        await idx.rebuild(self._docs())
+        idx._use_embeddings = False  # env-independent: lexical path only
+        return idx
+
+    async def test_dense_term_outranks_single_occurrence(self):
+        """同じ語を多く含む文書が上位に来る（tf が効いている）。"""
+        idx = await self._index()
+        scores = {r["name"]: r["score"] for r in idx.search("export", top_k=5)}
+        assert scores["dense"] > scores["single"]
+        assert [r["name"] for r in idx.search("export", top_k=5)][0] == "dense"
+
+    async def test_query_repetition_does_not_change_score(self):
+        """クエリ側の重複はスコアを水増ししない（BM25 のクエリ語は 1 回）。"""
+        idx = await self._index()
+        once = {r["name"]: r["score"] for r in idx.search("export report", top_k=5)}
+        thrice = {
+            r["name"]: r["score"]
+            for r in idx.search("export export export report", top_k=5)
+        }
+        assert once == thrice
 
 
 class TestSchemaAwareSearch:
@@ -708,6 +757,30 @@ class TestJapaneseSearch:
         results = ja_index.search("照明")
         assert results
         assert results[0]["name"] == "set_light"
+
+    def test_mixed_ja_en_query(self, ja_index):
+        """日本語 + 英語の混在クエリでも正しいツールが出る。"""
+        results = ja_index.search("ファイル file")
+        assert results
+        assert results[0]["name"] == "read_file"
+
+    async def test_search_desc_indexed_without_index_text(self):
+        """index_text を組まない呼び出しでも search_desc（日本語1文）は索引に入る。"""
+        idx = ToolIndex()
+        await idx.rebuild(
+            [
+                {
+                    "name": "get_weather",
+                    "description": "Get the forecast",
+                    "server": "weather",
+                    "search_desc": "天気予報を取得する",
+                    "inputSchema": {},
+                    "tags": [],
+                }
+            ]
+        )
+        idx._use_embeddings = False
+        assert [r["name"] for r in idx.search("天気")] == ["get_weather"]
 
 
 class TestOovGate:
