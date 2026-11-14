@@ -17,6 +17,7 @@ MCP Hub - MCPプロキシ + 管理Web UI
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from contextlib import asynccontextmanager
@@ -242,6 +243,10 @@ async def lifespan(app: FastAPI):
 
     async def _on_change_rebuild(name: str | None = None, event: str | None = None, detail: dict | None = None):
         nonlocal _rebuild_task
+        if app_state.draining:
+            # 停止中に再接続イベントが遅れて届いても再構築を起こし直さない
+            # （_graceful_drain が cancel した後にタスクが残るのを防ぐ）。
+            return
         if _rebuild_task and not _rebuild_task.done():
             _rebuild_task.cancel()
         async def _delayed():
@@ -580,11 +585,15 @@ def main():
 
     import uvicorn
 
+    # uvicorn に待機上限を渡さないと、SSE などの長期接続が閉じるまで lifespan
+    # shutdown（ドレイン）に到達せず、SIGTERM が終わらない。int 秒なので、
+    # drain の待機より短くならないよう切り上げる。
     uvicorn.run(
         app,
         host=HOST,
         port=PORT,
         log_level="info",
+        timeout_graceful_shutdown=math.ceil(_drain_timeout(load_config())),
     )
 
 

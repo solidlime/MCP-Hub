@@ -8,6 +8,7 @@
 import asyncio
 import json
 import time
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -18,6 +19,7 @@ from mcp_hub.config import DEFAULT_DRAIN_TIMEOUT, load_config
 from mcp_hub.main import _drain_timeout, _graceful_drain, create_app
 from mcp_hub.proxy_manager import ProxyManager
 from mcp_hub.state import _AppState, app_state
+from mcp_hub.store import JsonStore
 
 
 class _MockProxy:
@@ -42,7 +44,7 @@ class _MockStore:
 @pytest.fixture
 def manager():
     mcp = FastMCP("test")
-    pm = ProxyManager(mcp, _MockStore())
+    pm = ProxyManager(mcp, cast(JsonStore, _MockStore()))
     pm.mcp.mount = MagicMock(return_value=None)
     return pm
 
@@ -202,6 +204,24 @@ class TestGracefulDrain:
         finally:
             app_state.inflight = 0
             app_state.draining = False
+
+
+class TestUvicornShutdownBound:
+    def test_uvicorn_gets_drain_timeout(self, tmp_path, monkeypatch):
+        """uvicorn 側に待機上限が無いと、SSE 等の長期接続が閉じるまで
+        lifespan shutdown（ドレイン）に到達しない。"""
+        import uvicorn
+
+        import mcp_hub.main as main_mod
+
+        monkeypatch.setenv("MCP_HUB_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("MCP_HUB_DRAIN_TIMEOUT", "2.5")
+        captured = {}
+        monkeypatch.setattr(uvicorn, "run", lambda app, **kw: captured.update(kw))
+
+        main_mod.main()
+
+        assert captured["timeout_graceful_shutdown"] == 3  # 2.5 を切り上げ（drain より短くしない）
 
 
 class TestDrainHttpGate:

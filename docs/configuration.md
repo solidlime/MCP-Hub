@@ -69,6 +69,8 @@ SIGTERM/SIGINT を受けると uvicorn が lifespan の shutdown を実行し、
 
 進捗と結果は `Shutdown: ...` のログで出ます（ドレイン所要時間・残件数・停止したタスク数・閉じた接続数）。
 
+uvicorn 側にも同じ上限を `timeout_graceful_shutdown`（切り上げの int 秒）で渡すため、SSE のように自分から閉じない接続が残っていても lifespan shutdown に到達します。
+
 ### 埋め込みモデルの移行（既存インストール向け）
 
 `embedding_model` は**保存済みの設定値が優先**されます。バンドル既定を `cl-nagoya/ruri-v3-30m` に変更しても、既に `hub.config.json` に値が保存されている環境は自動では変わりません（旧既定 `intfloat/multilingual-e5-small` のままで動きます）。新既定に切り替えるには、Web UI の「⚙️ Hub 設定」または `PATCH /admin/api/settings/embedding-model` で明示的に変更してください。
