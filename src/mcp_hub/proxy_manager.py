@@ -1163,6 +1163,9 @@ class ProxyManager:
             proxies_snapshot = dict(self._proxies)
             configs_snapshot = dict(self._server_configs)
             status_snapshot = dict(self._status)
+            # probe 成功経路は _record_success で _last_recovery_fail を消すため、
+            # クールダウン判定には probe 前の値を退避して使う（probe 成功≠復旧）。
+            recovery_fail_snapshot = dict(self._last_recovery_fail)
 
         # Must exceed the 202-polling budget in streamable_http_patch.py
         # (MAX_POLL_ATTEMPTS * POLL_DELAY_SECONDS = 20s), or 202-style servers
@@ -1211,7 +1214,7 @@ class ProxyManager:
                 gen = self._generations.get(name)
             if not current_config:
                 continue
-            last_fail = self._last_recovery_fail.get(name)
+            last_fail = recovery_fail_snapshot.get(name)
             if last_fail is not None and (time.monotonic() - last_fail) < self._recovery_cooldown():
                 logger.debug("Recovery for %s skipped (cooldown)", name)
                 async with self._lock:
