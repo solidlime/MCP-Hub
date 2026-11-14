@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
@@ -59,6 +60,30 @@ class _AppState:
     mcp_dispatcher: object | None = None
     meta_app: object | None = None
     _stats_lock: asyncio.Lock | None = None
+
+    # === グレースフルシャットダウン（ドレイン） ===
+    # draining=True になったら新規リクエストは 503 で拒否し、inflight が 0 に
+    # なるまで（または drain タイムアウトまで）待つ。
+    draining: bool = False
+    inflight: int = 0
+
+    def enter_request(self) -> None:
+        self.inflight += 1
+
+    def leave_request(self) -> None:
+        self.inflight = max(0, self.inflight - 1)
+
+    def begin_drain(self) -> int:
+        """新規受付を止め、残っている進行中リクエスト数を返す（何度呼んでも安全）。"""
+        self.draining = True
+        return self.inflight
+
+    async def wait_idle(self, timeout: float) -> int:
+        """inflight が 0 になるまで待つ。残件数を返す（0 以外＝タイムアウト）。"""
+        deadline = time.monotonic() + max(0.0, timeout)
+        while self.inflight > 0 and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+        return self.inflight
 
     _log_buffer: deque | None = None
     _log_seq: int = 0
