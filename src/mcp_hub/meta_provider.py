@@ -1216,7 +1216,7 @@ class ToolIndex:
             (float(scores[i]) for i in ranked if allowed is None or i in allowed),
             0.0,
         )
-        results = []
+        results: list[dict] = []
         for idx in ranked:
             if len(results) >= top_k:
                 break
