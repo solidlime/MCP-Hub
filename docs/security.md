@@ -221,7 +221,7 @@ JSON 形式のログ（`MCP_HUB_LOG=json`）を選択すると、すべてのロ
 | マネージャー限定 | `manager` は `pip` / `uv` / `uv-tool` / `npm` のみ（400） |
 | パッケージ仕様の検証 | 空白・制御文字・シェルメタ文字（`; \| & $ \` \ " '`）・パス区切り・先頭 `.`/`-` を拒否。pip/uv は PEP 508 の範囲指定と URL 仕様（`git+https://`、`https://....whl/.tar.gz`）、npm は `[@scope/]name[@version]` のみ |
 | 取得元 | `MCP_HUB_INSTALL_ALLOWED_HOSTS` 設定時は URL 仕様のホストを照合し、不一致は実行前に 400 |
-| レジストリ固定 | `MCP_HUB_PIP_INDEX_URL` → `--index-url`、`MCP_HUB_NPM_REGISTRY` → `--registry`。`https://` 以外は警告して無視（既定レジストリ） |
+| レジストリ固定 | `MCP_HUB_PIP_INDEX_URL` → `--index-url`（pip / uv / uv-tool）、`MCP_HUB_NPM_REGISTRY` → `--registry`（npm install）。未設定なら各マネージャーの既定レジストリ。`https://` 以外は警告して無視 |
 | 依存ピン | `constraints`（例 `mcp<2`）を pip/uv は argv 末尾、uv-tool は `--with` で適用。npm は 400 |
 | 自動ピン | `git+` URL を shallow clone して `mcp.server.fastmcp` import を検出した場合のみ `mcp<2` を自動適用（明示 `constraints` があれば上書きしない）。判定不能時は通常インストールへフォールバック |
 | 直列化・時間制限 | インストールはプロセス内で同時 1 本（セマフォ）、300 秒でタイムアウト（504） |

@@ -177,7 +177,7 @@ SIGTERM/SIGINT を受けると uvicorn が lifespan の shutdown を実行し、
 | `MCP_HUB_DRAIN_TIMEOUT` | `10` | SIGTERM/SIGINT 後、進行中リクエストが片付くのを待つ上限（秒）。`hub.config.json` の `shutdown_drain_timeout` より優先（不正値は設定値へフォールバック。実装: `main.py:_drain_timeout`） |
 | `MCP_HUB_BOOTSTRAP_REQUIRE_HASH` | (未設定) | `1` で bootstrap のダウンロードを SHA256 ピン必須にする（未ピン URL は拒否）。既定は未ピン URL を警告して続行（実装: `bootstrap.py:_verify_download`） |
 | `MCP_HUB_EXTRAS_PINS` | (未設定) | カンマ区切りで fastembed 系の要求仕様を上書き（既定 `bootstrap.py:EXTRAS_PINS` のバージョン範囲ピン） |
-| `MCP_HUB_PIP_INDEX_URL` | `https://pypi.org/simple` | pip/uv のレジストリ。`https://` 以外は警告して無視し既定へフォールバック（bootstrap と管理 API の install の両方に適用） |
+| `MCP_HUB_PIP_INDEX_URL` | bootstrap: `https://pypi.org/simple` / 管理 API: 未設定 | pip/uv のレジストリ。bootstrap は未設定なら pypi.org、管理 API の install は設定時のみ `--index-url` を付与。`https://` 以外は警告して無視（既定レジストリ） |
 | `MCP_HUB_NPM_REGISTRY` | (未設定) | 未設定なら npm 既定レジストリ。設定時 `npm install --registry` を付与。`https://` 以外は無視 |
 | `MCP_HUB_INSTALL_ALLOWED_HOSTS` | (未設定) | カンマ区切り。設定時のみ、URL 仕様（`https://` / `git+https://`）の取得元ホストをこのリストに限定。未設定は任意の https ホストを許可（後方互換。制限は `docs/security.md` 5 章） |
 
