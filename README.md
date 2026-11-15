@@ -1,12 +1,27 @@
-# <img src="src/mcp_hub/static/icon.svg" alt="" width="40" align="absmiddle"> MCP-Hub
+<div align="center">
 
-[![License](https://img.shields.io/github/license/solidlime/MCP-Hub?style=flat)](LICENSE) [![CI](https://img.shields.io/github/actions/workflow/status/solidlime/MCP-Hub/ci.yml?style=flat&label=CI)](https://github.com/solidlime/MCP-Hub/actions/workflows/ci.yml)
+<img src="src/mcp_hub/static/icon.svg" width="96" height="96" alt="MCP-Hub">
 
-複数の MCP サーバーを 1 つのエンドポイントに集約するプロキシ兼レジストリです。stdio で起動する子サーバーも、HTTP で動くリモートサーバーも、MCP クライアントには `http://localhost:26263/mcp` の 1 つのエンドポイントとして見えます。
+# MCP-Hub
 
-![管理画面。16 サーバー・223 ツールを一覧し、EDINET の詳細とタグを表示している](docs/images/admin-ui.png)
+**MCP サーバーを、ひとつの入口に。**
 
-**Contents**
+複数の MCP サーバーを 1 つの URL に束ねる、セルフホスト型のプロキシ
+
+[![CI](https://github.com/solidlime/MCP-Hub/actions/workflows/ci.yml/badge.svg)](https://github.com/solidlime/MCP-Hub/actions/workflows/ci.yml)
+[![Docker](https://github.com/solidlime/MCP-Hub/actions/workflows/docker.yml/badge.svg)](https://github.com/solidlime/MCP-Hub/actions/workflows/docker.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+[![管理画面。16 サーバー・223 ツールを一覧し、EDINET の詳細とタグを表示している](docs/images/admin-ui.png)](docs/images/admin-ui.png)
+
+</div>
+
+複数の MCP サーバーを 1 つのエンドポイントに集約するプロキシ兼レジストリです。stdio で起動する子サーバーも、HTTP で動くリモートサーバーも、MCP クライアントからは `http://localhost:26263/mcp` だけが見えます。
+
+---
+
+## 目次
 
 - [クイックスタート](#クイックスタート)
 - [機能](#機能)
@@ -26,6 +41,8 @@
 - [ドキュメント](#ドキュメント)
 - [コントリビュート](#コントリビュート)
 - [ライセンス](#ライセンス)
+
+---
 
 ## クイックスタート
 
@@ -68,6 +85,8 @@ uv run python -m mcp_hub.main
 
 子サーバーは `data/hub.config.json` に書くか、管理画面の「サーバー追加」から登録します。初回起動時は同梱の `hub.config.json` から `data/hub.config.json` を生成します。
 
+---
+
 ## 機能
 
 - 単一エンドポイント: 登録した子サーバーのツール・リソース・プロンプトを `/mcp` から公開します
@@ -80,6 +99,8 @@ uv run python -m mcp_hub.main
 - ヘルスチェック: 60 秒間隔で子サーバーの疎通を確認し、落ちたものは間隔を空けて再接続します
 - 認証と入力検証: 管理 API の `X-API-Key` 認証と、コマンド・URL の検証を備えます
 - Prometheus メトリクス: `/metrics` で稼働時間と登録数を公開します
+
+---
 
 ## 仕組み
 
@@ -127,6 +148,8 @@ flowchart LR
 
 既定の埋め込みモデルは `cl-nagoya/ruri-v3-30m` です。`embeddings` エクストラ（`fastembed`、`onnxruntime`、`tokenizers`）を入れると意味検索が有効になります。`MCP_HUB_EMBEDDING=0` を設定した場合は BM25 だけで検索します。埋め込みの文書キャッシュは `~/.cache/mcp-hub/embeddings` に置き、`MCP_HUB_EMBED_CACHE_DIR` で場所を変えられます。
 
+---
+
 ## 管理画面と管理 API
 
 管理画面は `/admin/` で配信される 1 枚の HTML で、サーバー・ログ・スキーマ変更・検索のタブを持ちます。REST 側の入口は `/admin/api` です。
@@ -147,6 +170,8 @@ flowchart LR
 | `/metrics` | GET | Prometheus 形式。認証の対象外 |
 
 各エンドポイントのリクエスト・レスポンスは [API リファレンス](docs/api-reference.md) にあります。
+
+---
 
 ## 設定
 
@@ -216,6 +241,8 @@ flowchart LR
 
 全項目と既定値の根拠は [設定リファレンス](docs/configuration.md) にあります。
 
+---
+
 ## パフォーマンス
 
 `.benchmarks/results.json` の記録（2026-07-18、モデルは `tencent/hy3:free`、7 タスクを各 3 回）です。
@@ -239,6 +266,8 @@ python scripts/benchmark_toolcall.py --trials 3
 
 `benchmark_toolcall.py` は `EXA_API_KEY` がある場合だけ exa の行を計測します。モデルは `OPENROUTER_MODEL` で差し替えられます。
 
+---
+
 ## デプロイ
 
 `ghcr.io/solidlime/mcp-hub:latest` を公開しています。同梱の `docker-compose.yml` は `MCP_HUB_DATA_DIR` を `/home/mcp-hub/data` に置き、`docker.sock` をマウントします。
@@ -260,6 +289,8 @@ docker run -d --name mcp-hub -p 26263:26263 \
 
 `docker.sock` を渡す構成では、子サーバーがホストの Docker を操作できます。信頼できるサーバーだけを登録する環境で使ってください。
 
+---
+
 ## セキュリティ
 
 - 入力検証: サーバー名は `[a-zA-Z0-9_.-]` の 128 文字まで。`command` 内の `;`、`|`、`$()`、バッククォートなどは拒否します
@@ -270,6 +301,8 @@ docker run -d --name mcp-hub -p 26263:26263 \
 - 子サーバーの権限: 子サーバーは Hub と同じ権限で動きます。信頼できるものだけ登録してください
 
 検証の範囲と供給網の保護は [セキュリティモデル](docs/security.md) にまとめています。
+
+---
 
 ## 開発
 
@@ -302,6 +335,8 @@ src/mcp_hub/
 
 コーディングエージェント向けの指示は [AGENTS.md](AGENTS.md) にあります。
 
+---
+
 ## 既知の制限
 
 - Progress Notification は転送されません。長時間動くツールの進捗はクライアントから見えません
@@ -309,6 +344,8 @@ src/mcp_hub/
 - SSE の再接続は FastMCP のクライアント実装に任せています
 
 経緯と影響範囲は [アーキテクチャ](docs/architecture.md) にあります。
+
+---
 
 ## ドキュメント
 
@@ -320,9 +357,13 @@ src/mcp_hub/
 | [セキュリティ](docs/security.md) | 検証、認証、供給網の保護 |
 | [開発ガイド](docs/development.md) | 開発環境、プロジェクト構造 |
 
+---
+
 ## コントリビュート
 
 個人プロジェクトです。バグや要望は issue に書いてください。fork して使うのも自由です。
+
+---
 
 ## ライセンス
 
