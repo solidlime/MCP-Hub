@@ -1,4 +1,4 @@
-# MCP-Hub
+# <img src="src/mcp_hub/static/icon.svg" alt="" width="40" align="absmiddle"> MCP-Hub
 
 [![License](https://img.shields.io/github/license/solidlime/MCP-Hub?style=flat)](LICENSE) [![CI](https://img.shields.io/github/actions/workflow/status/solidlime/MCP-Hub/ci.yml?style=flat&label=CI)](https://github.com/solidlime/MCP-Hub/actions/workflows/ci.yml)
 
