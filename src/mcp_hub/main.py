@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 import fastmcp
 from fastmcp import FastMCP
 
@@ -532,7 +532,33 @@ def create_app() -> FastAPI:
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
+    _mount_admin_ui(app)
+
     return app
+
+
+def _mount_admin_ui(app: FastAPI) -> None:
+    """管理 UI とアイコンを配信する。index.html が無ければ何もしない。"""
+    from pathlib import Path
+
+    static_dir = os.path.join(os.path.dirname(__file__), "static")
+    index_html = os.path.join(static_dir, "index.html")
+    if not os.path.exists(index_html):
+        return
+
+    html_content = Path(index_html).read_text(encoding="utf-8")
+
+    @app.get("/")
+    @app.get("/admin/")
+    @app.get("/admin")
+    async def admin_index():
+        return HTMLResponse(html_content)
+
+    # アイコンは HTML からの相対参照（index.html の icon.svg は二つの URL に当たる）
+    @app.get("/icon.svg", include_in_schema=False)
+    @app.get("/admin/icon.svg", include_in_schema=False)
+    async def admin_icon():
+        return FileResponse(os.path.join(static_dir, "icon.svg"), media_type="image/svg+xml")
 
 
 class JsonFormatter(logging.Formatter):
@@ -567,21 +593,6 @@ def main():
         )
 
     app = create_app()
-
-    # 管理 UI (index.html)
-    static_dir = os.path.join(os.path.dirname(__file__), "static")
-    index_html = os.path.join(static_dir, "index.html")
-    if os.path.exists(index_html):
-        # index.html を /admin/ で配信
-        from pathlib import Path
-
-        html_content = Path(index_html).read_text(encoding="utf-8")
-
-        @app.get("/")
-        @app.get("/admin/")
-        @app.get("/admin")
-        async def admin_index():
-            return HTMLResponse(html_content)
 
     import uvicorn
 
